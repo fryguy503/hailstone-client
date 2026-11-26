@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 
+#include "core/capped_map.h"
 #include "core/log.h"
 #include "game/merchant.h"
 #include "net/game_connection.h"
@@ -321,10 +322,11 @@ void GameConnection::handle_tribute(Op op, const AppPacket& p) {
     auto& g = guild_tribute_;
     switch (op) {
     case Op::SendGuildTributes:
-        if (auto a = decode_guild_tribute_info(p)) g.abilities[a->id] = std::move(*a);
+        if (auto a = decode_guild_tribute_info(p)) core::assign_capped(g.abilities, a->id, std::move(*a), kTributesKept);
         break;
     case Op::GuildSelectTribute:
-        if (auto d = decode_guild_tribute_description(p)) g.descriptions[d->tribute_id] = std::move(d->text);
+        if (auto d = decode_guild_tribute_description(p))
+            core::assign_capped(g.descriptions, d->tribute_id, std::move(d->text), kTributesKept);
         break;
     case Op::GuildSendActiveTributes:
     case Op::GuildTributeToggleReply:
@@ -411,7 +413,7 @@ void GameConnection::handle_tribute(Op op, const AppPacket& p) {
     case Op::GuildModifyBenefits:
         break; // the echo of the save; the benefits come with OP_GuildSendActiveTributes
     case Op::TributeInfo:
-        if (auto a = decode_tribute_info(p)) tribute_.abilities[a->id] = std::move(*a);
+        if (auto a = decode_tribute_info(p)) core::assign_capped(tribute_.abilities, a->id, std::move(*a), kTributesKept);
         break;
     case Op::TributeUpdate:
         if (auto s = decode_tribute_settings(p)) {
@@ -434,7 +436,8 @@ void GameConnection::handle_tribute(Op op, const AppPacket& p) {
         }
         break;
     case Op::SelectTribute:
-        if (auto d = decode_tribute_description(p)) tribute_.descriptions[d->tribute_id] = std::move(d->text);
+        if (auto d = decode_tribute_description(p))
+            core::assign_capped(tribute_.descriptions, d->tribute_id, std::move(d->text), kTributesKept);
         break;
     case Op::OpenTributeMaster:
         if (auto st = decode_start_tribute(p)) {

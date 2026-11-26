@@ -4,13 +4,18 @@
 
 #include <doctest/doctest.h>
 #include <initializer_list>
+#include <memory>
 #include <string_view>
 
+#include "app/spawn_interaction.h"
+#include "game/mechanics/attack_rules.h"
+#include "game/spells.h"
 #include "mock_server/harness.h"
 #include "net/group_packets.h"
 #include "net/market_packets.h"
 #include "net/player_packets.h"
 #include "net/trade_packets.h"
+#include "net/zone_packets.h"
 
 using namespace hailstone;
 using namespace hailstone::net;
@@ -159,6 +164,67 @@ TEST_CASE("mock server: /consider refuses without a target and for a ship or boa
     CHECK(sent(rig, kCorpseConsider).size() == 1);
 }
 
+TEST_CASE("mock server: right-click Consider uses the clicked NPC and keeps the usual interactions") {
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    REQUIRE(add_rival(rig));
+
+    constexpr std::uint32_t kNpc = 61;
+    constexpr std::uint32_t kBanker = 62;
+    constexpr std::uint32_t kCorpse = 63;
+    constexpr std::uint32_t kShip = 64;
+    constexpr std::uint16_t kConsider = 0x742b;
+    constexpr std::uint16_t kCorpseConsider = 0x5204;
+
+    rig.server.add_spawn(make_spawn("Gnoll", kNpc, 1, 1, -282.0f, -148.0f, 3.5f));
+    auto banker = make_spawn("Banker", kBanker, 1, 1, -283.0f, -148.0f, 3.5f);
+    banker.class_ = 40;
+    rig.server.add_spawn(banker);
+    rig.server.add_spawn(make_spawn("Gnoll's corpse", kCorpse, 2, 1, -284.0f, -148.0f, 3.5f));
+    rig.server.add_spawn(make_spawn("Ship", kShip, 1, 72, -285.0f, -148.0f, 3.5f));
+    REQUIRE(rig.until([&] {
+        const auto& spawns = rig.conn.world().spawns;
+        return spawns.contains(kNpc) && spawns.contains(kBanker) && spawns.contains(kCorpse) && spawns.contains(kShip);
+    }));
+
+    rig.conn.set_target(kRival);
+    CHECK_FALSE(app::right_click_spawn(rig.conn, kNpc, false));
+    CHECK(rig.conn.world().target_id == kRival);
+
+    REQUIRE(app::right_click_spawn(rig.conn, kNpc, true));
+    CHECK(rig.conn.world().target_id == kRival);
+    REQUIRE(rig.until([&] { return !sent(rig, kConsider).empty(); }));
+    auto considers = sent(rig, kConsider);
+    REQUIRE(considers.size() == 1);
+    REQUIRE(considers.front()->data.size() == kConsiderSize);
+    CHECK(u32_at(*considers.front(), 0) == rig.conn.world().player_id);
+    CHECK(u32_at(*considers.front(), 4) == kNpc);
+
+    rig.server.zone.send_reliable(encode(Consider{rig.conn.world().player_id, kNpc, 5, 10, 0}));
+    REQUIRE(rig.until([&] {
+        for (const auto& line : rig.chat()) {
+            if (line.kind == ChatEvent::Kind::System && line.text.starts_with("[12239] Gnoll [12216]")) return true;
+        }
+        return false;
+    }));
+
+    CHECK_FALSE(app::right_click_spawn(rig.conn, kShip, true));
+    CHECK(rig.conn.world().target_id == kRival);
+    CHECK_FALSE(has_line(rig.chat(), "[13064]"));
+
+    REQUIRE(app::right_click_spawn(rig.conn, kBanker, true));
+    REQUIRE(rig.conn.bank());
+    CHECK(rig.conn.bank()->banker_id == kBanker);
+    rig.conn.close_bank();
+
+    REQUIRE(app::right_click_spawn(rig.conn, kCorpse, true));
+    REQUIRE(rig.conn.loot_session());
+    CHECK(rig.conn.loot_session()->corpse_id == kCorpse);
+    REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, Op::LootRequest) == 1; }));
+    CHECK(sent(rig, kConsider).size() == 1);
+    CHECK(sent(rig, kCorpseConsider).empty());
+}
+
 TEST_CASE("mock server: /decline sends the original's 0x52f7 and EQEmu's 12-byte OP_DuelDecline") {
     Rig rig;
     REQUIRE(rig.to_zone());
@@ -197,6 +263,66 @@ TEST_CASE("mock server: a refusal while our own duel runs sends no EQEmu decline
     rig.run_for(50ms);
     CHECK(sent(rig, to_wire(Op::DuelDecline)).empty());
     CHECK(rig.conn.duel_state().active);
+}
+
+TEST_CASE("mock server: an accepted duel opponent is attackable without PvP or guilds, and beneficial spells stop") {
+    // PlayerZoneClient::AllowedToAttack @0x5a2360 reads the duel globals 0xddf7ec (on) and 0xddf7e4 (opponent).
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    REQUIRE(add_rival(rig));
+    constexpr std::uint32_t kBystander = 51;
+    rig.server.add_spawn(make_spawn("Other", kBystander, 0, 1, 12.0f, 12.0f, 3.0f, 0.0f));
+    REQUIRE(rig.until([&] { return rig.conn.world().spawns.count(kBystander) == 1; }));
+    // A beneficial spell (spells_us.txt column 83 = 1), single target.
+    std::vector<std::string> cols(237, "0");
+    for (int i = 1; i <= 8; ++i) cols[static_cast<std::size_t>(i)].clear();
+    for (int i = 86; i <= 97; ++i) cols[static_cast<std::size_t>(i)] = "254";
+    cols[0] = "300";
+    cols[1] = "Mend";
+    cols[83] = "1";
+    std::string line;
+    for (std::size_t i = 0; i < cols.size(); ++i) line += (i ? "^" : "") + cols[i];
+    auto table = std::make_shared<game::SpellTable>();
+    REQUIRE(table->parse(line) == 1);
+    rig.conn.set_spell_table_for_test(table);
+    // Unflagged and unguilded: no melee, beneficial spells land.
+    CHECK_FALSE(rig.conn.allowed_to_attack(kRival, game::mechanics::kMeleeAttack));
+    CHECK(rig.conn.allowed_to_attack(kBystander, 300));
+    rig.conn.set_target(kRival);
+    rig.conn.duel();
+    // Only challenged: not yet.
+    CHECK_FALSE(rig.conn.allowed_to_attack(kRival, game::mechanics::kMeleeAttack));
+    rig.server.zone.send_reliable(encode(DuelRequest{kRival, kRival}));
+    REQUIRE(rig.until([&] { return rig.conn.duel_state().active; }));
+    CHECK(rig.conn.allowed_to_attack(kRival, game::mechanics::kMeleeAttack));
+    CHECK_FALSE(rig.conn.allowed_to_attack(kBystander, game::mechanics::kMeleeAttack));
+    // While the duel runs, a beneficial spell on someone outside it is refused.
+    CHECK_FALSE(rig.conn.allowed_to_attack(kBystander, 300));
+}
+
+TEST_CASE("mock server: a duel, running or only offered, ends with a zone change") {
+    // Hailstone: the original keeps its duel globals across a zone; EQEmu ends the duel when the client leaves.
+    for (bool accepted : {false, true}) {
+        CAPTURE(accepted);
+        Rig rig;
+        REQUIRE(rig.to_zone());
+        REQUIRE(add_rival(rig));
+        rig.conn.set_target(kRival);
+        rig.conn.duel();
+        if (accepted) {
+            rig.server.zone.send_reliable(encode(DuelRequest{kRival, kRival}));
+            REQUIRE(rig.until([&] { return rig.conn.duel_state().active; }));
+        }
+        REQUIRE(rig.conn.duel_state().pending());
+        const auto entries = rig.server.zone_entries;
+        rig.server.request_zone_change(2, 0.0f, 0.0f, 3.0f);
+        REQUIRE(rig.until([&] { return rig.server.zone_entries == entries + 1 && rig.conn.state() == ConnectionState::InZone; }));
+        CHECK_FALSE(rig.conn.duel_state().active);
+        CHECK_FALSE(rig.conn.duel_state().pending());
+        // A player with the old opponent's id in the new zone is a stranger.
+        REQUIRE(add_rival(rig));
+        CHECK_FALSE(rig.conn.allowed_to_attack(kRival, game::mechanics::kMeleeAttack));
+    }
 }
 
 TEST_CASE("mock server: EQEmu's 1383 line from the challenged player ends our challenge") {
@@ -261,6 +387,36 @@ TEST_CASE("mock server: OP_CancelInvite from the server prints the declining pla
     int count = 0;
     for (const auto& l : lines) count += l.text.rfind("[122", 0) == 0;
     CHECK(count == 2);
+}
+
+TEST_CASE("mock server: a search purchase answer for no purchase of ours does not unlock the next Buy early") {
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    PlayerProfile pp;
+    pp.expansions = 0x40000; // a row's Buy needs the RoF expansion (7728)
+    rig.conn.set_profile_for_test(pp);
+    BazaarResults r;
+    r.trader_id = 789;
+    BazaarResult e;
+    e.trader_id = 789, e.serial = "0000000000004321", e.cost = 900, e.quantity = 1, e.item_id = 5023, e.icon = 592;
+    e.name = "Fine Steel Sword";
+    r.results.push_back(e);
+    rig.conn.receive_zone_packet_for_test(encode(r));
+    REQUIRE(rig.conn.bazaar_search_state().results.size() == 1);
+    TraderBuy b;
+    b.method = 2;
+    b.sub_action = 1;
+    b.seller_name = "Seller";
+    b.item_name = "Fine Steel Sword";
+    b.quantity = 1;
+    // Two unasked answers, then one purchase: it is still waiting for its own answer.
+    rig.conn.receive_zone_packet_for_test(encode(b));
+    rig.conn.receive_zone_packet_for_test(encode(b));
+    CHECK(rig.conn.bazaar_row_buy_allowed());
+    rig.conn.bazaar_buy(0, 1, false);
+    CHECK_FALSE(rig.conn.bazaar_row_buy_allowed());
+    rig.conn.receive_zone_packet_for_test(encode(b));
+    CHECK(rig.conn.bazaar_row_buy_allowed());
 }
 
 TEST_CASE("mock server: EQEmu's TradeRequestFailed answer reads as a failed purchase") {

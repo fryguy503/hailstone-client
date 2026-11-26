@@ -10,12 +10,21 @@
 #include <type_traits>
 #include <vector>
 
+#if !defined(_WIN32)
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
+#include <zlib.h>
+
 #include "assets/character.h"
 #include "assets/pfs.h"
 #include "assets/wld.h"
 #include "core/game_dir.h"
 #include "core/shared_file_cache.h"
 #include "pfs_fixtures.h"
+#include "platform/crash_log.h"
 #include "platform/durable_file.h"
 #include "platform/mapped_file.h"
 #include "scratch_dir.h"
@@ -85,6 +94,124 @@ TEST_CASE("MappedFile keeps the bytes it was opened from when the path is replac
     CHECK(std::ranges::equal(fresh.view(), second));
 }
 
+#endif
+
+TEST_CASE("MappedFile::read copies a range of the view and refuses one past its end") {
+    hailstone::test::ScratchDir dir{"mapped_read"};
+    auto path = dir.path() / "a.bin";
+    std::vector<std::byte> bytes(10);
+    for (std::size_t i = 0; i < bytes.size(); ++i) bytes[i] = static_cast<std::byte>(i + 1);
+    write_bytes(path, bytes);
+    auto m = MappedFile::open(path);
+    std::vector<std::byte> out(4);
+    m.read(3, out);
+    CHECK(std::equal(out.begin(), out.end(), bytes.begin() + 3));
+    m.read(10, std::span<std::byte>{}); // an empty read at the end
+    CHECK_THROWS_AS(m.read(7, out), std::out_of_range);
+    CHECK_THROWS_AS(m.read(11, std::span<std::byte>{}), std::out_of_range);
+    CHECK_THROWS_AS(MappedFile{}.read(0, out), std::out_of_range);
+}
+
+namespace {
+// 64 KiB that do not compress, so an archive holding them spans many pages.
+std::vector<std::byte> noise(std::size_t n) {
+    std::vector<std::byte> out(n);
+    std::uint32_t x = 2463534242u;
+    for (auto& b : out) {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        b = static_cast<std::byte>(x);
+    }
+    return out;
+}
+} // namespace
+
+// Another program truncating a mapped game file: on POSIX a read of a page past the new end raises SIGBUS, which used to
+// kill the client. Windows refuses the truncation while the view exists; then the old bytes stay readable.
+TEST_CASE("MappedFile::read of a file truncated under the mapping throws instead of faulting") {
+    hailstone::test::ScratchDir dir{"mapped_truncated"};
+    auto path = dir.path() / "a.bin";
+    const auto bytes = noise(64 * 1024);
+    write_bytes(path, bytes);
+    auto m = MappedFile::open(path);
+    std::error_code ec;
+    std::filesystem::resize_file(path, 100, ec);
+    std::vector<std::byte> out(16);
+    if (ec) {
+        m.read(40000, out); // refused (Windows): the mapping still has the file
+        CHECK(std::equal(out.begin(), out.end(), bytes.begin() + 40000));
+    } else {
+        CHECK_THROWS_AS(m.read(40000, out), std::runtime_error);
+        CHECK_THROWS_AS(m.read(60000, out), std::runtime_error); // and again: the guard is still there
+        m.read(0, out); // the part the file still has
+        CHECK(std::equal(out.begin(), out.end(), bytes.begin()));
+    }
+}
+
+TEST_CASE("PfsArchive: a mapped archive truncated under it throws on reading a member past the new end") {
+    using namespace hailstone::test::pfs_fixtures;
+    hailstone::test::ScratchDir dir{"pfs_truncated"};
+    auto path = dir.path() / "test.s3d";
+    const auto first = std::vector<std::byte>(20, std::byte{'a'});
+    const auto big = noise(64 * 1024);
+    write_bytes(path, make_pfs({{"first.txt", first}, {"big.bin", big}}, 3000, Z_NO_COMPRESSION));
+    auto archive = PfsArchive::open(path, kMapped);
+    REQUIRE(archive.mapped());
+    std::error_code ec;
+    std::filesystem::resize_file(path, 4096, ec);
+    if (ec) {
+        CHECK(archive.read("big.bin").value() == big); // refused (Windows)
+    } else {
+        CHECK_THROWS_AS(archive.read("big.bin"), std::runtime_error);
+        CHECK_THROWS_AS(archive.read_prefix("big.bin", 40000), std::runtime_error);
+        CHECK(archive.read("first.txt").value() == first); // within the first page, still there
+        CHECK_THROWS(PfsArchive::open(path, kMapped)); // opened again: a malformed archive, not a crash
+    }
+}
+
+#if !defined(_WIN32)
+// The guard takes only faults inside MappedFile::read: any other SIGBUS still reaches the handlers installed before it,
+// and the crash handler installed after it does not stop it catching its own.
+TEST_CASE("MappedFile::read's fault guard leaves other SIGBUS faults to the handlers before it") {
+    hailstone::test::ScratchDir dir{"mapped_guard_chain"};
+    auto path = dir.path() / "a.bin";
+    write_bytes(path, noise(64 * 1024));
+    const auto logs = dir.path() / "logs";
+    std::filesystem::create_directories(logs);
+    pid_t pid = ::fork();
+    if (pid == 0) {
+        ::alarm(20); // a hang ends the child, not the tests
+        struct sigaction earlier{};
+        earlier.sa_handler = [](int) { ::_exit(42); };
+        sigemptyset(&earlier.sa_mask);
+        sigaction(SIGBUS, &earlier, nullptr);
+        hailstone::platform::install_crash_handler(logs);
+        try {
+            auto m = MappedFile::open(path);
+            if (::truncate(path.c_str(), 100) != 0) ::_exit(2);
+            std::vector<std::byte> out(16);
+            bool threw = false;
+            try {
+                m.read(40000, out);
+            } catch (const std::runtime_error&) {
+                threw = true;
+            }
+            if (!threw) ::_exit(3);
+            // An unguarded read of the same page: the crash handler, then the earlier handler.
+            volatile std::byte b = m.view()[40000];
+            (void)b;
+        } catch (...) {
+            ::_exit(4);
+        }
+        ::_exit(5);
+    }
+    REQUIRE(pid > 0);
+    int status = 0;
+    REQUIRE(::waitpid(pid, &status, 0) == pid);
+    REQUIRE(WIFEXITED(status));
+    CHECK(WEXITSTATUS(status) == 42);
+}
 #endif
 
 TEST_CASE("PfsArchive::open matches from_memory but holds no heap copy of the archive") {

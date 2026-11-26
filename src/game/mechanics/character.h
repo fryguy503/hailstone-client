@@ -65,6 +65,12 @@ struct DerivedStats {
     std::int32_t combat_effects = 0, shielding = 0, spell_shield = 0, avoidance = 0, accuracy = 0;
     std::int32_t stun_resist = 0, strike_through = 0, dot_shielding = 0, damage_shield = 0, ds_mitigation = 0;
     std::int32_t avoidance_no_buffs = 0; // +0x144
+    // The item bonuses above before cap_mod's RoF2 caps: CharacterZoneClient's *Bonus2 copies (derive_item_bonuses'
+    // unadjusted ones), which the stats labels show (a server may allow more than a cap). The fields above are the
+    // capped *Bonus ones.
+    std::int32_t combat_effects_uncapped = 0, shielding_uncapped = 0, spell_shield_uncapped = 0;
+    std::int32_t avoidance_uncapped = 0, accuracy_uncapped = 0, stun_resist_uncapped = 0, strike_through_uncapped = 0;
+    std::int32_t dot_shielding_uncapped = 0, ds_mitigation_uncapped = 0, damage_shield_uncapped = 0;
     std::int32_t heroic_str = 0, heroic_int = 0, heroic_wis = 0, heroic_agi = 0, heroic_dex = 0, heroic_sta = 0,
                  heroic_cha = 0;                                                  // +0xc8..+0xe0
     std::int32_t heroic_sv_magic = 0, heroic_sv_fire = 0, heroic_sv_cold = 0, heroic_sv_disease = 0,

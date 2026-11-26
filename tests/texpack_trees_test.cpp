@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <limits>
 #include <map>
 #include <set>
@@ -117,6 +118,8 @@ struct Textures {
     }
 };
 
+void write_text(const fs::path& p, const std::string& text) { std::ofstream(p, std::ios::binary) << text; }
+
 } // namespace
 
 TEST_CASE("trees: a game tree's trunk, leaves and colours measured") {
@@ -166,6 +169,27 @@ TEST_CASE("trees: NaN and infinite leaf UVs read a texel, not past the image") {
     const Textures pine(true);
     measure_tree(mesh, pine.lookup()); // whatever it makes of them, defined
     CHECK(true);
+}
+
+TEST_CASE("trees: a trunk or leaf point that is not a number or too far out is refused") {
+    // generate_tree divides each trunk length into pieces: a point at 1e30 made millions, a NaN an undefined count.
+    const float nan = std::numeric_limits<float>::quiet_NaN(), inf = std::numeric_limits<float>::infinity();
+    const Textures pine(true);
+    const std::size_t first_leaf = game_tree().vertices.size() - 8;
+    for (float bad : {nan, inf, -inf, 1e30f, 20001.0f, -25000.0f}) {
+        CAPTURE(bad);
+        for (std::size_t vertex : {std::size_t{4}, first_leaf + 2}) { // a trunk ring's corner, a leaf card's corner
+            assets::Mesh mesh = game_tree();
+            mesh.vertices[vertex].position.z = bad;
+            std::string why;
+            CHECK_FALSE(measure_tree(mesh, pine.lookup(), &why));
+            CHECK(why == "a point is not a number or too far out");
+        }
+    }
+    // Within the bound, a tall tree is measured.
+    assets::Mesh tall = game_tree();
+    tall.vertices[4].position.z = 19000.0f;
+    CHECK(measure_tree(tall, pine.lookup()));
 }
 
 TEST_CASE("trees: a tall trunk's short bottom prism is its own ring, so the tree stands on its foot") {
@@ -475,6 +499,39 @@ TEST_CASE("trees: the rules' tree lines") {
         CHECK_FALSE(parse_material_rules(materials, {{"z", line}}, &error));
         CHECK(error == "z.txt:1: a tree's actor is a name of letters, digits, '_' and '-'");
     }
+}
+
+TEST_CASE("trees: a rules file or a tree whose zone is not a zone name is refused") {
+    // A rules file named "...txt" is zone "..": its trees would go to models/../, the pack folder itself.
+    const std::string materials = "[bark]\nasset = bark_brown_02\nmetres = 1\n";
+    std::string error;
+    for (const char* zone : {"..", ".", "", "a/b", "a\\b", "c:x", "con", "zone name"}) {
+        CAPTURE(zone);
+        CHECK_FALSE(parse_material_rules(materials, {{zone, "tree tree1 = pine\n"}}, &error));
+        CHECK(error.find("not a zone's rules") != std::string::npos);
+    }
+    CHECK(parse_material_rules(materials, {{"QeyToQrg_2", "tree tree1 = pine\n"}}, &error));
+
+    test::ScratchDir dir("trees_zone_name");
+    write_text(dir.path() / "materials.txt", materials);
+    write_text(dir.path() / "...txt", "tree tree1 = pine\n");
+    CHECK_FALSE(load_material_rules(dir.path(), &error));
+    CHECK(error == "...txt: not a zone's rules (<zone>.txt, the zone's short name of letters, digits and '_')");
+
+    const assets::Mesh mesh = game_tree();
+    const Textures tex(true);
+    auto shape = measure_tree(mesh, tex.lookup());
+    REQUIRE(shape);
+    TreeOptions opt;
+    opt.leaf_size = opt.bark_size = 64;
+    const GeneratedTree tree = generate_tree(*shape, opt);
+    const fs::path pack = dir.path() / "pack";
+    for (const char* zone : {"..", "../..", "a/b"}) {
+        CAPTURE(zone);
+        CHECK_FALSE(write_tree(pack, zone, "TREE1_ACTORDEF", tree, 1, &error));
+        CHECK(error == std::string("not a zone name: ") + zone);
+    }
+    CHECK_FALSE(fs::exists(pack));
 }
 
 TEST_CASE("trees: Qeynos Hills' trees measured from the game files") {

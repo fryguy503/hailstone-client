@@ -726,10 +726,7 @@ int AddonManager::check_one(const InstalledAddon& listed, const std::optional<Ap
 }
 
 void AddonManager::set_auto_update(std::string_view name, bool on) {
-    auto all = read_installed_addons(env_.data_dir);
-    for (auto& a : all)
-        if (iequal(a.name, name)) a.auto_update = on;
-    if (!write_installed_addons(env_.data_dir, all)) return;
+    if (!set_addon_auto_update(env_.data_dir, name, on)) return;
     Changing lock(*this);
     if (AddonStatus* r = row(name)) r->addon.auto_update = on;
 }
@@ -775,6 +772,9 @@ bool AddonManager::has_ready() const {
 }
 
 std::vector<std::string> AddonManager::install_ready() {
+    // Another Hailstone installing or removing add-ons in this folder: everything staged waits for a later frame.
+    const auto folder_lock = lock_addons(env_.data_dir);
+    if (!folder_lock) return {};
     std::vector<Staged> staged;
     {
         Changing lock(*this);

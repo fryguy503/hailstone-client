@@ -22,6 +22,7 @@
 #include <lua.hpp>
 
 #include "app/lua_ui_windows.h"
+#include "core/lua_keep.h"
 #include "core/server_profile.h"
 #include "game/eq_names.h"
 #include "game/zone_names.h"
@@ -44,23 +45,9 @@ void mark(lua_State* L, std::string_view screen) {
     if (s && s->at && s->frame) (*s->at)[std::string(screen)] = *s->frame;
 }
 
-void set_string(lua_State* L, const char* key, const std::string& value) {
-    lua_pushlstring(L, value.data(), value.size());
-    lua_setfield(L, -2, key);
-}
 void set_int(lua_State* L, const char* key, lua_Integer value) {
     lua_pushinteger(L, value);
     lua_setfield(L, -2, key);
-}
-void set_bool(lua_State* L, const char* key, bool value) {
-    lua_pushboolean(L, value);
-    lua_setfield(L, -2, key);
-}
-void push_status(lua_State* L, const ui::StatusLine& status) {
-    lua_newtable(L);
-    set_string(L, "text", status.text);
-    set_bool(L, "error", status.is_error);
-    lua_setfield(L, -2, "status");
 }
 
 // The login, server select and character select views are written through one of these. LuaOut builds the Lua
@@ -143,6 +130,78 @@ struct Fingerprint {
     }
 };
 
+// The same calls kept in C++ first (inside cxx_guard, in a box the state owns) and only then made on the Lua state
+// (replay): the views are built from strings and lists made for them (a character's names, the quick list), which
+// would be alive in the emitting frame across a push that can raise, and a raise skips their destructors (Lua is built
+// as C: core/lua_keep.h). The keys are the emitters' literals, kept as pointers.
+struct Recorder {
+    enum class Kind : unsigned char { Table, CloseKey, CloseIndex, Str, Integer, Boolean, Number, ItemStr, ItemInt };
+    struct Op {
+        Kind kind = Kind::Table;
+        const char* key = nullptr;
+        std::size_t index = 0;
+        lua_Integer n = 0;
+        double d = 0;
+        std::string text;
+    };
+    std::vector<Op> ops;
+    Op& add(Kind kind, const char* key = nullptr) {
+        Op& op = ops.emplace_back();
+        op.kind = kind;
+        op.key = key;
+        return op;
+    }
+    void table() { add(Kind::Table); }
+    void close(const char* key) { add(Kind::CloseKey, key); }
+    void close(std::size_t i) { add(Kind::CloseIndex).index = i; }
+    void str(const char* key, std::string_view v) { add(Kind::Str, key).text = v; }
+    void integer(const char* key, lua_Integer v) { add(Kind::Integer, key).n = v; }
+    void boolean(const char* key, bool v) { add(Kind::Boolean, key).n = v ? 1 : 0; }
+    void number(const char* key, double v) { add(Kind::Number, key).d = v; }
+    void item(std::size_t i, std::string_view v) {
+        Op& op = add(Kind::ItemStr);
+        op.index = i;
+        op.text = v;
+    }
+    void item(std::size_t i, lua_Integer v) {
+        Op& op = add(Kind::ItemInt);
+        op.index = i;
+        op.n = v;
+    }
+    // Makes the recorded calls on the table on top of the stack.
+    void replay(lua_State* L) const {
+        LuaOut out{L};
+        for (const Op& op : ops) {
+            switch (op.kind) {
+            case Kind::Table: out.table(); break;
+            case Kind::CloseKey: out.close(op.key); break;
+            case Kind::CloseIndex: out.close(op.index); break;
+            case Kind::Str: out.str(op.key, op.text); break;
+            case Kind::Integer: out.integer(op.key, op.n); break;
+            case Kind::Boolean: out.boolean(op.key, op.n != 0); break;
+            case Kind::Number: out.number(op.key, op.d); break;
+            case Kind::ItemStr: out.item(op.index, op.text); break;
+            case Kind::ItemInt: out.item(op.index, op.n); break;
+            }
+        }
+    }
+};
+
+// A table made by emit (a view's calls), through a Recorder; with `revision`, view.revision set to it.
+template <class Emit>
+int push_recorded(lua_State* L, const Emit& emit, std::optional<lua_Integer> revision = std::nullopt) {
+    core::LuaScratch<Recorder> rec(L); // (called every frame: one box kept for the state)
+    const int box = rec.kept() ? 0 : lua_gettop(L); // (a nested call's box is on the stack)
+    core::cxx_guard(L, [&] { emit(*rec); });
+    lua_newtable(L);
+    rec->replay(L);
+    if (revision) set_int(L, "revision", *revision);
+    rec->ops = {};
+    rec.release();
+    if (box) lua_remove(L, box);
+    return 1;
+}
+
 template <class Out>
 void emit_status(Out& o, const ui::StatusLine& status) {
     o.table();
@@ -155,20 +214,20 @@ void emit_status(Out& o, const ui::StatusLine& status) {
 // arg) and nothing changed since, true instead: the script keeps its table, and nothing is built.
 template <class Emit>
 int push_view(lua_State* L, int arg, const Emit& emit) {
-    Fingerprint f;
-    emit(f);
-    const auto revision = static_cast<lua_Integer>(f.h);
     int known = 0;
     const lua_Integer held = lua_tointegerx(L, arg, &known);
+    std::uint64_t h = 0;
+    core::cxx_guard(L, [&] {
+        Fingerprint f;
+        emit(f);
+        h = f.h;
+    });
+    const auto revision = static_cast<lua_Integer>(h);
     if (known && held == revision) {
         lua_pushboolean(L, 1);
         return 1;
     }
-    lua_newtable(L);
-    LuaOut out{L};
-    emit(out);
-    set_int(L, "revision", revision);
-    return 1;
+    return push_recorded(L, emit, revision);
 }
 
 // A 1-based Lua index as a 0-based one; -1 when out of [1, n].
@@ -895,9 +954,10 @@ int CharacterSelect(lua_State* L) {
 }
 
 // ok = hs.CharacterSelectDo(action [, arg]): "select", i (the scene shows that character); "enter" [, i] (enter the
-// world with the picked one, or row i); "create" (character creation); "delete" (the picked one, permanently: ask
-// first); "home" (Return Home: the picked one enters the world in its home city, when its canGoHome allows; ask first
-// with its homeQuestion); "back" / "logout" (to the login screen).
+// world with the picked one, or row i); "create" (character creation); "delete" (the picked one, permanently: the
+// shipped packs' own code asks first and this deletes; for any other caller this asks the client's confirmation
+// naming the character, and only its Yes deletes); "home" (Return Home: the picked one enters the world in its home
+// city, when its canGoHome allows; ask first with its homeQuestion); "back" / "logout" (to the login screen).
 int CharacterSelectDo(lua_State* L) {
     UiHost& h = host_of(L);
     bool ok = false;
@@ -917,7 +977,29 @@ int CharacterSelectDo(lua_State* L) {
             if (ok && what == "enter") action = A::EnterWorld;
         } else if (what == "create") action = A::Create;
         else if (what == "delete") {
-            if (picked) action = A::Delete;
+            // Deleting is permanent, so the client owns the question. The shipped packs' own code asks first in its
+            // own look (ui/*/charselect.lua) and takes this as its answer; any other caller (a script or plugin window
+            // under a shipped pack, any code of an interface Hailstone does not ship) gets the client's own window
+            // naming the character (ask_client_confirm), which no Lua code can answer, and only its Yes deletes, and
+            // only while the same character is still picked.
+            if (picked && h.trusted_ui && ui::lua::pack_code(L)) action = A::Delete;
+            else if (picked && !confirm_open(h)) {
+                core::cxx_guard(L, [&h, &v] {
+                    std::string name = v.characters[static_cast<std::size_t>(v.selected)].name;
+                    UiHost::Confirm c;
+                    c.text = "Delete " + name + " permanently? This cannot be undone.";
+                    c.done = [&h, name = std::move(name)](bool yes) {
+                        const ui::CharacterSelectView* now = h.char_select;
+                        if (!yes || !now || now->busy || now->selected < 0 ||
+                            now->selected >= static_cast<int>(now->characters.size()) ||
+                            now->characters[static_cast<std::size_t>(now->selected)].name != name)
+                            return;
+                        h.char_select_action = static_cast<int>(A::Delete);
+                    };
+                    ask_client_confirm(h, std::move(c));
+                });
+                ok = true;
+            }
         } else if (what == "home") {
             if (picked && v.characters[static_cast<std::size_t>(v.selected)].can_go_home) action = A::ReturnHome;
         } else {
@@ -938,19 +1020,63 @@ int CharacterSelectDo(lua_State* L) {
 constexpr const char* kStatNames[7] = {"Strength", "Dexterity", "Agility", "Stamina", "Intelligence", "Wisdom", "Charisma"};
 constexpr const char* kStatShort[7] = {"STR", "DEX", "AGI", "STA", "INT", "WIS", "CHA"};
 
-void push_choices(lua_State* L, const char* key, const std::vector<std::uint32_t>& ids, std::uint32_t current,
+template <class Out>
+void emit_choices(Out& o, const char* key, const std::vector<std::uint32_t>& ids, std::uint32_t current,
                   const char* index_key, const auto& name_of) {
-    lua_newtable(L);
+    o.table();
     int at = 0;
     for (std::size_t i = 0; i < ids.size(); ++i) {
-        lua_newtable(L);
-        set_int(L, "id", ids[i]);
-        set_string(L, "name", name_of(ids[i]));
-        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+        o.table();
+        o.integer("id", ids[i]);
+        o.str("name", name_of(ids[i]));
+        o.close(i);
         if (ids[i] == current) at = static_cast<int>(i + 1);
     }
-    lua_setfield(L, -2, key);
-    set_int(L, index_key, at);
+    o.close(key);
+    o.integer(index_key, at);
+}
+
+template <class Out>
+void emit_char_create(Out& o, const ui::CharacterCreateView& v) {
+    const ui::CreateOption* opt = v.option >= 0 && v.option < static_cast<int>(v.options.size())
+                                      ? &v.options[static_cast<std::size_t>(v.option)]
+                                      : nullptr;
+    const std::uint32_t deity = opt ? opt->deity : 0, city = opt ? opt->start_zone : 0;
+    o.boolean("busy", v.busy);
+    emit_status(o, v.status);
+    o.boolean("scene", v.scene);
+    o.str("name", v.name);
+    o.boolean("namePending", v.name_pending);
+    o.integer("gender", v.gender);
+    o.integer("race", v.race);
+    o.str("raceName", game::race_name(v.race));
+    o.integer("class", opt ? v.class_id : 0);
+    o.str("className", opt ? game::class_name(v.class_id) : std::string());
+    o.integer("deity", deity);
+    o.str("deityName", opt ? ui::create_deity_label(v, deity) : std::string());
+    o.integer("city", city);
+    o.str("cityName", opt ? game::zone_long_name(city) : std::string());
+    emit_choices(o, "races", ui::create_races(v), v.race, "raceIndex", [](std::uint32_t r) { return game::race_name(r); });
+    emit_choices(o, "classes", ui::create_classes(v), v.class_id, "classIndex",
+                 [](std::uint32_t c) { return game::class_name(c); });
+    emit_choices(o, "deities", ui::create_deities(v), deity, "deityIndex",
+                 [&v](std::uint32_t d) { return ui::create_deity_label(v, d); });
+    emit_choices(o, "cities", ui::create_cities(v), city, "cityIndex",
+                 [](std::uint32_t z) { return game::zone_long_name(z); });
+    o.table();
+    for (std::size_t i = 0; i < 7; ++i) {
+        o.table();
+        o.str("name", kStatNames[i]);
+        o.str("short", kStatShort[i]);
+        o.integer("value", v.stats[i]);
+        o.integer("base", opt ? static_cast<lua_Integer>(opt->base[i]) : 0);
+        o.integer("cap", ui::create_stat_cap(v, static_cast<int>(i)));
+        o.boolean("favored", opt && opt->points[i] > 0);
+        o.close(i);
+    }
+    o.close("stats");
+    o.integer("pointsLeft", v.points_left);
+    o.boolean("ready", ui::create_ready(v));
 }
 
 // view = hs.CharacterCreate()   -- nil unless the client shows its character creation (and not while the
@@ -975,48 +1101,8 @@ int CharacterCreate(lua_State* L) {
         return 1;
     }
     ui::CharacterCreateView& v = *h.char_create_view;
-    ui::create_normalize(v);
-    const ui::CreateOption* o = v.option >= 0 && v.option < static_cast<int>(v.options.size())
-                                    ? &v.options[static_cast<std::size_t>(v.option)]
-                                    : nullptr;
-    const std::uint32_t deity = o ? o->deity : 0, city = o ? o->start_zone : 0;
-    lua_newtable(L);
-    set_bool(L, "busy", v.busy);
-    push_status(L, v.status);
-    set_bool(L, "scene", v.scene);
-    set_string(L, "name", v.name);
-    set_bool(L, "namePending", v.name_pending);
-    set_int(L, "gender", v.gender);
-    set_int(L, "race", v.race);
-    set_string(L, "raceName", game::race_name(v.race));
-    set_int(L, "class", o ? v.class_id : 0);
-    set_string(L, "className", o ? game::class_name(v.class_id) : std::string());
-    set_int(L, "deity", deity);
-    set_string(L, "deityName", o ? ui::create_deity_label(v, deity) : std::string());
-    set_int(L, "city", city);
-    set_string(L, "cityName", o ? game::zone_long_name(city) : std::string());
-    push_choices(L, "races", ui::create_races(v), v.race, "raceIndex", [](std::uint32_t r) { return game::race_name(r); });
-    push_choices(L, "classes", ui::create_classes(v), v.class_id, "classIndex",
-                 [](std::uint32_t c) { return game::class_name(c); });
-    push_choices(L, "deities", ui::create_deities(v), deity, "deityIndex",
-                 [&v](std::uint32_t d) { return ui::create_deity_label(v, d); });
-    push_choices(L, "cities", ui::create_cities(v), city, "cityIndex",
-                 [](std::uint32_t z) { return game::zone_long_name(z); });
-    lua_newtable(L);
-    for (std::size_t i = 0; i < 7; ++i) {
-        lua_newtable(L);
-        set_string(L, "name", kStatNames[i]);
-        set_string(L, "short", kStatShort[i]);
-        set_int(L, "value", v.stats[i]);
-        set_int(L, "base", o ? static_cast<lua_Integer>(o->base[i]) : 0);
-        set_int(L, "cap", ui::create_stat_cap(v, static_cast<int>(i)));
-        set_bool(L, "favored", o && o->points[i] > 0);
-        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
-    }
-    lua_setfield(L, -2, "stats");
-    set_int(L, "pointsLeft", v.points_left);
-    set_bool(L, "ready", ui::create_ready(v));
-    return 1;
+    core::cxx_guard(L, [&v] { ui::create_normalize(v); });
+    return push_recorded(L, [&v](auto& o) { emit_char_create(o, v); });
 }
 
 // text, title = hs.CharacterCreateHelp(kind, id): the game's description of a choice (dbstr_us.txt, as the stock
@@ -1029,22 +1115,29 @@ int CharacterCreateHelp(lua_State* L) {
     // (the kind checked before a C++ object is made: a Lua error longjmps past destructors)
     if (kind != "race" && kind != "class" && kind != "deity" && kind != "city" && kind != "stat")
         return luaL_error(L, "hs.CharacterCreateHelp: no kind %s", lua_tostring(L, 1));
-    std::uint32_t type = 0, key = 0;
-    std::string title;
-    if (id >= 0 && id <= 0xffff) key = static_cast<std::uint32_t>(id);
-    if (kind == "race") type = 8, title = game::race_name(key);
-    else if (kind == "class") type = 9, title = game::class_name(key);
-    else if (kind == "deity") {
-        type = 14;
-        if (h.char_create_view) title = ui::create_deity_label(*h.char_create_view, key);
-    } else if (kind == "city") type = 15, title = game::zone_long_name(key);
-    else { // stat
-        if (id < 1 || id > 7) key = 0, type = 0;
-        else type = 10, key = static_cast<std::uint32_t>(id - 1), title = kStatNames[key];
-    }
-    std::string text = type && h.conn && !plugin_window() ? h.conn->strings().db_string(key, type) : std::string();
-    lua_pushlstring(L, text.data(), text.size());
-    lua_pushlstring(L, title.data(), title.size());
+    // The two texts in a box the state owns, made inside cxx_guard: the first push could raise with the second
+    // alive in this frame (core/lua_keep.h).
+    struct Help {
+        std::string text, title;
+    };
+    Help& help = core::lua_keep<Help>(L);
+    core::cxx_guard(L, [&] {
+        std::uint32_t type = 0, key = 0;
+        if (id >= 0 && id <= 0xffff) key = static_cast<std::uint32_t>(id);
+        if (kind == "race") type = 8, help.title = game::race_name(key);
+        else if (kind == "class") type = 9, help.title = game::class_name(key);
+        else if (kind == "deity") {
+            type = 14;
+            if (h.char_create_view) help.title = ui::create_deity_label(*h.char_create_view, key);
+        } else if (kind == "city") type = 15, help.title = game::zone_long_name(key);
+        else { // stat
+            if (id < 1 || id > 7) key = 0, type = 0;
+            else type = 10, key = static_cast<std::uint32_t>(id - 1), help.title = kStatNames[key];
+        }
+        if (type && h.conn && !plugin_window()) help.text = h.conn->strings().db_string(key, type);
+    });
+    lua_pushlstring(L, help.text.data(), help.text.size());
+    lua_pushlstring(L, help.title.data(), help.title.size());
     return 2;
 }
 

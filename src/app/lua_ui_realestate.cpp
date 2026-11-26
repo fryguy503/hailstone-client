@@ -142,6 +142,18 @@ void ask_confirm(UiHost& host, std::string text, int timeout_ms, std::function<v
     host.confirm = std::move(c);
 }
 
+// Dialog 0x65 (eqstr 7635 with the target's name); its Yes transfers the plot to that same target, by id and name as
+// they were when it was asked (GameConnection::re_transfer refuses another).
+void ask_transfer(UiHost& host, net::GameConnection& c) {
+    const std::uint32_t target = c.target();
+    auto t = c.world().spawns.find(target);
+    std::string name = t == c.world().spawns.end() ? std::string() : t->second.name;
+    std::string text = eqstr(host, 0x1dd3, {name});
+    ask_confirm(host, std::move(text), 10000, [&host, target, name = std::move(name)] {
+        if (host.conn) host.conn->re_transfer(target, name);
+    });
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // RealEstatePurchaseWnd: CRealEstatePurchaseWnd_SetPlotInfo @0x74dcb0 and WndNotification @0x74d500.
 class PurchaseWindow : public StockWindow {
@@ -251,9 +263,7 @@ public:
         } else if (id == "TransferButton") {
             // RealEstate_CanTransferPlotToTarget (verbose), then dialog 0x65: eqstr 7635 with the target's name.
             if (c.re_can_transfer(true)) {
-                auto t = c.world().spawns.find(c.target());
-                std::string name = t == c.world().spawns.end() ? std::string() : t->second.name;
-                ask_confirm(host, eqstr(host, 0x1dd3, {name}), 10000, [&host] { if (host.conn) host.conn->re_transfer(); });
+                ask_transfer(host, c);
             }
         } else if (id == "ManageButton") c.real_estate_command("manage");
         else if (id == "ItemsButton") c.real_estate_command("items");
@@ -463,9 +473,7 @@ public:
         else if (id == "WithdrawButton") withdraw(host);
         else if (id == "TransferButton") {
             if (c.re_can_transfer(true)) {
-                auto t = c.world().spawns.find(c.target());
-                std::string name = t == c.world().spawns.end() ? std::string() : t->second.name;
-                ask_confirm(host, eqstr(host, 0x1dd3, {name}), 10000, [&host] { if (host.conn) host.conn->re_transfer(); });
+                ask_transfer(host, c);
             }
         } else if (id == "AddMemberButton") {
             UiHost::TextEntry e;

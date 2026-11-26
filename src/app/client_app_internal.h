@@ -66,6 +66,7 @@
 #include "core/shared_file_cache.h"
 #include "core/ini_file.h"
 #include "core/log.h"
+#include "core/path_utf8.h"
 #include "core/wipe.h"
 #include "app/nameplate_layer.h"
 #include "app/nameplate_input.h"
@@ -383,6 +384,9 @@ public:
         ui_host_.copy_ui_layout = [this](const std::filesystem::path& dir) {
             if (lua_ui_) lua_ui_->copy_character_layout(CharacterFiles{dir}.ui_settings(ui_name_));
         };
+        ui_host_.layout_profile_pack = [this] {
+            return std::pair<ui::lua::LuaUi*, std::string_view>{lua_ui_.get(), ui_name_};
+        };
         apply_video_options();
         game_view_.dev_windows = config_.get_bool("ui.dev_windows", false);
         lua_ui_->set_show_control(game_view_.dev_windows);
@@ -394,8 +398,9 @@ public:
         web_service_ = std::make_unique<WebService>(WebServiceEnv{
             [this] { return browser(); }, [this] { return web_textures_.get(); },
             [this] {
-                return (platform::data_dir() / "web" / (server_profile_.id.empty() ? "default" : server_profile_.id))
-                    .string();
+                // UTF-8, as the helper's --data= is (it holds each profile to that folder).
+                return path_utf8(platform::data_dir() / "web" /
+                                 (server_profile_.id.empty() ? "default" : server_profile_.id));
             },
             [this] {
                 const auto& rules = conn_ ? conn_->server_rules() : std::nullopt;
@@ -461,6 +466,7 @@ public:
         aenv.web = web_service_.get();
         aenv.install_dir = platform::install_dir();
         aenv.data_dir = platform::data_dir();
+        aenv.config = &config_;
         aenv.autoload = config_.get("plugins.autoload").value_or("*");
         aenv.script_autoload = config_.get("scripts.autoload").value_or("");
         aenv.connection = [this] { return conn_.get(); };
@@ -468,6 +474,8 @@ public:
         aenv.server_profile = [this] { return server_profile_.id; };
         aenv.profile_name = [this] { return server_profile_.name; };
         aenv.window_open = [this](std::string_view w) { return ui_api_ && ui_api_->shown(w); };
+        aenv.world_placement_scene = [this] { return world_placement_scene(); };
+        aenv.world_placement_input_allowed = [this] { return world_placement_input_allowed(); };
         aenv.face = [this](double degrees, bool) { face_degrees(degrees); };
         aenv.keypress = [this](std::string_view command, int mode) { return script_keypress(command, mode); };
         aenv.max_camera_distance = [this] { return max_camera_distance_; };
@@ -485,6 +493,7 @@ public:
         aenv.set_hot_bar_page = [this](int bar, int page) {
             if (actions_ui_) actions_ui_->set_hot_bar_page(bar, page);
         };
+        aenv.foreground = [this] { return window_.focused(); };
         aenv.ability = [this](mq::AbilityKind kind, std::string_view name) {
             return ability_state(ui_host_, kind, name);
         };
@@ -504,10 +513,68 @@ public:
             return collision_->line_of_sight(glm::vec3(a[0], a[1], a[2]), glm::vec3(b[0], b[1], b[2]));
         };
         automation_ = std::make_unique<Automation>(aenv);
+        ui_host_.map_filters = &automation_->map_filters();
         ui_host_.nameplates = &automation_->nameplates();
         lua_ui_->add_ui_api([this](lua_State* L) { register_ui_api(L); });
         automation_->hooks().add_command(plugin::Hooks::kClient, "/lighting",
                                          [this](std::string_view args) { lighting_command(args); });
+        // MacroQuest's commands that act for the player (docs/commands.md), registered as the client's so they come
+        // before the game's abbreviations (/click is /clickthrough there, /memspell /memspellset).
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/makemevisible", [this](std::string_view) {
+            if (conn_) conn_->make_me_visible(false); // CharacterZoneClient::MakeMeVisible(0, false), as MQ calls it
+        }, plugin::kCapActions);
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/removelev", [this](std::string_view) {
+            if (conn_) conn_->removelev_command();
+        }, plugin::kCapActions);
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/removeaura", [this](std::string_view args) {
+            if (conn_) conn_->removeaura_command(args);
+        }, plugin::kCapActions);
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/memspell", [this](std::string_view args) {
+            if (conn_) conn_->memspell_command(args);
+        }, plugin::kCapActions);
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/itemnotify", [this](std::string_view args) {
+            itemnotify_command(args);
+        }, plugin::kCapActions);
+        // MQ's /nomodkey, /shiftkey and /ctrlkey: the command after them runs with those keys forced for its clicks
+        // (E3 sends "/nomodkey /itemnotify ..." so a key the player holds changes nothing). The line itself is checked
+        // as any line is, the caller's permissions held.
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/nomodkey", [this](std::string_view args) {
+            run_with_keys(args, {});
+        });
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/shiftkey", [this](std::string_view args) {
+            run_with_keys(args, {true, false, false});
+        });
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/ctrlkey", [this](std::string_view args) {
+            run_with_keys(args, {false, true, false});
+        });
+        // MQ's /click left|right target: the left or right click on the target the mouse would give it
+        // (LeftClickedOnPlayer: with an item on the cursor, the item is given; RightClickedOnPlayer: loot, talk ...).
+        // MQ's other places (center, item, a screen point) are not here.
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/click", [this](std::string_view args) {
+            if (!conn_) return;
+            std::string button, where;
+            {
+                std::string_view rest = args;
+                auto next = [&rest] {
+                    while (!rest.empty() && rest.front() == ' ') rest.remove_prefix(1);
+                    const std::size_t end = std::min(rest.find(' '), rest.size());
+                    std::string w(rest.substr(0, end));
+                    rest.remove_prefix(end);
+                    for (char& c : w) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    return w;
+                };
+                button = next();
+                where = next();
+            }
+            if ((button != "left" && button != "right") || where != "target") {
+                conn_->ui_message("[MQ] /click: only /click left target and /click right target are supported.");
+                return;
+            }
+            const std::uint32_t id = conn_->world().target_id;
+            if (!id || !conn_->world().spawns.contains(id)) return;
+            if (button == "left") left_click_spawn(id);
+            else right_click_spawn(id);
+        }, plugin::kCapActions);
         stats_ui_->set_open(opts_.show_stats);
         // The performance window (app/perf_ui.h): Ctrl+Shift+P, /perf, or ui.perf_window=1.
         perf_ui_.set_open(config_.get_bool("ui.perf_window", false));
@@ -550,6 +617,12 @@ public:
         // /luasocial [n | new]: the Lua social editor on social n (1..120), or on the first empty social.
         automation_->hooks().add_command(plugin::Hooks::kClient, "/luasocial", [this](std::string_view args) {
             lua_social_command(args);
+        });
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/servermanagement", [this](std::string_view args) {
+            if (!conn_ || !plugin::caller_name().empty()) return;
+            if (!args.empty()) return conn_->ui_message("Usage: /servermanagement");
+            if (!server_management_ui()) return conn_->ui_message("Server Management is available in the Modern interface.");
+            if (!conn_->open_server_management()) conn_->ui_message("Server Management is unavailable on this session.");
         });
         actions_ui_ = std::make_unique<ActionsUi>(config_, config_path_);
         // The gamepad (app/gamepad.h, docs/gamepad.md; a client extension): hailstone.ini gamepad.*.
@@ -753,6 +826,7 @@ private:
     // The 302 / 114 play reply's question ("remove the character still logged in?"), Yes / No to the login client.
     void draw_kick_question();
     void update_connection();
+    void show_zone_client_messages(bool collapse);
     // The OS window's title: the picked server's name, and the character's in the world (client_window_title).
     void update_window_title();
     // The original's slash commands that act on the client (app/client_app_commands.cpp), by handler name; true =
@@ -901,7 +975,17 @@ private:
     render::SceneLighting scene_lighting(const game::SceneLight& scene, const render::Daylight& sky,
                                          render::DynamicShadowLights* moving = nullptr) const;
     void lighting_command(std::string_view args);
+    // /itemnotify (game/item_notify.h): the mouse notification on the slot or item the line names, with command_keys()
+    // (client_app_items.cpp).
+    void itemnotify_command(std::string_view args);
+    // The modifier keys a command's click uses: those /nomodkey, /shiftkey or /ctrlkey forced while their line runs,
+    // else the keyboard's (MacroQuest's clicks read the keyboard too).
+    net::SlotClickKeys command_keys() const;
+    // /nomodkey, /shiftkey, /ctrlkey: `line` run through the command interpreter with these keys forced.
+    void run_with_keys(std::string_view line, net::SlotClickKeys keys);
+    std::optional<net::SlotClickKeys> forced_keys_;
     void lua_social_command(std::string_view args); // /luasocial (app/client_app_draw.cpp)
+    bool server_management_ui() const { return lua_ui_ && ui_host_.trusted_ui && ui_name_ == "modern"; }
     // Config::get_float: NaN and the infinities are the fallback, so a bad hailstone.ini value never reaches a
     // matrix or a clamp that lets NaN through.
     float config_float(std::string_view key, float fallback) const { return config_.get_float(key, fallback); }
@@ -1080,6 +1164,9 @@ private:
     };
     // The zone's surface under a window point (the pick ray against the zone mesh), world coordinates.
     std::optional<glm::vec3> world_point_at(float x, float y);
+    std::optional<plugin::WorldPlacementScene> world_placement_scene() const;
+    bool world_placement_input_allowed() const;
+    std::optional<plugin::WorldPlacementPoint> world_placement_point_at(float x, float y) const;
     // Item placement mode (game/placement.h) each frame: the ghost under the mouse, re-validated.
     void update_placement();
     // `why` names the pick in the log; null picks quietly.
@@ -1093,8 +1180,8 @@ private:
     bool activate_nameplate(std::uint32_t id);
     // CEverQuest::LeftClickedOnPlayer.
     void left_click_spawn(std::uint32_t id);
-    // CEverQuest::RightClickedOnPlayer (update_item_input): false when the spawn has no right-click action.
-    bool right_click_spawn(std::uint32_t id);
+    // False when the spawn has no right-click action. Only mouse callers enable the Consider shortcut.
+    bool right_click_spawn(std::uint32_t id, bool consider_npc = false);
     // Doors and ground objects (app/world_objects.h): a left click or the
     // USE key on one, the open tradeskill container, the --auto-door test.
     bool click_world(const PickTarget& hit);
@@ -1388,6 +1475,7 @@ private:
     // less the heading, radians), which a left-button look turns.
     game::MouseLook mouse_look_;
     bool mouse_left_held_ = false, mouse_right_held_ = false;
+    bool world_placement_right_held_ = false;
     std::optional<glm::vec2> left_click_pending_;
     std::optional<glm::vec2> left_click_;
     bool right_click_ = false;
@@ -1540,6 +1628,7 @@ private:
     bool pc_names_ = true, npc_names_ = true;
     bool own_name_ = true; // Hailstone's switch for the player's own name sprite (display.own_name; game::NameSpriteSwitches)
     bool player_menu_ = true; // Hailstone's right-click menu on players (mouse.player_menu; game::opens_player_menu)
+    bool right_click_consider_ = true; // mouse.right_click_consider; Hailstone: RoF2 always considers, on is RoF2
     bool con_name_colour_ = true;     // Hailstone: NPC names in their consider colour (display.con_name_colour)
     bool show_invis_undead_ = false; // Hailstone: "[Name]" for known invisibility versus undead (display.show_invis_undead)
     bool plate_overlap_fade_ = true; // Hailstone: a covered name fades (display.plate_overlap_fade)
@@ -1756,6 +1845,9 @@ private:
     bool iso_click(const glm::vec2& at, const PickTarget& hit, bool right);
     // Each frame: a key ends a click's walk, the held button aims it, an arrival makes its click.
     void update_iso_clicks(bool player_moved);
+    // Forgets a click's walk, its pending click and marker, and a left click still waiting for the button's release:
+    // they name spawns, doors and points of a world that is going (a zone change, a camp, a respawn elsewhere).
+    void cancel_iso_clicks();
     // How near a walk to spawn `id` goes before its click.
     float iso_spawn_arrive(std::uint32_t id) const;
     // Each step: the movement keys as a heading relative to the camera (turns the player) and the forward key the
@@ -1800,6 +1892,9 @@ private:
     void save_iso_settings();
     // The zone's triangles for a pick, less what the isometric camera's cut takes away there.
     std::function<void(const game::PickSegment&, const game::PickTriangleSink&)> pick_world() const;
+    // The same on another mesh (the drawn one, world_visual_collision_, for world placement).
+    std::function<void(const game::PickSegment&, const game::PickTriangleSink&)>
+    pick_mesh(const game::CollisionMesh& m) const;
     // How far above the feet the isometric camera looks: the middle of the body.
     float iso_focus_height() const { return floor_offset_ * 0.5f + 2.0f; }
     // The mark where a click's walk ends (a ring on the ground, drawn as the target ring is): where, since when (the
@@ -1843,6 +1938,7 @@ private:
     std::mt19937 pre_game_rng_{std::random_device{}()};
     game::PickCamera pick_camera_;   // last frame's, for mouse picking (CCamera as GetScreenRay reads it)
     bool pick_camera_valid_ = false;
+    std::uint32_t pick_camera_epoch_ = 0;
     std::optional<glm::mat4> target_view_projection_; // the same camera with the rendered scene's projection
 };
 

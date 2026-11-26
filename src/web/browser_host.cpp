@@ -277,7 +277,13 @@ void BrowserHost::handle(Message m) {
         [&](auto& v) {
             using T = std::decay_t<decltype(v)>;
             if constexpr (std::is_same_v<T, Frame>) {
-                if (Tab* t = tab_of(v.tab)) apply(v.layer == Layer::Popup ? t->popup : t->view, v);
+                // No image larger than the tab (at most 4096 a side, WebService), whatever the helper sends: its
+                // frames are checked only against their own size, which can be 65535 a side. A view at an old,
+                // larger size (a paint sent before a Resize reached the helper) is dropped, the next comes at the new
+                // one; a popup is placed inside the view by the helper.
+                Tab* t = tab_of(v.tab);
+                if (t && v.width <= t->options.width && v.height <= t->options.height)
+                    apply(v.layer == Layer::Popup ? t->popup : t->view, v);
             } else if constexpr (std::is_same_v<T, Popup>) {
                 if (Tab* t = tab_of(v.tab)) {
                     t->popup_shown = v.shown;

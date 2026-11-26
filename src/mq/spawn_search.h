@@ -17,14 +17,15 @@
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 
+#include "game/world_state.h"
+
 namespace hailstone::game {
-struct Spawn;
-struct WorldState;
 struct GroupState;
 struct RaidState;
 struct GuildState;
 struct XTargetState;
 } // namespace hailstone::game
+
 namespace hailstone::net { class GameConnection; struct FellowshipState; }
 
 namespace hailstone::mq {
@@ -77,6 +78,24 @@ struct SearchSources {
     std::function<std::optional<bool>(std::uint32_t spawn)> can_see;
 };
 SearchSources sources_of(const net::GameConnection& conn);
+
+// One prepared search for many spawns. The search is owned so a provider callback can replace a MapFilters custom
+// search while a map is being collected without leaving a dangling reference. `nopcnear` candidates are kept by id,
+// not pointer, so the same callback may replace the world's spawn map safely.
+class SpawnSearchMatcher {
+public:
+    SpawnSearchMatcher(const SpawnSearch& search, const game::WorldState& world, const SearchSources& sources);
+    bool matches(const game::Spawn& spawn) const;
+
+private:
+    SpawnSearch search_;
+    const game::WorldState& world_;
+    SearchSources sources_;
+    std::vector<std::uint32_t> near_players_;
+};
+
+// MacroQuest's GetSpawnType, with corpses first (the game::Spawn version knows only players and NPCs).
+game::eSpawnType spawn_type(const game::Spawn& spawn);
 
 // `guild` (may be null) answers "guild" (the player's) and "guildname <name>".
 SpawnSearch parse_spawn_search(std::string_view text, const game::GuildState* guild = nullptr);

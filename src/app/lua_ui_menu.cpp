@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 
 #include "core/game_dir.h"
@@ -115,8 +116,8 @@ bool menu_command_offered(int command, const std::function<bool(std::string_view
 }
 
 void CascadeMenu::load(const GameDir& game, std::uint32_t expansions, std::int32_t pvp_rules,
-                       const std::function<bool(int)>& offered) {
-    if (loaded_) return;
+                       const std::function<bool(int)>& offered, bool layout_profiles) {
+    if (loaded_ && layout_profiles_ == layout_profiles) return;
     // Hailstone: a server's own CascadeMenu.txt lays the menu out; the player's game folder's does not (its rows
     // and their order change with the client version), Hailstone's layout does.
     constexpr std::string_view kFile = "uifiles/default/CascadeMenu.txt";
@@ -126,10 +127,10 @@ void CascadeMenu::load(const GameDir& game, std::uint32_t expansions, std::int32
         std::ostringstream ss;
         ss << in.rdbuf();
         log::info("ui: EQ menu from the server's {}", path->string());
-        load_text(ss.str(), expansions, pvp_rules, offered);
+        load_text(ss.str(), expansions, pvp_rules, offered, layout_profiles);
         return;
     }
-    load_text(hailstone_layout(), expansions, pvp_rules, offered);
+    load_text(hailstone_layout(), expansions, pvp_rules, offered, layout_profiles);
 }
 
 // Hailstone's EQ menu. Its own grouping, not a client's file: the windows by what they are about, the ones a key
@@ -224,8 +225,9 @@ std::string_view CascadeMenu::hailstone_layout() {
 }
 
 void CascadeMenu::load_text(std::string_view file, std::uint32_t expansions, std::int32_t pvp_rules,
-                            const std::function<bool(int)>& offered) {
+                            const std::function<bool(int)>& offered, bool layout_profiles) {
     loaded_ = true;
+    layout_profiles_ = layout_profiles;
     sorted_ = file == hailstone_layout();
     menus_.assign(1, {});
     std::vector<std::string> left_out;
@@ -295,7 +297,12 @@ void CascadeMenu::load_text(std::string_view file, std::uint32_t expansions, std
     const int icon = where != top.end() ? where->icon : -1;
     where = top.insert(where, {1, icon, "Report a Bug", kMenuReportBug, -1});
     where = top.insert(where, {1, icon, "Web Browser", kMenuWebBrowser, -1});
-    top.insert(where, {1, icon, "Lua Scripts", kMenuScripts, -1});
+    where = top.insert(where, {1, icon, "Lua Scripts", kMenuScripts, -1});
+    if (layout_profiles) {
+        auto options = at(game::KeyCommand::TOGGLE_OPTIONSWIN);
+        top.insert(options == top.end() ? where : std::next(options),
+                   {1, icon, "Layout Profiles", kMenuLayoutProfiles, -1});
+    }
     plugin_menu_ = -1;
     apply_plugin_entries();
     if (!left_out.empty()) {

@@ -19,6 +19,25 @@ Use dot calls. Methods are grouped by service (`session`, `character`, `inventor
 `tasks`, `achievements`, `map`, `scripts`, `plugins`, `pregame`, `gamepad`, ...). The full generated mapping is in
 [UI API Reference](ui-api-reference.md).
 
+## Layout profiles
+
+API 1.12 adds `hs.UI.layoutProfiles`. It is available to interface code during a character session. `List()` returns saved
+names for the active pack. `Preview(name)` returns
+`{name, width, height, windows, chat, rects}` or `nil, reason`.
+`rects` lists `{name, x, y, w, h}` window bounds in pixels at the saved screen size. An empty list means
+no window geometry is available. Previewing leaves the current layout in use. `Save(name[, overwrite])` returns `true` or
+`false, reason[, code]`. If a name is taken, the code is `"exists"`. Ask the player before retrying with
+`overwrite=true`.
+
+`Apply(name[, discard_unsaved])` needs a preview of that profile first, then reads the saved file again, so a
+later overwrite from another client is the one applied. If the current layout does not match
+a saved profile, it returns `false, reason, "unsaved"`. An interface can offer to save the current setup or retry
+with `discard_unsaved=true` after the player chooses to apply without saving. Apply and `Undo()` otherwise return
+`true` or `false, reason`. `CanUndo()` reports whether the current
+session has a previous layout to restore. `Generation()` increases when the new positions take effect
+at the start of the next UI frame. Open pack dialogs can use that signal to refresh their placement.
+Script and plugin callers cannot read or change the saved profiles.
+
 ## Chat tabs and windows
 
 `hs.UI.chat.Windows([into])` lists visible chat windows in slot order: `slot` identifies the window, `tab` is the
@@ -45,6 +64,13 @@ can move during the session.
 Tab records expose `unread` (also with flashing off), `flash`, `flashColor` (nil for red) and `highlighted` (draw the
 highlight this frame). A background message flashes the label every half second for five seconds, then leaves it
 highlighted until selected. Mutations need `commands`. Feature-check with `hs.UI.Supports('chat', 'SplitTab')`.
+
+`hs.UI.chat.Text(slot, version, names, timestamps, incremental, groups)` accepts an optional sixth argument.
+When true, a chat group occupies one STML entry. Its coloured heading shows the title and count in both states
+and carries a `WndNotify="1003,id"` disclosure link. An expanded group includes its messages on subsequent lines.
+An interface can use
+`hs.UI.chat.Link(slot, 1003, id)` to toggle the group in that tab. The toggle resets its cached text. Calls that
+omit the sixth argument receive the individual messages as ordinary lines.
 
 ## Optional world nameplate presentations
 
@@ -262,6 +288,10 @@ local handle, reason = hs.UI.map.RegisterOverlay(function(view)
 end, {priority = 0})
 ```
 
+Vanilla maps (`/mapfilter vanilla`, a server's `[map] vanilla`) call no overlays. Code that draws over a map itself,
+after `hs.DrawZoneMap` or `hs.DrawMinimap`, asks `hs.UI.map.Vanilla()` and leaves its marks out while it is true,
+keeping its text and controls.
+
 `view` is one plain table, read-only by convention:
 
 | Field | Meaning |
@@ -443,6 +473,26 @@ API 1.6 adds `addons.Policy()` and `addons.PolicyAction(action, serial)` (flat `
 - Both are for the client's own interfaces: add-on or hand-placed interfaces and plugin or script code get nil and
   false, and cannot replace the "AddonPolicy" window (docs/plugins.md "Opt-in add-on policies").
 
+## Server Management
+
+The built-in Modern pack uses `serverManagement` for GM policy editing. The encounter grants access using the
+account's server-side status. This module is closed to add-on code and custom interface packs.
+
+- `Available()` reports whether the client can request the server's policy. `Open()` requests the first snapshot
+  or refreshes the current snapshot when `reload_required` is set. It also succeeds if the request is already pending
+  or the current snapshot is usable.
+- `CanonicalCommandName(name)` resolves a command spelling as the policy parser does, including RoF2 abbreviations.
+- `View([known_serial[, known_catalog_serial]])` returns `nil` without an authorized snapshot. The result has
+  `serial`, `catalog_serial`, `revision`, `file_revision`, `message`, `saving`, `reload_required`, and `reloading`.
+  A new snapshot serial adds `minimum_status`, `reloaded`, and `fields` (an array of `{section, key, value}`).
+  `reloaded` indicates that a policy refresh replaced an open snapshot. A new snapshot or catalog serial adds
+  `commands` (an array of `{name, description, origin, aliases, groups}`). The catalog can update during a draft edit.
+  During a zone transfer the result contains only `paused = true` so the window can retain its draft while hidden.
+- `Save(revision, edits)` sends only edited `{section, key, value}` records and returns whether submission started.
+  Success supplies a new snapshot serial. A stale or unconfirmed save requires an `Open()` refresh before the next
+  save. The window retains the current snapshot and draft in the meantime. An empty value is an explicit edit.
+- `Close()` clears the visible management session. The client can request a fresh snapshot on the next open.
+
 ## Class names
 
 API 1.7 adds `character.ClassName(id[, short])` (flat `hs.ClassName`) and `character.ClassNamesRevision()`
@@ -470,6 +520,12 @@ API 1.10 adds an optional argument to `map.ZoneName` (flat `hs.ZoneName`): `Zone
 number that changes on every entry into the world, the same zone again included, and is nil outside the world.
 Without the argument it returns the name and short name as before. Compare it for equality only. The packs' map
 windows keep their zoom and centre while closed and reset them when it changes; an older host returns no third value.
+
+## Vanilla maps
+
+API 1.11 adds `map.Vanilla()` (flat `hs.MapVanilla`): true while the maps are vanilla (`/mapfilter vanilla`, or a
+server's `[map] vanilla`). The maps then draw only their lines and call no overlays; a pack or add-on that draws its
+own marks over a map leaves them out, keeping its text and controls (docs/plugins.md "Vanilla maps").
 
 ## Discovering optional features
 

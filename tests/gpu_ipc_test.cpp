@@ -15,6 +15,16 @@
 #include <type_traits>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 using namespace hailstone;
 using namespace hailstone::platform;
 
@@ -53,7 +63,7 @@ TEST_CASE("GPU IPC frames: malformed headers are rejected before body allocation
     }
     ByteWriter oversized;
     oversized.le<std::uint32_t>(0x50494748);
-    oversized.le<std::uint16_t>(1);
+    oversized.le<std::uint16_t>(2); // the transport's version
     oversized.le<std::uint8_t>(static_cast<std::uint8_t>(Kind::Request));
     oversized.le<std::uint8_t>(0);
     oversized.le<std::uint32_t>(static_cast<std::uint32_t>(kGpuIpcMaxBody + 1));
@@ -162,6 +172,30 @@ TEST_CASE("GPU IPC Windows: a peer that stays idle past the server's limit is di
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     CHECK(disconnected.load() == 1);
     CHECK_THROWS(client->call(message));
+    client->close();
+    server->stop();
+}
+
+// A reply's handle is the broker's, duplicated from it by the client: the client gets a handle of its own to the same
+// object, and a number that names no handle in the broker breaks the channel instead of being adopted.
+TEST_CASE("GPU IPC Windows: a reply's handle is duplicated from the broker by the client") {
+    HANDLE event = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    REQUIRE(event != nullptr);
+    auto owner = std::shared_ptr<const void>(event, [](const void* h) { ::CloseHandle(const_cast<void*>(h)); });
+    std::atomic<bool> lie = false;
+    auto server = GpuIpcServer::start(make_gpu_ipc_session(), [&](const GpuIpcPeer&, std::span<const std::byte>) {
+        if (lie.load()) return GpuIpcReply{{}, reinterpret_cast<void*>(std::uintptr_t{0x7ffffff0}), owner};
+        return GpuIpcReply{{}, event, owner};
+    }, {}, 1);
+    auto client = GpuIpcClient::connect(server->session());
+    auto reply = client->call({});
+    REQUIRE(reply.handle);
+    CHECK(reply.handle.get() != static_cast<void*>(event)); // a new handle, not the number sent
+    ::SetEvent(reply.handle.get());
+    CHECK(::WaitForSingleObject(event, 0) == WAIT_OBJECT_0); // to the same object
+    reply.handle.reset();
+    lie.store(true);
+    CHECK_THROWS(client->call({}));
     client->close();
     server->stop();
 }

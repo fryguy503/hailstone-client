@@ -497,6 +497,7 @@ void ClientApp::use_ui_pack(std::string_view id, bool force) {
     if (selected) ui_selected_ = selected->id;
     const ui::UiPack* pack = ui_pack_for_screen(selected);
     if (!pack || (!force && pack->id == ui_name_)) return;
+    if (ui_api_ && pack->id != ui_name_) ui_api_->clear_layout_profile_undo();
     ui_name_ = pack->id;
     ui_host_.trusted_ui = ui::trusted_ui_pack(*pack);
     loaded_ui_pack_ = *pack;
@@ -628,6 +629,7 @@ void ClientApp::back_to_login(std::string message, bool is_error) {
     if (is_error) login_token_session_.clear();
     link_death_since_.reset();
     if (ui_api_) ui_api_->save_layout();
+    show_zone_client_messages(false);
     // Hailstone: the chat's lines to the character's history (a link death, a camp to the server list, a lost
     // connection); entering the world again puts them back.
     save_chat_history(true);
@@ -689,6 +691,7 @@ void ClientApp::leave_character() {
     if (actions_ui_) actions_ui_->save_character(); // its hot buttons' last changes (ActionsUi::save_if_due)
     layout_for_.clear(); // Even the same character gets a new connection and needs its window visibility restored.
     ui_character_dir_.clear();
+    if (ui_api_) ui_api_->clear_layout_profile_undo();
     if (lua_ui_) lua_ui_->set_character_settings({});
     use_character_settings({}); // hailstone.ini's settings again
     ui_host_.drop_session_dialogs();
@@ -1067,6 +1070,20 @@ void ClientApp::update_window_title() {
     }
 }
 
+void ClientApp::show_zone_client_messages(bool collapse) {
+    if (!conn_) return;
+    auto messages = conn_->take_zone_client_messages();
+    if (!collapse) {
+        for (auto& message : messages) game_view_.chat.add(ui::ChatChannel::System, std::move(message.text));
+        return;
+    }
+    // Only the churn that cancels out goes in the group: a script or plugin still stopped is shown on its own line.
+    std::vector<std::string> routine, lasting;
+    for (auto& message : messages) (message.lasting ? lasting : routine).push_back(std::move(message.text));
+    game_view_.chat.add_client_messages(std::move(routine));
+    for (auto& message : lasting) game_view_.chat.add(ui::ChatChannel::System, std::move(message));
+}
+
 void ClientApp::update_connection() {
     if (!conn_) return;
     if (window_.input().user_activity) conn_->note_user_activity();
@@ -1099,6 +1116,8 @@ void ClientApp::update_connection() {
             quit_ = true;
         },
         [this] {
+            // A failed transfer can still have produced notices on departure. Keep them in chat history.
+            show_zone_client_messages(false);
             if (auto kind = conn_->camped_out()) camp_finished(*kind);
             else if (conn_->link_death()) update_link_death();
             else back_to_login(conn_->error(), true);
@@ -1230,7 +1249,12 @@ void ClientApp::update_connection() {
         break;
     }
     if (auto z = conn_->take_zone_to_load()) load_zone(*z);
-    while (auto c = conn_->poll_chat()) game_view_.chat.add(chat_channel(c->kind), c->text, c->rgb, c->color, c->peer);
+    while (auto c = conn_->poll_chat()) {
+        if (c->group.empty())
+            game_view_.chat.add(chat_channel(c->kind), std::move(c->text), c->rgb, c->color, std::move(c->peer));
+        else
+            game_view_.chat.add_chat_group(std::move(c->text), std::move(c->group));
+    }
     // Hailstone: the chat history every few minutes too (a crash keeps most of it).
     if (screen_ == Screen::InGame && Clock::now() - chat_saved_ > std::chrono::minutes(3)) {
         chat_saved_ = Clock::now();

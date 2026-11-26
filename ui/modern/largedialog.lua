@@ -1,5 +1,5 @@
 -- Server dialog: replaces the game's LargeDialogWindow (the server's large text popups: the welcome message, quest
--- and event texts). The server's title, its text (STML: colours and links) in a padded box at a readable size that
+-- and event texts). The server's title, its text (STML: colours, links and tables) in a padded box at a readable size that
 -- scrolls when long, and its buttons: OK, or Yes and No with the labels the server gave them. The window's sound
 -- controls (a voice file's volume, Replay, Mute) show only when the dialog has them, as on the stock window.
 -- Everything goes through the window's children (hs.ClickChild, hs.SetSlider), so the answer is the game's.
@@ -29,7 +29,7 @@ local function body(x, y, w, h, s)
   local bh = K.ButtonH(s)
   local sound = API.windows.ChildShown(WINDOW, "LDW_ReplayButton") == true
   local below = K.FooterH(s) + (sound and (bh + 6 * s) or 0)
-  K.TextBox(WINDOW, "LDW_TextBox", 0, -below, { font = T.font.normal })
+  K.TextBox(WINDOW, "LDW_TextBox", 0, -below, { font = T.font.normal, tables = true })
   if sound then
     W.Button(WINDOW, "LDW_ReplayButton", "Replay", { height = bh, tooltip = "Play the message's voice again" })
     ui.SameLine()

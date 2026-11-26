@@ -18,9 +18,11 @@
 #include "core/ascii_case.h"
 #include "core/config.h"
 #include "core/wipe.h"
+#include "game/chat_windows.h"
 #include "game/eq_names.h"
 #include "game/zone_names.h"
 #include "game/gamepad_bindings.h"
+#include "game/mq_colors.h"
 
 namespace hailstone::ui {
 
@@ -33,6 +35,16 @@ const ImVec4 kErrorColor{1.0f, 0.42f, 0.38f, 1.0f};
 const ImVec4 kDimColor{0.62f, 0.64f, 0.68f, 1.0f};
 const ImVec4 kGoodColor{0.45f, 0.85f, 0.45f, 1.0f};
 const ImVec4 kLockedColor{1.0f, 0.75f, 0.30f, 1.0f};
+
+bool chat_replaced() {
+    // Moving or combining tabs can leave Chat1 empty while another frame draws the chat.
+    static const auto screens = [] {
+        std::array<std::string, game::kChatWindowSlots> names;
+        for (std::size_t i = 0; i < names.size(); ++i) names[i] = std::format("Chat{}", i + 1);
+        return names;
+    }();
+    return std::ranges::any_of(screens, lua::replaces);
+}
 
 // Places the next window centred on the screen with a size in font-height units.
 void center_next_window(float width_em, float height_em = 0.0f) {
@@ -360,6 +372,8 @@ std::string update_status_text(const UpdateNotice& n) {
     if (n.check == "checking") return "Checking for updates...";
     if (n.check == "uptodate") return "Up to date";
     if (n.check == "unknown") return "Could not check for updates";
+    if (n.check == "behind")
+        return std::format("Not up to date: the update feed went back to {} ({} was out)", n.version, n.seen);
     if (n.check == "newer") {
         if (n.state == "downloading") return std::format("Downloading {}...", n.version);
         if (n.state == "ready") return std::format("{} is ready: restart to update", n.version);
@@ -673,6 +687,7 @@ LoginAction about_corner(const LoginView& view) {
         ImGui::PushTextWrapPos(0.0f);
         if (update_notice_text(view.update).empty()) {
             const ImVec4 colour = view.update.check == "uptodate" ? ImVec4(0.45f, 0.85f, 0.45f, 1.0f)
+                                  : view.update.check == "behind" ? ImVec4(1.0f, 0.65f, 0.25f, 1.0f)
                                                                   : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
             ImGui::TextColored(colour, "%s", update_status_text(view.update).c_str());
         } else if (LoginAction a = update_notice(view.update); a != LoginAction::None) {
@@ -2060,12 +2075,32 @@ void loading_overlay(const LoadingView& view, bool cover_ui) {
 
 // ---- In game --------------------------------------------------------------
 
+std::string ChatLine::group_label() const {
+    return std::format("{} {} [{}]", group_expanded ? '-' : '+', text, group_messages.size());
+}
+
 void ChatView::add(ChatChannel channel, std::string text, std::uint32_t rgb, std::uint32_t color, std::string peer) {
     lines.push_back({channel, std::move(text), rgb, color, std::move(peer), 0, false,
-                     static_cast<std::int64_t>(std::time(nullptr))});
-    lines.back().seq = ++revision;
+                     static_cast<std::int64_t>(std::time(nullptr)), ++revision, {}, false});
     while (lines.size() > max_lines) lines.pop_front();
     scroll_to_bottom = true;
+}
+
+void ChatView::add_chat_group(std::string title, std::vector<std::string> messages) {
+    if (title.empty() || title.find_first_of("\r\n\0", 0, 3) != std::string::npos || messages.empty() || max_lines == 0)
+        return;
+    add(ChatChannel::System, std::move(title));
+    lines.back().group_messages = std::move(messages);
+}
+
+void ChatView::add_client_messages(std::vector<std::string> messages) {
+    add_chat_group(std::string(kClientSystemMessages), std::move(messages));
+}
+
+void ChatView::toggle_chat_group(ChatLine& line) {
+    if (line.group_messages.empty()) return;
+    line.group_expanded = !line.group_expanded;
+    ++group_revision;
 }
 
 void hud_panel(const HudView& view, bool& show_chat, bool& show_spawns, InGameActions& actions) {
@@ -2151,10 +2186,36 @@ std::optional<std::string> chat_window(ChatView& view, bool* open) {
     // Every line is drawn (the history is capped): wrapped lines have different heights, which a
     // ImGuiListClipper (one height for all) cannot place.
     ImGui::PushTextWrapPos(0.0f);
-    for (const ChatLine& l : view.lines) {
+    const auto draw_line = [&view](const std::string& raw) {
+        // The dev screen draws each line in one colour, including lines with embedded MQ colour codes.
+        const bool coded = raw.find(game::kMqColorCode) != std::string::npos;
+        const std::string plain = coded ? game::strip_mq_colors(raw) : std::string();
+        const std::string& text = coded ? plain : raw;
+        if (text.find('\x12') == std::string::npos) ImGui::TextUnformatted(text.c_str());
+        else chat_line_with_links(text, view);
+    };
+    for (ChatLine& l : view.lines) {
+        if (!l.group_messages.empty()) {
+            const ImVec4 color = rgb_color(kChatGroupRgb);
+            const std::string label = l.group_label();
+            ImGui::TextColored(color, "%s", label.c_str());
+            if (ImGui::IsItemHovered()) {
+                const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+                ImGui::GetWindowDrawList()->AddLineH(a.x, b.x, b.y, ImGui::GetColorU32(color));
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            }
+            if (ImGui::IsItemClicked()) view.toggle_chat_group(l);
+            if (l.group_expanded) {
+                ImGui::Indent();
+                ImGui::PushStyleColor(ImGuiCol_Text, channel_color(l.channel));
+                for (const auto& text : l.group_messages) draw_line(text);
+                ImGui::PopStyleColor();
+                ImGui::Unindent();
+            }
+            continue;
+        }
         ImGui::PushStyleColor(ImGuiCol_Text, l.rgb ? rgb_color(l.rgb) : channel_color(l.channel));
-        if (l.text.find('\x12') == std::string::npos) ImGui::TextUnformatted(l.text.c_str());
-        else chat_line_with_links(l.text, view);
+        draw_line(l.text);
         ImGui::PopStyleColor();
     }
     ImGui::PopTextWrapPos();
@@ -2327,7 +2388,7 @@ InGameActions in_game_overlay(InGameView& view) {
     if (!lua::replaces("PlayerWindow")) player_window(view.player, actions);
     if (!lua::replaces("TargetWindow")) target_window(view.target, view.player.attacking, actions);
     if (!lua::replaces("RespawnWnd")) respawn_window(view.respawn, actions);
-    if (view.show_chat && !lua::replaces("Chat1")) actions.chat_submit = chat_window(view.chat, &view.show_chat);
+    if (view.show_chat && !chat_replaced()) actions.chat_submit = chat_window(view.chat, &view.show_chat);
     if (view.dev_windows && view.show_spawns) actions.target_spawn = spawn_list_window(view.spawns, &view.show_spawns);
     return actions;
 }

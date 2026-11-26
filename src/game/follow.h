@@ -72,6 +72,13 @@ struct ProfiledFollowStep {
 ProfiledFollowStep profiled_follow_step(const FollowInput& in, const FollowProfile& profile,
                                       bool moving, float pitch, float seconds);
 
+struct FollowSwimStep {
+    float pitch = 0;          // in 512ths of a turn
+    bool vertical_only = false;
+};
+// Direct swimming shared by both follow modes. The ordinary follow step decides horizontal movement.
+FollowSwimStep follow_swim_step(const FollowInput& in, bool move);
+
 // Process-unique actor identities bind a manually initiated link to this owner
 // and target. Numeric spawn-id reuse never continues an enhanced follow.
 struct FollowIdentity {

@@ -26,6 +26,7 @@ local pendingBuy, pendingSell = nil, nil -- a row / slot selected this frame, it
 local parcelList = { offset = 0 }
 local sendMode, pendingSend, parcelNote = false, nil, nil
 local sendQ = {} -- the question before a parcel goes (W.confirm)
+local shownFrame = nil -- the last frame the window was drawn: a pending press is for the frame after it only
 -- An item's send in flight: { slot, bag, name, count, to, frame, dialog, seen, answeredAt } from the stock Send's
 -- click until the item leaves the bags ("sent"), or the send is dropped (a quantity dialog cancelled, a refusal).
 local awaitSend = nil
@@ -111,9 +112,19 @@ end
 
 ui.window("Merchant", function()
   if not W.shown(MW) then
+    -- (a press asked for on the last frame of one merchant must not land on the next merchant's first)
     sendQ.confirm, awaitSend = nil, nil
+    pendingBuy, pendingSell, pendingSend = nil, nil, nil
+    shownFrame = nil
     return
   end
+  local frame = ui.GetFrameCount()
+  if shownFrame ~= frame - 1 then
+    -- (not drawn last frame: what it asked for then is for a window that has gone)
+    if pendingSend then awaitSend = nil end
+    pendingBuy, pendingSell, pendingSend = nil, nil, nil
+  end
+  shownFrame = frame
   T.frame()
   X.frame() -- runs a purse coin's click once A is up (its quantity dialog)
   -- the stock button the previous frame asked for, once the selection is the game's

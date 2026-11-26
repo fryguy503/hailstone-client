@@ -561,6 +561,21 @@ grip space; skeletal ones are baked in their rest pose.
 - EQG models use `ARMR_WEAP`, `ARML_WEAP`, `ARML_SHLD` and the bone's bind matrix.
 - Items are not tinted (`itmt.ini[Primary/SecondaryTintIndex]` is not read).
 
+The client sets the held models itself after its own inventory moves, as the original does; each is a
+`SetHeldModel` that sends `OP_WearChange` (below), so the other players see the change:
+
+- A move through possessions slot 11, 13 or 14 (`ItemGlobalIndex_IsWeaponSlot` @0x694020) calls
+  `PlayerClient::DoItemSlot` @0x593680 with that slot (`net::GameConnection::do_item_slot`). For 13 or 14 it sets 7 to
+  the primary and 8 to the secondary ("0" for an empty hand), then 8 to the range item when both hands are empty. For
+  11 it sets 7 to "0" and 8 to the range item, or, with no range item, 7 and 8 to the primary and the secondary. It
+  sets nothing for 13 or 14 while the player's animation is 9, which Hailstone does not model (docs/unknowns.md).
+- A bandolier set (`PcZoneClient::BandolierSwap` @0x585aa0) moves the items, sets 7 and 8 the same way (with both
+  hands empty, 7 "0" and 8 the range item), and then sends `OP_Bandolier`.
+
+Inventory changes the server makes (an item packet, a summoned item) change only the local model. Stock EQEmu's own
+moves send no held models (`Client::SwapItem` broadcasts only the armour slots; `Client::SetBandolier` sends none),
+so these packets are the only way the other players learn of the change.
+
 The local player's ranged attack changes the held models as the original does. `PlayerZoneClient::DoAttack`
 @0x5a5000 for the range slot (after another kind of attack) sets 7 and 8 to "0" and 8 to the range item;
 `DoRangedAttack` @0x5a4920 then sets 7 to "0" and 8 to the range item (`ItemBase_GetIDFile(0x22)` @0x7b3e70: its main
@@ -671,7 +686,9 @@ positive Number), so a forged file in a server's asset folder cannot make it fil
 
 #### Building appearances off the main thread
 
-Appearances are cached per model and appearance key in the library (geometry) and per mesh on the GPU. A new one is
+Appearances are cached per model and appearance key in the library (geometry) and per mesh on the GPU. The
+library's cache keeps what an actor still wears: once it holds 512 looks, the meshes only it holds are dropped (and
+dressed again if asked for), and the next sweep waits until it holds twice what was left. A new one is
 built on the renderer's worker thread (`core::LatestJobs`: the dress, vertices, textures decoded, Luclin layers
 composited, mips), and applied on the main thread in `prepare_spawns` within a frame budget (`set_build_budget_ms`:
 4 ms in the open, 100 ms behind the loading screen; the first of a frame is always applied).
@@ -770,7 +787,10 @@ Materials map to passes like zone materials (`render/material_state.h`):
 
 - Back faces are culled (WLD fronts clockwise, EQG counter-clockwise in this frame; two-sided materials not culled).
 - Cross-fades last 100 ms, 175 ms into P01/O01.
-- Fog matches `zone.frag`. A soft key light (0.8 + 0.25·N·L) keeps bodies readable while the zone is full-bright.
+- Fog matches `zone.frag` for opaque and alpha-blended actors. For additive actors, fog and underwater absorption
+  attenuate the material's colour. Fog colour, underwater shafts and the rain sheen would show the edges of dark
+  additive textures, such as the faerie dragon's wing cards, so the additive pass omits them.
+- A soft key light (0.8 + 0.25·N·L) keeps bodies readable while the zone is full-bright.
 
 #### Animation choice
 

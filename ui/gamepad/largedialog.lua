@@ -31,10 +31,10 @@ ui.window("Message", function()
     local wx, wy = ui.GetWindowPos()
     local bh = T.px(64)
     local textY1 = y1 - bh - T.px(16)
-    -- the text, word-wrapped (its <br> are line breaks)
+    -- The text and table cells wrap into rows for the scroller.
     local text = API.windows.Text(LDW, "LDW_TextBox") or ""
     if text ~= lastText then scroll, lastText = 0, text end
-    local rows = S.blockRows(text, w - T.px(36)) -- (laid out again only when the text, width or font change)
+    local rows = S.popupRows(text, w - T.px(36)) -- (laid out again only when the text, width or font change)
     T.rect(x0, y0, x1, textY1, C.sunken, 1, T.px(14))
     local _, lh = ui.CalcTextSize("Ag")
     local fit = math.max(1, math.floor((textY1 - y0 - T.px(24)) / lh))

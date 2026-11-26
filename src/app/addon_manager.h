@@ -162,7 +162,8 @@ public:
     void browse(bool again);
     // Main thread, on the login screen: takes the add-on out (its own files; the player's stay).
     bool remove(std::string_view name, std::string* error);
-    // Main thread, on the login screen: installs what is downloaded and checked. The names installed.
+    // Main thread, on the login screen: installs what is downloaded and checked. The names installed. While another
+    // Hailstone holds the folder's add-on lock (lock_addons), nothing is installed and everything stays staged.
     std::vector<std::string> install_ready();
     bool has_ready() const;
 

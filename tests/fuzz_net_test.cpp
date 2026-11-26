@@ -46,6 +46,7 @@
 #include "net/notice_packets.h"
 #include "net/quest_npc_packets.h"
 #include "net/settings_packets.h"
+#include "net/server_management_packets.h"
 #include "net/zone_link_packets.h"
 #include "net/opcodes.h"
 #include "net/pet_packets.h"
@@ -136,6 +137,25 @@ std::vector<std::uint16_t> all_opcodes() {
     return {s.begin(), s.end()};
 }
 
+// The login-server reply parsers, swept by "fuzz: login reply parsers ...".
+struct ByteParser {
+    const char* name;
+    std::function<void(std::span<const std::byte>)> run;
+};
+const std::vector<ByteParser>& login_parsers() {
+    static const std::vector<ByteParser> list = {
+        {"parse_handshake_reply", [](std::span<const std::byte> d) { (void)parse_handshake_reply(d); }},
+        {"parse_login_reply", [](std::span<const std::byte> d) { (void)parse_login_reply(d); }},
+        {"parse_server_list", [](std::span<const std::byte> d) { (void)parse_server_list(d); }},
+        {"parse_play_reply", [](std::span<const std::byte> d) { (void)parse_play_reply(d); }},
+        {"parse_kick_reply", [](std::span<const std::byte> d) { (void)parse_kick_reply(d); }},
+        {"reply_body", [](std::span<const std::byte> d) { (void)reply_body(login_op::LoginAccepted, d); }},
+    };
+    return list;
+}
+// Byte parsers fuzzed by a test of their own: parse_session_response in feed_all ("fuzz: SOE framing ...").
+const std::set<std::string> kOtherByteParsers = {"parse_session_response"};
+
 } // namespace
 
 TEST_CASE("fuzz: the decoder list covers every decode_*(const AppPacket&) declaration") {
@@ -150,6 +170,11 @@ TEST_CASE("fuzz: the decoder list covers every decode_*(const AppPacket&) declar
     // A decoder may take more parameters after the packet if they have defaults (decode_hailstone_guild's reply);
     // decode_with's body has none and is a helper, not a decoder.
     std::regex decl(R"(\b(decode_[a-z_0-9]+)\(const AppPacket& p(?:, [^,)=]+=[^,)]+)*\))");
+    // parse_*(std::span<const std::byte> ...) or parse_*(ByteSpan ...): a parser of received bytes.
+    std::regex byte_parser_decl(R"(\b(parse_[a-z_0-9]+)\((?:std::span<const std::byte>|ByteSpan)[ )])");
+    std::set<std::string> byte_parsers_listed;
+    for (const auto& lp : login_parsers()) byte_parsers_listed.insert(lp.name);
+    int byte_parsers = 0;
     int scanned = 0;
     std::vector<std::filesystem::path> headers;
     std::error_code net_ec;
@@ -165,14 +190,30 @@ TEST_CASE("fuzz: the decoder list covers every decode_*(const AppPacket&) declar
         std::string text = ss.str();
         for (std::sregex_iterator it(text.begin(), text.end(), decl), end; it != end; ++it)
             CHECK_MESSAGE(listed.count((*it)[1]) == 1, (*it)[1].str() << " is missing from tests/fuzz_decoders.inc");
+        // The parsers of raw received bytes (the login replies, the session response) are fuzzed too.
+        for (std::sregex_iterator it(text.begin(), text.end(), byte_parser_decl), end; it != end; ++it) {
+            const std::string name = (*it)[1];
+            ++byte_parsers;
+            CHECK_MESSAGE((byte_parsers_listed.count(name) == 1 || kOtherByteParsers.count(name) == 1),
+                          name << " is fuzzed nowhere: add it to login_parsers() or a fuzz test of its own");
+        }
     }
+    if (!net_ec) CHECK(byte_parsers >= 6);
     // Run from the source tree (net_ec set when it is not: an installed test binary has nothing to compare), the
     // scan must have found the headers it is meant to check.
     if (!net_ec) CHECK(scanned >= 28);
-    // The in-tree plugins' decoders take the bytes OnPacket hands them.
+    // The in-tree plugins' decoders take the bytes OnPacket hands them. Only a plugin this build compiled in is
+    // checked: its list is included only then, while its checkout may still sit in plugins/.
     std::regex plugin_decl(R"(\b(decode_[a-z_0-9]+)\(Bytes p\))");
-    for (const char* h : {"../../plugins/nms/nms_packets", "../../plugins/projecttriune/triune_packets",
-                          "../../plugins/projecttriune/triune_windows"}) {
+    std::vector<const char*> plugin_headers;
+#if defined(HAILSTONE_HAS_NMS)
+    plugin_headers.push_back("../../plugins/nms/nms_packets");
+#endif
+#if defined(HAILSTONE_HAS_TRIUNE)
+    plugin_headers.push_back("../../plugins/projecttriune/triune_packets");
+    plugin_headers.push_back("../../plugins/projecttriune/triune_windows");
+#endif
+    for (const char* h : plugin_headers) {
         std::ifstream f(dir + h + ".h");
         if (!f) continue;
         std::stringstream ss;
@@ -301,19 +342,15 @@ TEST_CASE("fuzz: login reply parsers report errors by exception and never crash"
         for (const auto& pat : seeds)
             for (auto n : truncation_lengths(std::min<std::size_t>(pat.size(), 1024)))
                 fuzz::run_case(name, Bytes(pat.begin(), pat.begin() + static_cast<std::ptrdiff_t>(std::min(n, pat.size()))), Throws::Errors,
-                               [&](std::span<const std::byte> d) { (void)parse(d); });
+                               [&](std::span<const std::byte> d) { parse(d); });
         Rng rng(0x10610);
         for (int i = 0; i < 600; ++i) {
             Bytes in = fuzz::mutate(seeds[rng.below(seeds.size())], rng);
             in.resize(std::min<std::size_t>(in.size(), 4096));
-            fuzz::run_case(name, in, Throws::Errors, [&](std::span<const std::byte> d) { (void)parse(d); });
+            fuzz::run_case(name, in, Throws::Errors, [&](std::span<const std::byte> d) { parse(d); });
         }
     };
-    sweep("parse_handshake_reply", [](std::span<const std::byte> d) { return parse_handshake_reply(d); });
-    sweep("parse_login_reply", [](std::span<const std::byte> d) { return parse_login_reply(d); });
-    sweep("parse_server_list", [](std::span<const std::byte> d) { return parse_server_list(d); });
-    sweep("parse_play_reply", [](std::span<const std::byte> d) { return parse_play_reply(d); });
-    sweep("reply_body", [](std::span<const std::byte> d) { return reply_body(login_op::LoginAccepted, d); });
+    for (const auto& lp : login_parsers()) sweep(lp.name, lp.run);
 }
 
 // ---- SOE session layer -----------------------------------------------------------------------------------------

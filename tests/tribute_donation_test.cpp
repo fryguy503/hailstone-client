@@ -326,7 +326,7 @@ TEST_CASE("zone and disconnect discard old tribute reply identities") {
             REQUIRE(donate(c, guild));
             REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, item_opcode(guild)) == 1; }));
             if (!disconnect) {
-                c.receive_world_packet_for_test(net::encode(net::ZoneServerInfo{"127.0.0.1", 9000}));
+                net::GameConnectionTestAccess::zone_hand_off(c, 9000);
             } else
                 c.disconnect();
             const auto before = answers(c, guild);
@@ -506,7 +506,7 @@ TEST_CASE("guild platinum donation fences retire on a later master-open reply or
         REQUIRE(c.guild_tribute_donate_platinum(3));
         REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, net::Op::GuildTributeDonatePlat) == 1; }));
         if (reset == 1)
-            c.receive_world_packet_for_test(net::encode(net::ZoneServerInfo{"127.0.0.1", 9000}));
+            net::GameConnectionTestAccess::zone_hand_off(c, 9000);
         else if (reset == 2)
             c.disconnect();
         if (reset != 0) {

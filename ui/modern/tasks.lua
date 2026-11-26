@@ -124,6 +124,12 @@ local function selectMember(row)
   if (current or -1) ~= row then API.windows.ListClick(WINDOW, "STASK_MemberList", row, "left", 0) end
 end
 
+-- Make leader asks first, naming the member it acts on (Hailstone, as the guild's and raid's): the question goes when
+-- another member is selected.
+local askLeader = { ask = function()
+  return "Make " .. (state.memberName or "the selected member") .. " the shared task leader?"
+end }
+
 local function sharedMembers(tasks, s)
   local popup = "##sharedMembers"
   if state.openMembers then
@@ -176,7 +182,8 @@ local function sharedMembers(tasks, s)
   ui.BeginDisabled(selected < 0)
   W.Button(WINDOW, "STASK_RemovePlayerButton", "Remove member", { height = h, danger = true })
   ui.SameLine(0, 6 * s)
-  W.Button(WINDOW, "STASK_MakeLeaderButton", "Make leader", { height = h })
+  askLeader.height = h
+  W.Button(WINDOW, "STASK_MakeLeaderButton", "Make leader", askLeader)
   ui.EndDisabled()
   W.Button(WINDOW, "STASK_InviteRaidButton", "Invite raid", { height = h })
   ui.SameLine(0, 6 * s)

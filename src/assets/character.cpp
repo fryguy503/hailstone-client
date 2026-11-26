@@ -801,6 +801,7 @@ void CharacterLibrary::swap(CharacterLibrary& other) noexcept {
     swap(mutex_, other.mutex_);
     swap(cache_, other.cache_);
     swap(dress_cache_, other.dress_cache_);
+    swap(dress_sweep_at_, other.dress_sweep_at_);
     swap(item_cache_, other.item_cache_);
     swap(shared_, other.shared_);
     swap(eqg_, other.eqg_);

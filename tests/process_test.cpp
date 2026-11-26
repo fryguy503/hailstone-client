@@ -1,5 +1,5 @@
-// This process as the system sees it (platform/process.h): its id and memory, the log's lock file, a C file by path,
-// an environment variable taken out of the environment.
+// This process as the system sees it (platform/process.h): its id and memory, the log's lock file, a C file by path
+// (not passed on to child processes), an environment variable taken out of the environment.
 #include <doctest/doctest.h>
 
 #include <cstdio>
@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <string>
 
+#include "platform/binary_stdio.h"
 #include "platform/process.h"
 #include "scratch_dir.h"
 
@@ -41,6 +42,18 @@ TEST_CASE("process: a C file opened by a path with any characters in it") {
     std::fputs("x", f);
     std::fclose(f);
     CHECK(std::filesystem::file_size(path) == 1);
+}
+
+// The log and the chat log stay open while the client starts the browser helper: neither is passed on to it.
+TEST_CASE("process: a C file is not inherited by the processes this one starts") {
+    test::ScratchDir dir("process_fopen_inherit");
+    for (const char* mode : {"wb", "ab", "rb", "wt"}) {
+        CAPTURE(mode);
+        std::FILE* f = platform::open_c_file(dir.path() / "file.txt", mode);
+        REQUIRE(f);
+        CHECK_FALSE(platform::stream_inherited_by_children(f));
+        std::fclose(f);
+    }
 }
 
 TEST_CASE("process: private commit is a Windows measurement, unavailable elsewhere") {

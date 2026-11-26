@@ -243,6 +243,162 @@ TEST_CASE("Mounted form changes: unseat before rebuild and re-seat against the n
     }
 }
 
+TEST_CASE("Held models: observers see an offhand swap and removal without zoning") {
+    auto config = MockConfig::standard();
+    auto& bard = config.characters.front();
+    bard.name = "TestBard";
+    bard.class_ = 8;
+    auto drum = make_item(1001, "Drum", net::kSlotSecondary);
+    drum.id_file = "IT11501";
+    drum.item_type = net::kItemTypePercussionInstrument;
+    auto shield = make_item(1002, "Shield", net::kSlotGeneral1);
+    shield.id_file = "IT200";
+    shield.ornament_off = "IT207";
+    shield.item_type = 8;
+    shield.equip_slots = 1u << net::kSlotSecondary;
+    shield.color = 0xff183044u;
+    bard.inventory = {drum, shield};
+    const auto spawn_id = config.own_spawn_id;
+    auto skeleton = make_spawn(bard.name, spawn_id, 0, 367, 0, 0, 3);
+    skeleton.class_ = bard.class_;
+    skeleton.texture_type = 0;
+    skeleton.equipment[game::kSlotSecondary].material = 11501;
+    Rig wearer(config);
+    REQUIRE(wearer.to_zone(bard.name));
+    wearer.server.add_spawn(skeleton);
+    REQUIRE(wearer.until([&] {
+        return wearer.conn.world().player()->appearance.material[game::kSlotSecondary] == 11501;
+    }));
+
+    auto observer_config = MockConfig::standard();
+    observer_config.own_spawn_id = spawn_id + 1;
+    observer_config.zones.at(2).spawns.push_back(skeleton);
+    Rig observer(observer_config);
+    REQUIRE(observer.to_zone());
+    const auto& observed = observer.conn.world().spawns.at(spawn_id).appearance;
+    REQUIRE(observed.material[game::kSlotSecondary] == 11501);
+
+    const auto offhand = net::ItemSlot::possessions(net::kSlotSecondary);
+    const auto bag_slot = net::ItemSlot::possessions(net::kSlotGeneral1);
+    wearer.conn.click_slot(bag_slot); // pick up the shield
+    REQUIRE(wearer.until([&] { return MockEqServer::count(wearer.server.zone_log, net::Op::MoveItem) == 1; }));
+    CHECK(MockEqServer::count(wearer.server.zone_log, net::Op::WearChange) == 0);
+
+    const auto check_update = [&](std::uint32_t model, std::uint32_t local_tint, const net::ItemSlot& from,
+                                  const net::ItemSlot& to) {
+        // PlayerClient::DoItemSlot @0x593680: a move through slot 14 sets both hands, 7 (no primary: "0") then 8.
+        REQUIRE(wearer.until([&] { return MockEqServer::count(wearer.server.zone_log, net::Op::WearChange) == 2; },
+                             1s));
+        const auto& sent = wearer.server.zone_log;
+        const auto is_wear = [](const net::AppPacket& p) { return net::from_wire(p.opcode) == net::Op::WearChange; };
+        const auto move_packet = std::find_if(sent.begin(), sent.end(), [](const net::AppPacket& p) {
+            return net::from_wire(p.opcode) == net::Op::MoveItem;
+        });
+        const auto primary_packet = std::find_if(sent.begin(), sent.end(), is_wear);
+        REQUIRE(primary_packet != sent.end());
+        const auto wear_packet = std::find_if(primary_packet + 1, sent.end(), is_wear);
+        REQUIRE(wear_packet != sent.end());
+        REQUIRE(move_packet < primary_packet);
+        const auto move = net::decode_move_item(*move_packet);
+        REQUIRE(move);
+        CHECK(move->from.same(from));
+        CHECK(move->to.same(to));
+        const auto primary = net::decode_wear_change(*primary_packet);
+        REQUIRE(primary);
+        CHECK(primary->slot == game::kSlotPrimary);
+        CHECK(primary->armor.material == 0);
+        const auto wear = net::decode_wear_change(*wear_packet);
+        REQUIRE(wear);
+        CHECK(wear->spawn_id == spawn_id);
+        CHECK(wear->slot == game::kSlotSecondary);
+        CHECK(wear->armor.material == model);
+        CHECK(wear->tint == 0);
+        // EQEmu relays the wear update to other clients in the zone.
+        observer.server.zone.send_reliable(*wear_packet);
+        REQUIRE(observer.until([&] { return observed.material[game::kSlotSecondary] == model; }));
+        const auto& worn = wearer.conn.world().player()->appearance;
+        CHECK(worn.material[game::kSlotSecondary] == model);
+        CHECK(worn.tint[game::kSlotSecondary] == local_tint);
+        CHECK(MockEqServer::count(observer.server.zone_log, net::Op::WearChange) == 0);
+    };
+
+    const auto cursor = net::ItemSlot::possessions(net::kSlotCursor);
+    wearer.server.zone_log.clear();
+    wearer.conn.click_slot(offhand); // replace the worn drum with the ornamented shield
+    check_update(207, shield.color, cursor, offhand);
+    wearer.conn.click_slot(bag_slot); // put the drum away
+    REQUIRE(wearer.until([&] { return MockEqServer::count(wearer.server.zone_log, net::Op::MoveItem) == 2; }));
+
+    wearer.server.zone_log.clear();
+    wearer.conn.click_slot(offhand); // remove the shield into the now-empty cursor
+    check_update(0, 0, offhand, cursor);
+}
+
+// PlayerClient::DoItemSlot @0x593680, after a move through slot 11, 13 or 14: 13 or 14 set both hands to the
+// primary and the secondary, then hand 8 to the range item when both are empty; 11 shows the range item in hand 8
+// with hand 7 empty, or both hands' items without one.
+TEST_CASE("Held models: a move through a weapon slot sets both hands as DoItemSlot does") {
+    auto config = MockConfig::standard();
+    auto bow = make_item(1001, "Bow", net::kSlotGeneral1);
+    bow.item_type = 5;
+    bow.id_file = "IT10641";
+    bow.equip_slots = 1u << net::kSlotRange;
+    auto sword = make_item(1002, "Sword", net::kSlotPrimary);
+    sword.id_file = "IT2";
+    config.characters.front().inventory = {bow, sword};
+    Rig rig(config);
+    REQUIRE(rig.to_zone());
+    REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, net::Op::ClientReady) != 0; }));
+    auto& conn = rig.conn;
+    const auto& a = conn.world().player()->appearance;
+    auto wear_changes = [&] {
+        std::vector<std::pair<std::uint8_t, std::uint32_t>> out;
+        for (const auto& p : rig.server.zone_log)
+            if (net::from_wire(p.opcode) == net::Op::WearChange)
+                if (auto w = net::decode_wear_change(p)) out.emplace_back(w->slot, w->armor.material);
+        return out;
+    };
+    using Sent = std::vector<std::pair<std::uint8_t, std::uint32_t>>;
+    const auto general = net::ItemSlot::possessions(net::kSlotGeneral1);
+    const auto range = net::ItemSlot::possessions(net::kSlotRange);
+    const auto primary = net::ItemSlot::possessions(net::kSlotPrimary);
+
+    // A move that touches no weapon slot sends nothing.
+    rig.server.zone_log.clear();
+    conn.click_slot(general); // pick up the bow
+    REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, net::Op::MoveItem) == 1; }));
+    rig.run_for(std::chrono::milliseconds(30));
+    CHECK(wear_changes().empty());
+
+    // The bow into the range slot: hand 7 "0", hand 8 the bow, though a sword is worn.
+    conn.click_slot(range);
+    REQUIRE(rig.until([&] { return wear_changes().size() == 2; }));
+    CHECK(wear_changes() == Sent{{game::kSlotPrimary, 0}, {game::kSlotSecondary, 10641}});
+    CHECK(a.material[game::kSlotPrimary] == 0);
+    CHECK(a.material[game::kSlotSecondary] == 10641);
+
+    // The sword taken from the primary: both hands empty, so hand 8 shows the bow after its "0".
+    rig.server.zone_log.clear();
+    conn.click_slot(primary); // pick up the sword
+    REQUIRE(rig.until([&] { return wear_changes().size() == 3; }));
+    CHECK(wear_changes() == Sent{{game::kSlotPrimary, 0}, {game::kSlotSecondary, 0}, {game::kSlotSecondary, 10641}});
+    CHECK(a.material[game::kSlotSecondary] == 10641);
+
+    // The sword back: the hands show the sword and an empty secondary.
+    rig.server.zone_log.clear();
+    conn.click_slot(primary);
+    REQUIRE(rig.until([&] { return wear_changes().size() == 2; }));
+    CHECK(wear_changes() == Sent{{game::kSlotPrimary, 2}, {game::kSlotSecondary, 0}});
+    CHECK(a.material[game::kSlotPrimary] == 2);
+    CHECK(a.material[game::kSlotSecondary] == 0);
+
+    // The bow taken from the range slot: with no range item, the primary and the secondary.
+    rig.server.zone_log.clear();
+    conn.click_slot(range); // pick up the bow
+    REQUIRE(rig.until([&] { return wear_changes().size() == 2; }));
+    CHECK(wear_changes() == Sent{{game::kSlotPrimary, 2}, {game::kSlotSecondary, 0}});
+}
+
 TEST_CASE("Held models: a bow shot shows the range item in the left hand and sends OP_WearChange") {
     auto config = MockConfig::standard();
     auto bow = make_item(1001, "Bow", net::kSlotRange);

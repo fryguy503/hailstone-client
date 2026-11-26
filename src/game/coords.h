@@ -12,6 +12,7 @@
 // that is 0 facing +X and 128 facing +Y, i.e. counterclockwise from +X.
 
 #include <cmath>
+#include <optional>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
@@ -26,6 +27,15 @@ inline float heading_to_yaw(float heading) { return heading * glm::pi<float>() /
 inline float yaw_to_heading(float yaw) {
     float h = std::fmod(yaw * 256.0f / glm::pi<float>(), 512.0f);
     return h < 0.0f ? h + 512.0f : h;
+}
+
+// MQ's degrees (clockwise from north, any number of turns) as a heading 0..512; nullopt for NaN or an infinity, whose
+// yaw would stay NaN for good (and a cast of a huge double to float is undefined).
+inline std::optional<float> mq_degrees_to_heading(double degrees) {
+    if (!std::isfinite(degrees)) return std::nullopt;
+    const double turn = std::fmod(std::fmod(degrees, 360.0) + 360.0, 360.0);
+    const double h = std::fmod((360.0 - turn) * 512.0 / 360.0, 512.0);
+    return static_cast<float>(h);
 }
 
 } // namespace hailstone::game

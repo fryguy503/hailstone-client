@@ -146,6 +146,12 @@ TEST_CASE("Zone room presets of the installed eqgame.exe" * doctest::skip(!hails
     // eqgame.exe is valid (docs/layout.md): nothing to check then.
     if (!hailstone::test::game_dir()->find_base("eqgame.exe")) return;
     auto table = load_zone_room_presets(*hailstone::test::game_dir());
+    // The table is read at RoF2's address: another build's eqgame.exe (a live install's) is refused whole, never read
+    // in part. The reference folder's is RoF2's.
+    if (table.empty() && !hailstone::test::reference_folder()) {
+        MESSAGE("eqgame.exe is not RoF2's: no zone room table, nothing more to check");
+        return;
+    }
     REQUIRE(table.size() == kZoneRoomRecords);
     std::set<std::string> names;
     for (const auto& z : table) {

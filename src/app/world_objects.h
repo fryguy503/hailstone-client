@@ -224,6 +224,10 @@ private:
         }
     };
 
+    struct PlacedObject : Placed {
+        game::GroundObject source; // the record it was built and placed from
+    };
+
     const Model* model_for(const std::string& name);
     void add_object_emitters(Placed& placed);
     // Resources/OnDemandResources.txt EQGM/EQGS entries: "<NAME>_ACTORDEF" ->
@@ -249,7 +253,7 @@ private:
     std::shared_ptr<const assets::CharacterLibrary> items_;
     std::unordered_map<std::string, std::unique_ptr<Model>> models_; // upper-case name -> model (null: none)
     std::unordered_map<std::uint8_t, PlacedDoor> doors_;
-    std::unordered_map<std::uint32_t, Placed> objects_;
+    std::unordered_map<std::uint32_t, PlacedObject> objects_;
     // Placed real estate objects (EQPlacedItemManager), keyed by re << 32 | item, and the placement ghost.
     std::unordered_map<std::uint64_t, Placed> placed_;
     std::unordered_map<std::uint64_t, std::string> placed_tags_;

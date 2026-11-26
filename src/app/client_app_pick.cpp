@@ -313,16 +313,53 @@ std::optional<glm::vec3> ClientApp::world_point_at(float x, float y) {
     return seg.start + seg.dir * hit.world_t;
 }
 
+std::optional<plugin::WorldPlacementScene> ClientApp::world_placement_scene() const {
+    if (screen_ != Screen::InGame || !player_ready_ || zone_settling() || !world_geometry_scene_current() ||
+        conn_->state() != net::ConnectionState::InZone) return std::nullopt;
+    return plugin::WorldPlacementScene{world_epoch_, conn_->zone_id(), conn_->zone_instance()};
+}
+
+bool ClientApp::world_placement_input_allowed() const {
+    return world_placement_scene().has_value() && pick_camera_valid_ && pick_camera_epoch_ == world_epoch_ &&
+           window_.focused() && ui_.visible() &&
+           !conn_->interface_locked() && !conn_->player_down() && conn_->player_status().stand_state != net::kStandFreeze &&
+           !conn_->placement().active() && !conn_->inventory().cursor() && !conn_->held_coin() &&
+           !ui_host_.cursor_button && !ui_host_.cursor_spell && !mouse_look_.active &&
+           !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+}
+
+std::optional<plugin::WorldPlacementPoint> ClientApp::world_placement_point_at(float x, float y) const {
+    if (!view_area_.contains(x, y) || ui_.wants_mouse()) return std::nullopt;
+    const auto ray = game::screen_ray(pick_camera_, x - view_area_.x, y - view_area_.y);
+    // The mesh the renderer draws (world_visual_collision_), as world_floor_below answers from: the gameplay mesh
+    // gives a tree only its invisible authored hull, which placement skips, so the aim would pass through the trunk
+    // the player sees, and refined terrain would put the point off the drawn ground.
+    if (!world_visual_collision_) return std::nullopt;
+    game::PickScene scene;
+    scene.world = pick_mesh(*world_visual_collision_);
+    const auto hit = game::pick_ground_placement(ray, scene);
+    if (!hit) return std::nullopt;
+    // Moving scenery blocks placement on the static world but is not itself a placement surface.
+    if ((world_objects_ && !world_objects_->line_of_sight(ray.start, *hit)) ||
+        (animated_objects_ && animated_objects_->blocks(ray.start, *hit))) return std::nullopt;
+    return plugin::WorldPlacementPoint{hit->x, hit->y, hit->z};
+}
+
 std::function<void(const game::PickSegment&, const game::PickTriangleSink&)> ClientApp::pick_world() const {
     if (!collision_) return {};
-    const game::CollisionMesh* mesh = &*collision_;
+    return pick_mesh(*collision_);
+}
+
+std::function<void(const game::PickSegment&, const game::PickTriangleSink&)>
+ClientApp::pick_mesh(const game::CollisionMesh& m) const {
+    const game::CollisionMesh* mesh = &m;
     // The isometric camera: a surface the cut takes away (game/iso_occlusion.h) is not there for a click, which goes
     // on through it to what shows behind (a spawn, a door, the ground).
     const game::IsoReveal reveal = iso_reveal();
     const bool cut = reveal.origin.w > 0.0f || reveal.roof.w > 0.0f;
     return [mesh, reveal, cut](const game::PickSegment& sg, const game::PickTriangleSink& sink) {
         mesh->for_each_on_segment(sg.start, sg.start + sg.dir, [&](const game::CollisionTriangle& c) {
-            const game::PickTriangle t{c.v0, c.v1, c.v2, c.normal, c.flags};
+            const game::PickTriangle t{c.v0, c.v1, c.v2, c.normal, c.flags, c.visual_two_sided};
             if (cut && game::iso_pick_skips(reveal, sg, t)) return;
             sink(t);
         });

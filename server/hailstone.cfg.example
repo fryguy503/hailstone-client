@@ -31,12 +31,30 @@ faces = on                ; off disables Lua button faces in any mode
 [abilities]
 autoskill = on            ; off disables the Ability Book's autoskill
 
+[map]
+vanilla = off             ; on: only the map background, without labels, marks, routes or overlays. Navigation still works
+
 [movement]
 npc_collision = on        ; live NPCs block players (players, pets, mercenaries and corpses never do). On by default,
                           ; also without this file; off: everyone walks through everyone, as in the original client
 passable_ladders = on     ; walking or swimming into a ladder whose polygons are all passable (the Cabilis canal
                           ; ladders) climbs it. On by default, also without this file; off: as in the original
                           ; client, such a ladder is only mounted by a click from the top
+
+[management]
+; The editor requires server_management = 1 in hailstone.lua or the hailstone:server_management data bucket.
+;min_status = 200        ; account status required to view and save policy once enabled (1 through 32767)
+
+[commands]
+; Advisory policy for Hailstone's slash-command dispatch. Enforce permissions on the server.
+;default = allow         ; deny: allow only explicitly allowed commands and groups
+;block_groups = movement_automation, command_helpers
+;allow_groups = non_rof2 ; available groups also include addon_commands
+;allow = /echo           ; command entries override groups
+;block = /follow, /random
+;gm = /nav:200           ; each command requires at least this EQEmu account status (1 through 32767)
+;blocked_message = "This command has been blocked by your server administrator."
+                          ; up to 240 UTF-8 bytes. Leave empty for the default message.
 
 [addons]
 ;suggest = owner/repo     ; add-ons of this server's own on GitHub: the login screen suggests each to players who do not

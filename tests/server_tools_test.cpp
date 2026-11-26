@@ -126,4 +126,26 @@ TEST_CASE("check_core_names.py: raw strings are code whatever they hold, and ui 
     CHECK(out.find("ui.ini") == std::string::npos);
 }
 
+TEST_CASE("check_core_names.py: NMS after a capital is reported, and a digit separator opens no character literal") {
+    if (!have_python()) return;
+    hailstone::test::ScratchDir dir("core_names_caps");
+    const fs::path root = dir.path() / "repo";
+    fs::create_directories(root / "src");
+    const fs::path script = repo_root() / "tools" / "check_core_names.py";
+    // 1'000's quote is no character literal, so the comment after it is still a comment; u8'x' is one. The old
+    // names after a capital stay allowed.
+    std::ofstream(root / "src" / "ok.cpp") << "int n = 1'000'000; // NMS in a comment\n"
+                                              "auto h = 0xFF'FF; /* NMS */ char c = u8'x';\n"
+                                              "int HSNMSC_OLD = 2; int ColumnsAndRows = 3;\n";
+    CHECK(run_python(script, quote(root), dir.path() / "out") == 0);
+    std::ofstream(root / "src" / "bad.cpp") << "int HSNMS_OP = 1;\n"
+                                               "constexpr int kHSNMSFlag = 2;\n"
+                                               "int x = 1'0; int XNmsRule = 3;\n";
+    CHECK(run_python(script, quote(root), dir.path() / "out") == 1);
+    const std::string out = read_all(dir.path() / "out");
+    for (const char* line : {"src/bad.cpp:1:", "src/bad.cpp:2:", "src/bad.cpp:3:"})
+        CHECK_MESSAGE(out.find(line) != std::string::npos, line);
+    CHECK(out.find("ok.cpp") == std::string::npos);
+}
+
 #endif

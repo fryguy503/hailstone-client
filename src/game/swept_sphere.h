@@ -80,6 +80,7 @@ struct CollisionTriangle {
     glm::vec3 normal{0.0f}; // normalize((v0 - v1) x (v2 - v1)); zero for a degenerate one
     float radius = 0.0f;    // max(|v1 - v0|, |v2 - v0|)
     std::uint8_t flags = 0; // kTrianglePassable, kTriangleTransparent
+    bool visual_two_sided = false;
 
     static CollisionTriangle make(const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2, std::uint8_t flags);
 };

@@ -197,7 +197,7 @@ TEST_CASE("tribute bonuses: membership and zone or session changes retire old be
 
         const auto profile = *connection.profile();
         if (disconnect) connection.disconnect();
-        else connection.receive_world_packet_for_test(net::encode(net::ZoneServerInfo{"127.0.0.1", 9000}));
+        else net::GameConnectionTestAccess::zone_hand_off(connection, 9000);
         CHECK_FALSE(connection.inventory().at(tribute_slot(false, 0)));
         CHECK_FALSE(connection.inventory().at(tribute_slot(true, 0)));
         CHECK_FALSE(connection.tribute().settings_known);

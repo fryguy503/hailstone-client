@@ -7,7 +7,10 @@ on pull requests to `main`:
   long strings and C++ raw strings count as code, and Objective-C++ and the ini, JSON and text files under those
   folders are scanned too.
   - The old names pass only in their own spellings (`nmsc`, `nmsc_`, `nmsc::`, `NMSC_`, the SDK's `Nmsc<Word>`,
-    `nms-client`), so `NMSChat` or `kNmsCombatOp` fails (tests/server_tools_test.cpp).
+    `nms-client`), so `NMSChat`, `kNmsCombatOp`, `HSNMS_OP` or `kHSNMSFlag` fails (tests/server_tools_test.cpp).
+  - A digit separator (`1'000`) opens no character literal, so a comment after it is still one.
+  - The build files and `tools/` are not scanned: `CMakeLists.txt` names the NMS plugin's clone on purpose
+    (`plugins/nms`, `HAILSTONE_NMS_*`), to build and test it beside the client.
   - The one exception, let through by file and exact line shape: the updater's table of files old releases shipped
     under `plugins/nms/` (`retired_release_files()` in `src/app/update_install.cpp`).
 - `wiki`: `tools/sync_wiki.py --check`. Every document of `docs/`, `CONTRIBUTING.md` and `server/README.md` has a
@@ -21,7 +24,7 @@ on pull requests to `main`:
     (`tests/test_migrate_ui_api.py`, `test_gen_ui_api_docs.py`, `test_make_addon_ui.py`,
     `test_make_addon_autoload.py`).
   - `tests/test_make_update.py`: `tools/make_update.py` keeps out of a package exactly the paths the client's
-    `is_player_path` refuses.
+    `is_player_path` refuses, and refuses a binary without the release key; `release_options.sh` names that key.
   - `tests/test_release_tools.py`: the release packers' versions, names and contents (`tools/make_addon.py` and
     `tools/make_update.py`).
 
@@ -60,6 +63,16 @@ the code building with Clang and Apple Clang (AGENTS.md's portability rules).
 - With `EQ_GAME_DIR` unset or empty, the tests that need an installed RoF2 game are skipped where they are marked
   `doctest::skip`, and elsewhere return early and pass without checking anything (`tests/game_files.h`,
   `hailstone::test::game_dir()`). Run them with it set.
+  - Any game folder may be set, a live install too. A test whose file the folder lacks (a live install has no
+    `bazaar.s3d` or `velketor_chr.s3d`) prints a `MESSAGE` and returns (`hailstone::test::game_file()`); it never
+    fails or throws for that.
+  - Some checks pin exact values (record counts, texture names, string wording) taken from one folder, the NMS
+    server's client folder. They run only when `hailstone::test::reference_folder()` recognises it, by its
+    `gequip_nms.s3d`; elsewhere a `MESSAGE` says what was not checked. Every folder gets the general checks
+    (non-empty, well-formed, in range). The pinned checks are in `appearance_test.cpp` (GUS textures),
+    `eq_strings_test.cpp`, `eqg_test.cpp` (Crescent Reach counts), `environment_presets_test.cpp`,
+    `fellowship_categories_test.cpp`, `particles_test.cpp`, `spells_test.cpp`, `texture_test.cpp` (badge
+    rectangles) and `ui_more_windows_test.cpp`.
 - `ctest --test-dir build -j <n>` runs `hailstone_tests` as 8 parts at once (`HAILSTONE_TEST_SHARDS`, a CMake
   setting; 1 registers the single test it was before). Each part is the same executable with
   `HAILSTONE_TEST_SHARD=<k>/<n>` set: it shuffles doctest's list with a fixed seed, so the slow UI pack cases spread
@@ -160,7 +173,8 @@ git clone https://github.com/mstorsjo/msvc-wine ~/opt/msvc-wine-src
 mkdir -p ~/opt/msvc ~/opt/msvc-home
 # once, about 3.3 GB: MSVC 2022 and the Windows SDK, then msvc-wine's wrappers (bin/x64/cl ...)
 docker run --rm -v ~/opt:/opt/host hailstone-linux-build:24.04 bash -c "apt-get update -qq && apt-get install -y -qq msitools \
-    && cd /opt/host/msvc-wine-src && python3 vsdownload.py --major 17 --accept-license --architecture x64 \
+    && cd /opt/host/msvc-wine-src && git checkout -q 514f8ea34842cd6d831804d0e9658d3a32870ae1 \
+    && python3 vsdownload.py --major 17 --msvc-version 17.14 --sdk-version 10.0.26100 --accept-license --architecture x64 \
        --with-asan no --with-atl no --dest /opt/host/msvc && chown -R $(id -u):$(id -g) /opt/host/msvc"
 docker run --rm --user $(id -u):$(id -g) -e HOME=$HOME/opt/msvc-home -v $HOME/opt:$HOME/opt hailstone-msvc-build:24.04 \
     $HOME/opt/msvc-wine-src/install.sh $HOME/opt/msvc
@@ -195,6 +209,11 @@ tools/docker/build.sh all            # the three; --no-test after the platform s
   every build running on the machine within its cores.
 - `CMAKE_ARGS` adds configure options, split at whitespace (an option cannot hold a space), also to an existing
   build folder.
+- Every run configures the build folder again with the release's settings first (`tools/docker/release_options.sh`):
+  Release, the key of `update-key.pub` as `HAILSTONE_UPDATE_KEY`, no sanitizer, `HAILSTONE_ALLOW_IN_EQ_FOLDER` off
+  and the default feed, index and page addresses. `CMAKE_ARGS` comes after them, so it can change any of them, but
+  an option it no longer names does not stay from an earlier run. The script stops when `update-key.pub` holds no
+  key.
 
 #### Images and containers
 
@@ -216,7 +235,8 @@ tools/docker/build.sh all            # the three; --no-test after the platform s
 - Windows uses an existing msvc-wine install, read-only: `MSVC_DIR`. By default that is `~/opt/msvc` when it has
   `bin/x64/cl` (the install above), else `.docker/msvc`.
   - With none there, `MSVC_ACCEPT_LICENSE=1` accepts Microsoft's license and downloads one into `MSVC_DIR`
-    (`tools/docker/msvc_setup.sh`, msvc-wine pinned to a commit). Without it the script stops.
+    (`tools/docker/msvc_setup.sh`: msvc-wine pinned to a commit, MSVC to 17.14 and the SDK to 10.0.26100, as the
+    release install has them). Without it the script stops.
   - Wine's home is `.docker/wine-home`, one per checkout.
 - The Windows tests run under Wine with Microsoft's runtime DLLs copied beside them. They leave out the cases that
   fail only under Wine:

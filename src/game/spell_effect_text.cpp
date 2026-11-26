@@ -323,9 +323,11 @@ std::string value_range(int calc, std::int64_t base, std::int64_t max, int durat
 std::string extended_range(int calc, std::int64_t start, std::int64_t finish, int minlevel, int maxlevel,
                            std::string_view pct, bool ac_mod) {
     if (calc == kCalcRandom) return std::format(" (Random: {} to {})", start, finish * (start >= 0 ? 1 : -1));
-    // An AC effect shows its value divided by 10/3, as float, as the client's AC display does.
+    // An AC effect shows its value divided by 10/3, as float, as the client's AC display does. MacroQuest casts the
+    // quotient to int, which is undefined once it passes INT_MAX (a formula of 2000 and up scales the value by the
+    // level, so it can); kept in 64 bits instead, where it always fits. Below INT_MAX the two agree.
     auto shown = [ac_mod](std::int64_t v) -> std::int64_t {
-        return ac_mod ? static_cast<int>(static_cast<float>(iabs(v)) / (10.0f / 3.0f)) : iabs(v);
+        return ac_mod ? static_cast<std::int64_t>(static_cast<float>(iabs(v)) / (10.0f / 3.0f)) : iabs(v);
     };
     if (iabs(start) < iabs(finish))
         return std::format(" by {}{} (L{}) to {}{} (L{})", shown(start), pct, minlevel, shown(finish), pct, maxlevel);

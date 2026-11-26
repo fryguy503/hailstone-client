@@ -14,6 +14,7 @@
 #include <imgui.h>
 
 #include "app/lua_ui.h"
+#include "mq/map_filter.h"
 #include "mq_test_world.h"
 #include "plugin/policy.h"
 #include "scratch_dir.h"
@@ -29,6 +30,7 @@ struct OverlayUi {
     test::ScratchDir scratch{"ui_map_overlay"};
     ImGuiContext* context = ImGui::CreateContext();
     app::UiHost host;
+    mq::MapFilters filters;
     // qol holds commands as well; Auto Combat only what an overlay needs. A callback must run under its own source's
     // grants, never the drawing add-on's. A test may take a grant away to see a registration suspended.
     std::uint32_t qol_caps = plugin::kCapRead | plugin::kCapUi | plugin::kCapCommands;
@@ -47,6 +49,7 @@ struct OverlayUi {
         host.conn = world.conn.get();
         host.zone_short_name = "qeynos2";
         host.maps_dir = scratch.path() / "maps";
+        host.map_filters = &filters;
         host.plugin_caps = [this](std::string_view tag) {
             return tag == "plugin:qol" ? qol_caps : autocombat_caps;
         };
@@ -129,6 +132,24 @@ hs.UI.map.RegisterOverlay(function(v) order[#order+1] = 'tie-b'; last = v end)
         last.cx == 300 and last.cy == 250 and last.x0 == 200 and last.y0 == 150 and last.x1 == 400 and
         last.y1 == 350 and last.turn == 0 and last.zone == 'qeynos2')
     )lua") == "true");
+}
+
+TEST_CASE("Map overlays: vanilla mode skips every overlay without retiring it") {
+    OverlayUi f;
+    f.put("ui", R"lua(
+runs = 0
+hs.UI.map.RegisterOverlay(function() runs = runs + 1 end)
+)lua");
+    f.idle();
+    f.draw("", "hs.DrawZoneMap(0, 0, 600, 500, 1)");
+    CHECK(f.run("", "return tostring(runs)") == "1");
+    f.filters.set_vanilla_enabled(true);
+    f.draw("", "hs.DrawZoneMap(0, 0, 600, 500, 1)");
+    f.draw("", "hs.DrawMinimap(300, 250, 100, 500)");
+    CHECK(f.run("", "return tostring(runs)") == "1");
+    f.filters.set_vanilla_enabled(false);
+    f.draw("", "hs.DrawZoneMap(0, 0, 600, 500, 1)");
+    CHECK(f.run("", "return tostring(runs)") == "2");
 }
 
 TEST_CASE("Map overlays: a failed file is reported and retired whole, and another file keeps drawing") {

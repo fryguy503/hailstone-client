@@ -1,7 +1,7 @@
 R"hooks(
 local native = ...
 local pack, unpack, pcall, type, pairs, getmetatable = table.pack, table.unpack, pcall, type, pairs, getmetatable
-local sort, floor, error = table.sort, math.floor, error
+local sort, floor, error, select = table.sort, math.floor, error, select
 local registrations, methods, sequence, depth = {}, {}, 0, 0
 local wrapped=setmetatable({}, {__mode='k'})
 local depthGuard={__close=function(g)depth=g.previous end}
@@ -71,6 +71,33 @@ local function prune()
   end
   registrations=kept;methods=activeMethods
 end
+-- Each hooked method's registrations, in call order: what a call of the method walks, so it neither walks every
+-- registration nor sorts. Built when the method's registrations changed: `generation` moves with each new
+-- registration, and one that stopped (removed, failed, retired, out of authority) is found by the per-call ready
+-- check below, which filters it out of a new list. A list is never changed once built: a dispatch keeps the one it
+-- started with (a registration made meanwhile waits for the next call, as it always has).
+local generation, selections = 0, {}
+local function byOrder(a,b) return a.priority==b.priority and a.order<b.order or a.priority<b.priority end
+local function selection(method)
+  local cached=selections[method]
+  if cached and cached.generation==generation then
+    -- What a full prune would decide for this method's registrations: no other method's are asked.
+    local stale=false
+    for i=1,#cached do if not ready(cached[i]) then stale=true end end
+    if not stale then return cached end
+    local kept={generation=generation}
+    for i=1,#cached do if cached[i].active then kept[#kept+1]=cached[i] end end
+    cached=kept
+  else
+    cached={generation=generation}
+    for _,r in ipairs(registrations) do if r.method==method and ready(r) then cached[#cached+1]=r end end
+    sort(cached,byOrder)
+  end
+  selections[method]=cached
+  -- Every registration of the method stopped: its calls go back to the one-lookup path.
+  if #cached==0 then methods[method]=nil end
+  return cached
+end
 local function maintain()
   local kept,activeMethods={},{}
   for _,r in ipairs(registrations) do
@@ -126,6 +153,7 @@ local function register(method,phase,fn,options)
     priority=priority,order=sequence,fn=fn,need=policy.requiredCaps,active=true}
   registrations[#registrations+1]=r
   methods[method]=true
+  generation=generation+1
   return r.handle
 end
 local function remove(handle)
@@ -161,15 +189,13 @@ local function wrap(original,method,context)
     if not methods[method] then return original(...) end
     if not native.live(context) then return original(...) end
     if depth>=limits.depth then return original(...) end
-    prune()
-    local selected={}
-    for _,r in ipairs(registrations) do if r.method==method then selected[#selected+1]=r end end
+    local selected=selection(method)
     if #selected==0 then return original(...) end
+    if select('#',...)>limits.values then return original(...) end
     local caller=native.capture(context)
     if not caller or not native.ready(caller,policy.requiredCaps,false) then return original(...) end
     local arguments=pack(...)
     if not copy(arguments) then return original(...) end
-    sort(selected,function(a,b) return a.priority==b.priority and a.order<b.order or a.priority<b.priority end)
     local frame={originalCalled=false,unsafe=false}
     local function originalCall(args)
       if frame.originalCalled then error('original UI action already called',0) end

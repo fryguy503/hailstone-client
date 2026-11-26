@@ -26,6 +26,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/atomic_file.h"
 #include "core/game_dir.h"
 #include "core/png_write.h"
 #include "texpack/texpack.h"
@@ -74,11 +75,15 @@ int run_export(const fs::path& assets, const fs::path& work, const std::vector<s
                     continue;
                 }
                 const std::string base = hash_name(t.hash);
-                hailstone::write_png_rgba(work / "src" / (base + ".png"), s->color.mips[0], s->color.width, s->color.height);
-                if (s->masked)
-                    hailstone::write_png_rgba(work / "src" / (base + ".m.png"), s->masked->mips[0], s->masked->width, s->masked->height);
-                if (s->keyed)
-                    hailstone::write_png_rgba(work / "src" / (base + ".k.png"), s->keyed->mips[0], s->keyed->width, s->keyed->height);
+                auto png = [&](const char* sfx, const hailstone::assets::Image& img) {
+                    const fs::path path = work / "src" / (base + sfx);
+                    if (hailstone::write_png_rgba(path, img.mips[0], img.width, img.height)) return;
+                    ++failures;
+                    std::fprintf(stderr, "%s: cannot write\n", path.string().c_str());
+                };
+                png(".png", s->color);
+                if (s->masked) png(".m.png", *s->masked);
+                if (s->keyed) png(".k.png", *s->keyed);
             }
     };
     std::vector<std::thread> threads;
@@ -91,7 +96,10 @@ int run_export(const fs::path& assets, const fs::path& work, const std::vector<s
         return 1;
     }
     for (const TextureInfo& t : scanned.textures) std::fprintf(out, "%s\n", manifest_line(t).c_str());
-    std::fclose(out);
+    if (std::ferror(out) != 0 || std::fclose(out) != 0) {
+        std::fprintf(stderr, "texpack: cannot write %s\n", (work / "manifest.jsonl").string().c_str());
+        return 1;
+    }
     std::printf("texpack: %zu archives, %zu textures, %zu failures\n", archives.size(), scanned.textures.size(),
                 failures.load());
     return failures ? 1 : 0;
@@ -126,9 +134,12 @@ int run_build(const fs::path& work, const fs::path& pack, const std::string& up_
                     continue;
                 }
                 auto file = encode_pack_file(hailstone::assets::to_rgba8(*decoded), kind, job.bmp);
-                const fs::path tmp = dst.string() + ".tmp";
-                std::ofstream(tmp, std::ios::binary).write(reinterpret_cast<const char*>(file.data()), static_cast<std::streamsize>(file.size()));
-                fs::rename(tmp, dst, ec);
+                // A failed write or rename leaves the old file (or none), never a short one a later run would skip.
+                if (!hailstone::write_file_atomic(dst, std::string_view(reinterpret_cast<const char*>(file.data()), file.size()))) {
+                    ++failures;
+                    std::fprintf(stderr, "%s: cannot write\n", dst.string().c_str());
+                    continue;
+                }
                 ++written;
             }
             if ((i + 1) % 1000 == 0) std::printf("%zu/%zu textures\n", i + 1, jobs.size()), std::fflush(stdout);

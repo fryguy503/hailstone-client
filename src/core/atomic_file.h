@@ -15,6 +15,10 @@ namespace hailstone {
 // Windows a replace refused because another program has the file open is tried again a few times (about 0.6 s).
 bool write_file_atomic(const std::filesystem::path& path, std::string_view text);
 
+// Same durable save, with an exclusive destination name.
+enum class AtomicCreate { Created, Exists, Failed };
+AtomicCreate create_file_atomic(const std::filesystem::path& path, std::string_view text);
+
 // The whole file as text, or nullopt when it cannot be read.
 std::optional<std::string> read_text_file(const std::filesystem::path& path);
 

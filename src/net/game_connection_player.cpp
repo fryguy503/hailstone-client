@@ -100,6 +100,10 @@ void GameConnection::reset_player_for_zone() {
     book_.reset();
     discard_questions(); // the shown one and those waiting: they were about the zone left
     offline_mode_at_ = 0; // CEverQuest_ResetClientStateForZone @0x531b36
+    // A deliberate change from the original, which keeps its duel globals (0xddf7e4..0xddf7ec) across a zone: the
+    // duel ends with the zone. EQEmu ends it on the server too when the client leaves (Client::~Client), so the old
+    // opponent's id would otherwise name whoever holds it in the new zone (an attackable stranger).
+    duel_ = {};
 }
 
 // ---------------------------------------------------------------- duels
@@ -724,8 +728,9 @@ void GameConnection::bandolier_hold(int index, int slot, bool shift) {
 
 bool GameConnection::bandolier_activate(int index) {
     // PcZoneClient::BandolierSwap @0x585aa0: the original moves the items
-    // itself (MultipleItemMoveManager::ProcessMove without sending) and sends
-    // only OP_Bandolier action 2; EQEmu's Client::SetBandolier makes the same
+    // itself (MultipleItemMoveManager::ProcessMove without sending), sets
+    // both held models (SetHeldModel 7 and 8, each an OP_WearChange), then
+    // sends OP_Bandolier action 2; EQEmu's Client::SetBandolier makes the same
     // moves without telling the client. The moves here follow SetBandolier and
     // MoveItemToInventory, which EQEmu wrote to match the client.
     //
@@ -777,6 +782,12 @@ bool GameConnection::bandolier_activate(int index) {
         return false;
     }
     for (std::int16_t weapon : game::kBandolierSlots) refresh_worn_slot(weapon);
+    // BandolierSwap's held models: the primary and the secondary ("0" for an empty hand); with both hands empty,
+    // hand 7 is "0" and hand 8 the range item.
+    const auto holds = [this](std::int16_t s) { return inventory_.at(ItemSlot::possessions(s)) != nullptr; };
+    const bool hands = holds(kSlotPrimary) || holds(kSlotSecondary);
+    set_held_model(game::kSlotPrimary, hands ? kSlotPrimary : -1);
+    set_held_model(game::kSlotSecondary, hands ? kSlotSecondary : kSlotRange);
     send_zone(encode_bandolier(kBandolierSet, static_cast<std::uint8_t>(index)));
     return true;
 }

@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <utility>
 
 #include "assets/zone.h"
 #include "core/log.h"
@@ -10,38 +11,68 @@
 
 namespace hailstone::app {
 
-MovementTest::MovementTest(std::string spec) {
+MovementTestSpec parse_movement_test(std::string spec) {
+    MovementTestSpec out;
+    const std::string given = spec;
+    bool finite = true;
+    auto check = [&](float v) {
+        if (!std::isfinite(v)) finite = false;
+    };
     if (auto plus = spec.find("+trace"); plus != std::string::npos) {
-        trace_ = true;
+        out.trace = true;
         spec.erase(plus, 6);
     }
     // "<test>@X,Y,Z": first put the feet at the world point X Y Z (the same start for runs to compare).
     if (auto at = spec.find('@'); at != std::string::npos) {
         glm::vec3 p{0.0f};
-        if (std::sscanf(spec.c_str() + at + 1, "%f,%f,%f", &p.x, &p.y, &p.z) == 3) start_ = p;
+        if (std::sscanf(spec.c_str() + at + 1, "%f,%f,%f", &p.x, &p.y, &p.z) == 3) {
+            check(p.x);
+            check(p.y);
+            check(p.z);
+            out.start = p;
+        }
         spec.resize(at);
     }
     if (spec.rfind("fall:", 0) == 0) {
-        height_ = std::strtof(spec.c_str() + 5, nullptr);
+        out.height = std::strtof(spec.c_str() + 5, nullptr);
+        check(out.height);
         spec = "fall";
     }
     if (spec.rfind("walk:", 0) == 0) {
-        float deg = 0.0f, secs = 3.0f;
-        std::sscanf(spec.c_str() + 5, "%f:%f", &deg, &secs);
-        walk_yaw_ = deg * 3.14159265f / 180.0f;
-        walk_secs_ = secs;
+        std::sscanf(spec.c_str() + 5, "%f:%f", &out.walk_degrees, &out.walk_secs);
+        check(out.walk_degrees);
+        check(out.walk_secs);
         spec = "walk";
     }
     if (spec.rfind("wander:", 0) == 0) {
         unsigned seed = 12345;
-        std::sscanf(spec.c_str() + 7, "%f:%u", &wander_secs_, &seed);
-        wander_seed_ = seed;
+        std::sscanf(spec.c_str() + 7, "%f:%u", &out.wander_secs, &seed);
+        check(out.wander_secs);
+        out.wander_seed = seed;
         spec = "wander";
+    }
+    if (!finite) {
+        log::warn("movetest: '{}' has a number that is not finite", given);
+        out.start.reset();
+        return out;
     }
     if (spec == "speed" || spec == "jump" || spec == "fall" || spec == "swim" || spec == "walk" || spec == "escape" ||
         spec == "wander")
-        kind_ = spec;
+        out.kind = spec;
     else if (!spec.empty()) log::warn("movetest: unknown test '{}'", spec);
+    return out;
+}
+
+MovementTest::MovementTest(std::string spec) {
+    MovementTestSpec p = parse_movement_test(std::move(spec));
+    kind_ = std::move(p.kind);
+    start_ = p.start;
+    trace_ = p.trace;
+    height_ = p.height;
+    walk_yaw_ = p.walk_degrees * 3.14159265f / 180.0f;
+    walk_secs_ = p.walk_secs;
+    wander_secs_ = p.wander_secs;
+    wander_seed_ = p.wander_seed;
 }
 
 void MovementTest::drive(float t, MovementKeys& keys, float& yaw, float& pitch, PlayerMovement& movement,

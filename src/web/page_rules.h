@@ -39,4 +39,9 @@ bool tab_may_show(std::string_view url, TabRules rules, const std::vector<std::s
 // A frame inside the page, or a request the page makes. Player: anything (the browser's default handling).
 bool tab_may_request(std::string_view url, TabRules rules, const std::vector<std::string>& allow);
 
+// Whether a tab's profile folder is the helper's data folder or below it, as text (both UTF-8, '/' or '\\' between
+// names): `data` then a separator, and no ".." name after it. The helper gives a script's, plugin's or server link's
+// tab whose profile is not one no browser rather than the player's cookies.
+bool profile_within(std::string_view profile, std::string_view data);
+
 } // namespace hailstone::web

@@ -110,9 +110,19 @@ std::FILE* open_c_file(const std::filesystem::path& path, const char* mode) {
 #if defined(_WIN32)
     std::wstring wide_mode;
     for (const char* c = mode; *c; ++c) wide_mode += static_cast<wchar_t>(*c);
+    wide_mode += L'N'; // _O_NOINHERIT: SDL starts the helpers with bInheritHandles, which passes on every other handle
     return _wfopen(path.c_str(), wide_mode.c_str());
 #else
-    return std::fopen(path.c_str(), mode);
+    std::string closed_on_exec = mode;
+#if defined(__linux__)
+    closed_on_exec += 'e'; // O_CLOEXEC at the open itself (glibc, musl)
+#endif
+    std::FILE* f = std::fopen(path.c_str(), closed_on_exec.c_str());
+    // Elsewhere (and should the C library not know 'e') afterwards: SDL's posix_spawn closes nothing it is not told to.
+    if (f)
+        if (const int flags = ::fcntl(::fileno(f), F_GETFD); flags >= 0 && (flags & FD_CLOEXEC) == 0)
+            ::fcntl(::fileno(f), F_SETFD, flags | FD_CLOEXEC);
+    return f;
 #endif
 }
 

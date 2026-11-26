@@ -156,7 +156,7 @@ discipline's name may leave out its rank.
 | Command | What it does |
 |---|---|
 | `/book [close]` | The spell book. |
-| `/memspellset <name>` | Memorize a saved spell set. |
+| `/memspellset <name>` | Memorize a saved spell set. Spell it out: `/memspell` is now MacroQuest's command (below), where RoF2 took it for this one. |
 | `/spellscribe` | Scribe the spell scrolls you carry. |
 | `/alternateadv on <percent> \| off \| list \| buy <id> \| activate <id>` | AA experience split, and listing, buying or using abilities. |
 | `/resetaas` | Ask the server to reset your AAs (the server decides). |
@@ -192,6 +192,7 @@ discipline's name may leave out its rank.
 | `/hotbutton <name> [colour] <text>` | Make a hot button from a line and put it on the cursor. |
 | `/loadskin <name> [keep]` | Load a UI skin. |
 | `/copylayout` | Open Copy Layout to copy another character's layout and optionally their keyboard bindings. For a direct copy with arguments, use a bare file name beside the current layout file. |
+| `/layoutprofiles` | Open Layout Profiles to save a named setup, preview its saved window size and contents, apply it to the active character, or undo the last apply. |
 | `/import` | List character INIs in the configured game data folder and preview eligible socials and hotbar buttons for the active character. Apply and restore require confirmation in the dialog. |
 | `/fontface <name>` | The UI font. |
 | `/viewport reset`, `/viewport <x> <y> <w> <h> [scale]` | The 3D view's area on screen. |
@@ -201,7 +202,7 @@ discipline's name may leave out its rank.
 | `/particledensity <0..3 \| off \| low \| med \| high>`, `/showspelleffects [on\|off]` | Spell effects. |
 | `/bodytint` | The body tint window. |
 | `/facepick` | Change your face (player customization). |
-| `/clickthrough` | Click through windows. |
+| `/clickthrough` | Click through windows. Spell it out: `/click` is now MacroQuest's command (below), where RoF2 took it for this one. |
 | `/mousespeed <n>` | The pointer speed, 0..10 (a number past either end is held to it: the original kept it as typed). |
 | `/combatmusic [on\|off]`, `/mixahead <1..100>`, `/reversesound <normal\|reverse>` | Sound settings. |
 | `/feedback`, `/bugreport`, `/report <name>`, `/petition <text>`, `/guidehelp <text>`, `/survey` | Feedback, bug report, reporting a player, petitions. |
@@ -238,12 +239,16 @@ These are not in the original client.
 | `/destroy` | Destroy the item on your cursor (the inventory's Destroy button). |
 | `/destroycursor <id>` | Destroy the item on your cursor without asking, only if its item id is `<id>`; never coin or a bag. For plugins (docs/plugins.md). |
 | `/stowcursor <id>` | Put the item on your cursor into your packs (never a worn slot), only if its item id is `<id>`. For plugins (docs/plugins.md). |
+| `/exchange "<item name\|id>" <slot>` | Put an item from your packs in a worn slot; what the slot held goes where the item was, or into your packs if it does not fit there (MQ2Exchange's command, which E3 uses). The name is exact, any case; the slots are MacroQuest's names (`/exchange help list`). |
+| `/unequip <slot>` | Take the item off a worn slot into the first free general slot or bag slot. |
+| `/exchange help`, `/exchange help list` (or `/exchange list`) | The commands, and the slot names and numbers. |
 | `/web [address]` | The in-game browser (docs/browser.md); with an address, it opens on a new tab. |
 | `/camera [iso \| first \| behind \| toggle]` | Switch to the isometric camera or back (docs/isometric.md); `/camera` alone shows the settings, `/camera pitch\|fov\|distance\|reveal <value>` and `/camera wasd camera\|classic` change them. |
 | `/luasocial [1..120 \| new]` | The Lua social editor. |
 | `/lighting [modern \| smooth \| classic]` | Switch the lighting (docs/graphics.md); without a mode, between modern and classic. |
 | `/screenshot` | Take a screenshot. |
 | `/perf` | The performance window. |
+| `/servermanagement` | Open the policy editor in the built-in Modern interface when the server enables it and your account meets the GM status threshold. |
 | `/debug_animinfo` | For finding animation faults: your target's (or your own) model and where its clips come from, what its upper and lower body play (time, cross-fade, `(lent)` for a clip borrowed from another model, `?` for one the model does not hold), and the bones the pose leaves at their rest frame (points left out). |
 | `/chattabs [help]` | List Hailstone's chat tab commands. |
 | `/chattabs status` | List chat windows by ID and bracket the selected tab in each window. |
@@ -263,13 +268,24 @@ one, the server's add-on rules decide whether it may.
 | `/lua run <script> [args...]`, `/lua stop [script]`, `/lua pause [script]`, `/lua list` | Lua scripts. |
 | `/plugin list`, `/plugin <name> [load\|unload]` | Compiled plugins. |
 | `/nav ...` | Walk along the navigation mesh: `/nav target`, `/nav id <#>`, `/nav loc <y> <x> <z>`, `/nav door <name> [click]`, `/nav stop`, `/nav status`, `/nav option ...`, `/nav help`. |
-| `/moveto loc <y> <x> [z] \| id [#] \| mdist <n> \| off` | Walk in a straight line, without the mesh. |
-| `/stick [<distance>] [behind] [id <#>]`, `/stick off` | Stay with the target or a spawn. |
+| `/afollow [on] [<distance>] [door\|nodoor] [spawn <id>]`, `/afollow off \| pause \| unpause \| help` | Follow the target (or a spawn) along the way it walks, holding within the distance (10 at first); your movement keys stop it (docs/navigation.md). |
+| `/moveto loc <y> <x> [z] \| id [#] \| dist <n> \| off` | Walk in a straight line, without the mesh; it stops within 10 unless `dist` (or `mdist`, also inline after `loc` or `id`) set another distance. |
+| `/stick [<distance>] [behind] [id <#>]`, `/stick off`, `/stick pause`, `/stick unpause` | Stay with the target or a spawn. MQ2MoveUtils' `hold`, `snaproll`, `uw`, `delaystrafe`, `moveback` and `imsafe` are taken too (docs/navigation.md). |
 | `/target ...`, `/face ...` | Target or face by MacroQuest's spawn search (`/target` is above). |
+| `/mapfilter [help \| option [show\|hide\|on\|off] \| color R G B \| radius]` | MacroQuest's map filters: spawn types, colours, target lines, paths and circles, markers, vectors and custom spawn searches. `vanilla` shows only the map background, without labels, marks, routes or overlays; navigation keeps working. Settings are shared by every character; a custom search lasts until cleared or the client exits. `on`/`off` are aliases for `show`/`hide`. `targetpath` is Hailstone's own: it keeps a silent server path on the target (MQ2Map's only lets a right-click on a map label through), asked once the target has stayed selected for half a second and at most once a second. NPC marks follow the server's map policy (docs/plugins.md "Map policy"), and a server whose `[commands]` rules deny `/mapfilter` switches the saved options off while you play there. |
 | `/keypress <command> [hold\|release]` | Press a key command by name. |
 | `/echo <text>` | Print a line to chat. |
 | `/docommand <line>`, `/noparse <line>` | Run a line; run it without expanding `${...}`. |
 | `/squelch <line>` | Run a line without the chat lines it prints. |
+| `/timed <deciseconds> <line>` | Run a line that many tenths of a second later (MacroQuest's). Its `${...}` are read when it runs; a script's line keeps the script's permissions. At most 1000 wait at once. |
+| `/doortarget [id <n> \| <name>]`, `/doortarget clear` | Pick a door for `${DoorTarget}` (MacroQuest's): the one with that id, or the nearest whose name holds the text (the nearest door with no text); `clear` drops it. |
+| `/makemevisible` | End your invisibility (MacroQuest's; the client's own MakeMeVisible). |
+| `/removelev` | Click off every buff that levitates you, saying each (MacroQuest's). |
+| `/removeaura <name>` | Remove each of your auras whose name holds the text, any case (MacroQuest's). |
+| `/memspell <gem> "<spell>"` | Memorize a spell from your book into gem 1..12, by its exact name (any case) or its id (MacroQuest's; as the spell sets do it). Nothing for a spell not in the book or above your level. |
+| `/click left target`, `/click right target` | Click your target as the mouse would (MacroQuest's): a left click with an item on the cursor gives it; a right click loots, talks and the rest. MacroQuest's other places (`center`, a screen point ...) are not supported. |
+| `/itemnotify <slot> <notification>`, `/itemnotify in <bag> <n> <notification>`, `/itemnotify "<item>" <notification>` | Click an item slot (MacroQuest's): `leftmouseup` picks up, puts down or loots as a left click does; `rightmouseup` uses, reads or opens and closes a bag; `rightmouseheld` shows the item. Slots: 0..33, the worn slots' names, `pack1`..`pack10`, `cursor`, `loot1`.., `bank1`..`bank24`, `sharedbank1`..`2`, `trade1`.., `enviro1`..; in a bag (`pack`, `bank` or `sharedbank`), slot n counted from 1; an item by its exact name or `#id`. A bag's slot works whether or not its window is open. |
+| `/nomodkey <line>`, `/shiftkey <line>`, `/ctrlkey <line>` | Run a line with the modifier keys forced off, or Shift or Ctrl held, for the clicks it makes (MacroQuest's): `/shiftkey /itemnotify pack1 leftmouseup` picks up a whole stack. Without them a command's click reads the keyboard. |
 
 In a social's lines, `/pause` waits and `/timer` sets the button's cooldown (docs/dev-ui.md).
 

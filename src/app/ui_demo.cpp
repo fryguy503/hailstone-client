@@ -3,16 +3,65 @@
 #include <algorithm>
 #include <chrono>
 #include <format>
+#include <fstream>
+#include <stdexcept>
 #include <system_error>
 
 #include <imgui.h>
 
+#include "app/lua_ui.h"
 #include "core/config.h"
+#include "core/game_dir.h"
+#include "core/log.h"
 #include "platform/open_folder.h"
+#include "platform/paths.h"
+#include "ui/lua/lua_host.h"
 
 namespace hailstone::app {
 
+struct UiDemo::ModernChat {
+    GameDir game; // A fresh preview uses the installed client's default chat colors.
+    UiHost host;
+    UiApi api{host};
+    ui::lua::LuaUi lua;
+    bool verified = false;
+
+    ModernChat(ui::ChatView& view, const std::filesystem::path& scratch)
+        : lua(platform::ui_packs_dir() / "modern", scratch / "modern.txt") {
+        std::filesystem::create_directories(scratch);
+        const auto layout = scratch / "UI_Demo.ini";
+        std::ofstream(layout) << "[ChatManager]\nChatWindow0_Name=Main Chat\n";
+        host.game = &game;
+        host.chat = &view;
+        host.in_game = host.ui_ready = true;
+        host.game_state = 5;
+        host.layout_setting = [this](std::string_view key) { return lua.setting(key); };
+        host.set_layout_setting = [this](std::string_view key, std::string_view value) { lua.set_setting(key, value); };
+        host.submit_chat = [&view](const std::string& line) {
+            view.add(ui::ChatChannel::Say, std::format("You say, '{}'", line));
+        };
+        api.load_layout({}, layout, {});
+        api.show("Chat1", true);
+        lua.set_entry_scripts({"chat.lua"});
+        lua.set_setting("hud.size.Chat1", "660,390");
+        lua.set_setting("hud.pos.Chat1", "16,314");
+        lua.add_ui_api([this](lua_State* state) { api.register_functions(state); });
+    }
+
+    void draw() {
+        api.begin_frame();
+        lua.frame();
+        if (verified) return;
+        const auto status = lua.load_status();
+        if (!status.errors.empty()) throw std::runtime_error(status.errors.front());
+        if (!api.replaces("Chat1")) throw std::runtime_error("The Modern Lua chat preview did not open Chat1.");
+        log::info("ui demo: Modern Lua Chat1");
+        verified = true;
+    }
+};
+
 UiDemo::~UiDemo() {
+    modern_chat_.reset();
     std::error_code ec;
     if (!scratch_.empty()) std::filesystem::remove_all(scratch_, ec);
 }
@@ -24,6 +73,7 @@ bool parse_demo_screen(std::string_view name, DemoScreen& out) {
         {"chars", DemoScreen::Characters},     {"nochars", DemoScreen::NoCharacters},
         {"loading", DemoScreen::Loading},      {"game", DemoScreen::InGame},
         {"items", DemoScreen::Items},
+        {"client-chat", DemoScreen::ClientChat}, {"client-chat-expanded", DemoScreen::ClientChatExpanded},
     };
     for (const auto& e : kNames)
         if (e.name == name) { out = e.screen; return true; }
@@ -85,6 +135,33 @@ UiDemo::UiDemo(DemoScreen start) : screen_(start) {
     game_.chat.add(ui::ChatChannel::Combat, "You slash a gnoll pup for 12 points of damage.");
     game_.chat.add(ui::ChatChannel::Spell, "You feel the spirit of wolf enter you.");
     game_.chat.add(ui::ChatChannel::Error, "You cannot see your target.");
+    if (start == DemoScreen::ClientChat || start == DemoScreen::ClientChatExpanded) {
+        game_.chat.lines.clear();
+        game_.chat.add(ui::ChatChannel::System, "-- Demo server - Welcome to the Hailstone chat preview --", 0xe5e9ef);
+        game_.chat.add(ui::ChatChannel::System, "You have entered The Skyfire Mountains.", 0xe5e9ef);
+        game_.chat.add_client_messages({
+            "[Lua] bagcheck stopped: it may not run here",
+            "[Plugin] groupstatus: it may not run here",
+            "[Plugin] groupstatus unloaded",
+            "[Plugin] lootnotes: it may not run here",
+            "[Plugin] lootnotes unloaded",
+            "[Plugin] targetpanel: it may not run here",
+            "[Plugin] targetpanel unloaded",
+            "[Lua] running bagcheck (read,commands,ui)",
+            "[Plugin] groupstatus loaded (read,ui)",
+            "[Plugin] lootnotes loaded (events,ui)",
+            "[Plugin] targetpanel loaded (read,ui)",
+            "[Plugin] sessionlog loaded (events)",
+        });
+        if (start == DemoScreen::ClientChatExpanded)
+            game_.chat.toggle_chat_group(game_.chat.lines.back());
+        game_.chat.add_chat_group("Inventory Check", {
+            "Checked four bags.",
+            "Seven slots are free.",
+            "One item is ready to parcel.",
+        });
+        modern_chat_ = std::make_unique<ModernChat>(game_.chat, scratch_);
+    }
     game_.spawns.spawns = {
         {101, "a gnoll pup", 2, 54.0f},     {102, "Guard Weaver", 30, 120.0f},
         {103, "a rabid wolf", 6, 410.0f},   {104, "a large rat", 1, 22.0f},
@@ -289,6 +366,10 @@ void UiDemo::draw(const DemoFrameInput& in) {
         }
         ui::loading_screen(loading_);
         break;
+    case DemoScreen::ClientChat:
+    case DemoScreen::ClientChatExpanded:
+        modern_chat_->draw();
+        return;
     case DemoScreen::InGame: {
         game_.hud.zone = in.zone.empty() ? std::string("(viewer, no zone)") : in.zone;
         game_.hud.x = in.x;

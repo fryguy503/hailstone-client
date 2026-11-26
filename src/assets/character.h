@@ -267,9 +267,9 @@ struct MeshEmitter {
     std::uint32_t cloud_animation_node = 0;
 };
 
-// A number no other mesh made in this run has, so a mesh freed and another made at its address are told apart
-// (app/actor_emitters.h keys an actor's emitters by it). A copy is another mesh and gets a new one; a move keeps it
-// and leaves the source a new one.
+// A number no other mesh or model made in this run has, so a mesh freed and another made at its address are told
+// apart (app/actor_emitters.h keys an actor's emitters by it, SpellPoints a model's points). A copy is another mesh
+// and gets a new one; a move keeps it and leaves the source a new one.
 class MeshSerial {
 public:
     MeshSerial() : value_(next()) {}
@@ -364,6 +364,7 @@ struct CharacterModel {
     std::vector<ModelEmitter> emitters;
     // Classic skeleton clouds remain on their authored bones, so animations move their origins and axes too.
     std::vector<MeshEmitter> clouds;
+    MeshSerial serial; // tells this model from one later made at its address (SpellPoints keys by it)
 
     const AnimationClip* clip(std::string_view code) const;
     // The clip a spawn plays for `code`, `holding` when PlayerClient_UpdateHoldingAnimation gives it a column other
@@ -788,6 +789,12 @@ private:
     using Lock = std::lock_guard<std::recursive_mutex>;
     mutable std::unordered_map<std::string, Cached<std::shared_ptr<const CharacterModel>>> cache_;
     mutable std::unordered_map<std::string, Cached<std::shared_ptr<const CharacterMesh>>> dress_cache_;
+    // Each distinct look holds a whole dressed mesh, and a zone can show many (NPC tints, armour sets): once the
+    // cache reaches this many, the meshes only it still holds (no actor wears them, no shared cache keeps them)
+    // are dropped, and the next sweep waits until it has twice as many as were left (remember_dress).
+    static constexpr std::size_t kDressSweep = 512;
+    mutable std::size_t dress_sweep_at_ = kDressSweep;
+    void remember_dress(std::string key, Cached<std::shared_ptr<const CharacterMesh>> entry) const;
     mutable std::unordered_map<std::uint32_t, Cached<std::optional<ItemMesh>>> item_cache_;
     // The 0x34 clouds' definitions by their WLD and name: a model built again (after its cache entry went) hands out
     // the same definition, so app::ActorEmitters, which registers each definition once by its address, does not

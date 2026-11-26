@@ -37,6 +37,7 @@ struct HookUi {
     std::map<std::string,std::uint32_t,std::less<>> caps{{kOwner,plugin::kCapAll},{kOther,plugin::kCapAll}};
     int calls = 0, actions = 0;
     int native_calls = 0, action_id = 0;
+    int caps_lookups = 0; // the live grant lookups the hook service makes (host.plugin_caps)
     ImGuiID hook_widget_id = 0;
     std::uint32_t action_caps = 0;
     bool unusual_results = false;
@@ -62,7 +63,7 @@ struct HookUi {
         bridge.add_function("hooks-test","record_id",[this](const std::vector<plugin::UiValue>&) {
             hook_widget_id=ImGui::GetItemID();return plugin::UiValue{};
         });
-        host.plugin_caps = [this](std::string_view tag) { auto it=caps.find(tag); return it==caps.end()?0u:it->second; };
+        host.plugin_caps = [this](std::string_view tag) { ++caps_lookups; auto it=caps.find(tag); return it==caps.end()?0u:it->second; };
         api=std::make_unique<app::UiApi>(host);
         lua=std::make_unique<ui::lua::LuaUi>(scratch.path()/"pack",scratch.path()/"settings.ini");
         lua->set_caller_scope([this](std::string_view tag)->std::shared_ptr<void> {
@@ -542,4 +543,54 @@ TEST_CASE("UI hooks: registration snapshots owner handles limits and bounded rec
     REQUIRE(own.starts_with("hook:"));
     CHECK(ui.run("return hs.UI.hooks.Remove('"+own+"')",kOther)=="false");
     CHECK(ui.run("return hs.UI.hooks.Remove(own)",kOwner)=="true");
+}
+
+TEST_CASE("UI hooks: a hooked call keeps priority order and authority as registrations change") {
+    HookUi ui;
+    CHECK(ui.run(R"(
+      order={}
+      local H=hs.UI.hooks
+      local function mark(name) return function() order[#order+1]=name end end
+      H.Register('character.Gauge','before',mark('a'),{priority=5})
+      b=H.Register('character.Gauge','before',mark('b'))
+      return true
+    )",kOwner)=="true");
+    CHECK(ui.run("hs.Gauge(1) return true")=="true");
+    CHECK(ui.run(R"(
+      local H=hs.UI.hooks
+      local function mark(name) return function() order[#order+1]=name end end
+      H.Register('character.Gauge','before',mark('c'),{priority=-3})
+      H.Register('character.Gauge','before',mark('d'))
+      return true
+    )",kOwner)=="true");
+    CHECK(ui.run("hs.Gauge(1) return true")=="true");
+    CHECK(ui.run("return hs.UI.hooks.Remove(b)",kOwner)=="true");
+    CHECK(ui.run("hs.Gauge(1) return true")=="true");
+    CHECK(ui.run("return table.concat(order,',')",kOwner)=="b,a,c,b,d,a,c,d,a");
+    // The owner loses its authority between two calls: nothing of it runs, and its registrations are retired.
+    ui.caps[kOwner]=0;
+    CHECK(ui.run("hs.Gauge(1) return true")=="true");
+    ui.caps[kOwner]=plugin::kCapAll;
+    CHECK(ui.run("hs.Gauge(1) return #order==9 and #hs.UI.hooks.List('character.Gauge')==0",kOwner)=="true");
+    CHECK(ui.run("hs.UI.hooks.Register('character.Gauge','before',function() order[#order+1]='e' end) return true",kOwner)=="true");
+    CHECK(ui.run("hs.Gauge(1) return true")=="true");
+    CHECK(ui.run("return order[10]",kOwner)=="e");
+    CHECK(ui.calls==6);
+}
+
+TEST_CASE("UI hooks: a hooked call asks about its own method's registrations only") {
+    HookUi ui;
+    CHECK(ui.run("seen=0 hs.UI.hooks.Register('character.Gauge','before',function() seen=seen+1 end) return true",kOwner)=="true");
+    const auto lookups=[&ui] {
+        CHECK(ui.run("hs.Gauge(1) return true")=="true"); // the method's selection is built once
+        ui.caps_lookups=0;
+        CHECK(ui.run("for i=1,20 do hs.Gauge(1) end return true")=="true");
+        return ui.caps_lookups;
+    };
+    const int alone=lookups();
+    CHECK(alone>0);
+    CHECK(ui.run("for i=1,15 do assert(hs.UI.hooks.Register('character.Label','before',function()end)) end return true",kOther)=="true");
+    // Fifteen registrations on another method add nothing to a Gauge call's work.
+    CHECK(lookups()==alone);
+    CHECK(ui.run("return seen",kOwner)=="42");
 }

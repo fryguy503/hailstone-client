@@ -439,3 +439,46 @@ TEST_CASE("mock server: copying another character's chat settings and game optio
     conn.copy_character_settings(world / "Gennro", true, true);
     CHECK(conn.client_options().get(ClientOption::LootAllConfirm) == 0);
 }
+
+TEST_CASE("Layout profiles: chat snapshots restore active filters and colours without replacing unrelated settings") {
+    EmptyGameDir servers;
+    ConnectionOptions options = quick_options();
+    options.profile_id = "test-server";
+    options.servers_dir = servers.path();
+    Rig rig(MockConfig::standard(), options);
+    auto& conn = rig.conn;
+    std::ofstream(rig.dir.path() / "eqclient.ini") << "[TextColors]\nUser_1_Red=12\nUser_1_Green=34\nUser_1_Blue=56\n";
+    rig.game.rescan();
+    REQUIRE(rig.to_zone());
+
+    constexpr int filter = 0;
+    const char* key = game::ChatFilters::ini_key(filter);
+    const int before = conn.chat_filters().settings[filter];
+    const auto chat_path = conn.own_files().chat_ini();
+    const IniFile saved = conn.capture_layout_chat();
+    CHECK(saved.get_int("Options", key, -1) == before);
+    CHECK(saved.get_int("TextColors", "User_1_Red", -1) == 12);
+    CHECK(saved.get("TextColors", "User_2_Red") == "*NULL*");
+    CHECK(saved.get_int("Main", "UseTellWindows", -1) == 0);
+
+    const int other = (before + 1) % game::ChatFilters::options(filter);
+    conn.change_chat_filter(filter, other);
+    conn.change_client_option(ClientOption::UseTellWindows, 1);
+    conn.change_client_option(ClientOption::LootAllConfirm, 0);
+    REQUIRE(save_chat_setting(chat_path, "TextColors", "User_1_Red", "200"));
+    REQUIRE(save_chat_setting(chat_path, "TextColors", "User_2_Red", "100"));
+    REQUIRE(save_chat_setting(chat_path, "Options", "CustomPreference", "preserved"));
+    REQUIRE(conn.chat_filters().settings[filter] == other);
+    REQUIRE(conn.apply_layout_chat(saved));
+    CHECK(conn.chat_filters().settings[filter] == before);
+    CHECK_FALSE(conn.client_option(ClientOption::UseTellWindows));
+    CHECK_FALSE(conn.client_option(ClientOption::LootAllConfirm));
+    IniFile applied;
+    REQUIRE(applied.load(chat_path));
+    CHECK(applied.get_int("TextColors", "User_1_Red", -1) == 12);
+    CHECK(applied.get("TextColors", "User_2_Red") == "*NULL*");
+    CHECK(applied.get("Options", "CustomPreference") == "preserved");
+    REQUIRE(applied.load(conn.own_files().options_ini()));
+    CHECK(applied.get_int("Main", "UseTellWindows", -1) == 0);
+    CHECK(applied.get_int("Options", "LootAllConfirm", -1) == 0);
+}

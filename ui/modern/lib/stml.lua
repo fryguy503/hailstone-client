@@ -10,6 +10,7 @@ local C = dofile("lib/theme.lua").color
 local textselect = dofile("lib/textselect.lua")
 stml.LINK = C.link
 local WHITE = C.text
+local CHAT_GROUP_LINK = 1003 -- chat disclosure links use their own explicit colour
 local ENTITIES = { lt = "<", gt = ">", amp = "&", quot = "\"", apos = "'", nbsp = " " }
 
 local function entities(text)
@@ -31,13 +32,14 @@ function stml.Parse(line, color)
   while pos <= #line do
     local lt = line:find("<", pos, true)
     local text = line:sub(pos, (lt or #line + 1) - 1)
+    local color = link and (type(link) ~= "table" or link[1] ~= CHAT_GROUP_LINK) and stml.LINK or colors[#colors]
     if text ~= "" then
-      table.insert(segments, { entities(text), link and stml.LINK or colors[#colors], link })
+      table.insert(segments, { entities(text), color, link })
     end
     if not lt then break end
     local gt = line:find(">", lt, true)
     if not gt then -- a "<" that opens no tag ("<3" in server text): the rest is text, not dropped
-      table.insert(segments, { entities(line:sub(lt)), link and stml.LINK or colors[#colors], link })
+      table.insert(segments, { entities(line:sub(lt)), color, link })
       break
     end
     local tag = line:sub(lt + 1, gt - 1)
@@ -176,7 +178,7 @@ local function drawPieces(p, onLink, sel, line)
     ui.Text("")
     return
   end
-  local m, hovered = 0, nil
+  local m, hovered, hoverColor = 0, nil, nil
   local track = sel and sel.active
   for i = 1, n, 6 do
     if i > 1 and not p[i + 3] then ui.SameLine(0, 0) end
@@ -203,7 +205,7 @@ local function drawPieces(p, onLink, sel, line)
       rects[m + 1], rects[m + 2], rects[m + 3], rects[m + 4] = x0, y1, x1, link
       m = m + 4
       if ui.IsItemHovered() then
-        hovered = link
+        hovered, hoverColor = link, col
         if track then sel.overLink = true end
         if ui.IsItemClicked(ui.Mouse.Left) and onLink then onLink(link) end
       end
@@ -212,7 +214,7 @@ local function drawPieces(p, onLink, sel, line)
   if hovered then
     for j = 1, m, 4 do
       if rects[j + 3] == hovered then
-        ui.DrawRect(rects[j], rects[j + 1] - 1, rects[j + 2], rects[j + 1], stml.LINK[1], stml.LINK[2], stml.LINK[3], 1, 0, 1)
+        ui.DrawRect(rects[j], rects[j + 1] - 1, rects[j + 2], rects[j + 1], hoverColor[1], hoverColor[2], hoverColor[3], 1, 0, 1)
       end
     end
   end

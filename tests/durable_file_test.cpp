@@ -87,3 +87,26 @@ TEST_CASE("atomic_file: the file is replaced whole and no temporary file stays")
     }
     CHECK(files == 2); // sub/ and taken/
 }
+
+// exFAT, FAT and some network mounts have no hard links: a new name is then claimed with an exclusive create.
+TEST_CASE("atomic_file: a new name is created once without hard links") {
+    test::ScratchDir dir("atomic_create_nolink");
+    const fs::path f = dir.path() / "profile.bin";
+    for (const bool links : {true, false}) {
+        CAPTURE(links);
+        platform::set_no_hard_links_for_tests(!links);
+        struct Reset {
+            ~Reset() { platform::set_no_hard_links_for_tests(false); }
+        } reset;
+        fs::remove(f);
+        CHECK(create_file_atomic(f, "first") == AtomicCreate::Created);
+        CHECK(create_file_atomic(f, "second") == AtomicCreate::Exists);
+        CHECK(read_text_file(f) == "first");
+        int files = 0;
+        for (const auto& e : fs::directory_iterator(dir.path())) {
+            (void)e;
+            ++files;
+        }
+        CHECK(files == 1); // no temporary file stays
+    }
+}

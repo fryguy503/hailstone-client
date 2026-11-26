@@ -23,6 +23,7 @@ void ClientApp::update_mouse_look() {
     // down when they last were, 12095 every frame. A frozen player (StandState 0x66) returns before that check.
     // Behind the loading screen (zone_settle_) the same, without the message.
     if (zone_settling()) {
+        if (automation_) automation_->world_placement_cancel();
         plate_gesture_.clear();
         mouse_look_.cancel();
         left_click_pending_.reset();
@@ -30,6 +31,7 @@ void ClientApp::update_mouse_look() {
         return;
     }
     if (conn_->state() == net::ConnectionState::InZone && conn_->interface_locked()) {
+        if (automation_) automation_->world_placement_cancel();
         plate_gesture_.clear();
         mouse_look_.cancel();
         left_click_pending_.reset();
@@ -43,8 +45,29 @@ void ClientApp::update_mouse_look() {
     const game::ButtonEdges right = game::button_edges(in.right_clicked, in.right_button, mouse_right_held_);
     const bool left_pressed = left.pressed, left_released = left.released;
     const bool right_pressed = right.pressed, right_released = right.released;
+    if (right_pressed) world_placement_right_held_ = false;
+    const bool placement_right_release = right_released && std::exchange(world_placement_right_held_, false);
     mouse_left_held_ = in.left_button;
     mouse_right_held_ = in.right_button;
+    // A press in a window lets a plugin the player cancelled aim again (its own button, say); a plugin re-arming on
+    // its own cannot keep the world's clicks (WorldPlacementHost::player_cancel). update_player runs before draw_ui,
+    // so the window's own handler in this frame may already start one.
+    if (automation_ && (left_pressed || right_pressed) && ui_.wants_mouse()) automation_->world_placement_player_input();
+    if (automation_ && automation_->world_placement_aiming()) {
+        if (right_pressed) world_placement_right_held_ = in.right_button;
+        if (!world_placement_input_allowed()) {
+            automation_->world_placement_cancel();
+        } else if (in.was_pressed(platform::Key::Escape) || (right_pressed && !ui_.wants_mouse())) {
+            automation_->world_placement_player_cancel();
+        } else {
+            automation_->world_placement_update(world_placement_point_at(in.mouse_x, in.mouse_y),
+                                                left_pressed, left_released);
+        }
+        plate_gesture_.clear();
+        left_click_pending_.reset();
+        iso_hold_ = false;
+        return;
+    }
     // __ProcessMouseEvents: dead or knocked out, mouse look ends and only the windows get the mouse.
     const bool down = conn_->state() == net::ConnectionState::InZone && conn_->player_down();
     if (down) {
@@ -102,7 +125,7 @@ void ClientApp::update_mouse_look() {
             }
             mouse_look_.right_down(options, now);
         }
-        if (right_released && (mouse_look_.active || !ui_.wants_mouse())) {
+        if (right_released && !placement_right_release && (mouse_look_.active || !ui_.wants_mouse())) {
             game::MouseLook::RightUp up = mouse_look_.right_up(now);
             // (up.center_cursor, CenterMouseCursor, sets only the game's copy of the cursor for the rest of the
             // frame: the cursor itself comes back where the look took it, platform/mouse_capture.h.)
@@ -359,8 +382,19 @@ void ClientApp::update_player(float dt) {
     using platform::Key;
     // SendTeleportIndexRequestAndWait @0x506560: the original sleeps in a loop that only delivers the network's
     // packets until the server's 0xcadf ends the wait (+0x1f05), so nothing else of the game runs. Here the window
-    // keeps drawing and the packets are handled, but the player neither acts nor moves until then.
-    if (conn_ && conn_->waiting_for_port()) return;
+    // keeps drawing and the packets are handled, but the player neither acts nor moves until then. The keys, the
+    // scripts' /keypress and the pad are still read so that what is let go during the wait is let go: only the
+    // movement releases reach the controls, the presses are dropped.
+    if (conn_ && conn_->waiting_for_port()) {
+        std::vector<game::KeyMap::Event> released =
+            actions_ui_->process_keys(window_.input(), !ui_.wants_keyboard() && !zone_settling());
+        released.insert(released.end(), script_keys_.begin(), script_keys_.end());
+        script_keys_ = std::exchange(script_key_release_, {});
+        released.insert(released.end(), pad_events_.begin(), pad_events_.end());
+        pad_events_.clear();
+        movement_.apply_releases(released);
+        return;
+    }
     if (conn_ && driven_eye_ != conn_->eye_id()) {
         // An Eye takes only the controls and view. Keep the local physics body alive at its own position, with
         // gravity, air and environment damage, then return to that body on a fade, death or depop.
@@ -417,9 +451,7 @@ void ClientApp::update_player(float dt) {
                 conn_->set_touching_switch(std::nullopt);
                 if (nav_) nav_->stop("");
                 // A stopped click walk must not run its pending interaction at the respawn destination.
-                iso_pending_.reset();
-                iso_walking_ = iso_hold_ = false;
-                iso_marker_ = {};
+                cancel_iso_clicks();
                 if (conn_->follow_target()) conn_->stop_follow(false);
                 follow_move_ = follow_run_ = follow_detour_ = follow_assist_strafed_ = false;
                 // Prime the new spawn's region state without treating the placement itself as walking into a line.
@@ -458,6 +490,8 @@ void ClientApp::update_player(float dt) {
     // Behind the loading screen (zone_settle_) the keys and the pad do not reach the world.
     bool keys = !ui_.wants_keyboard() && !zone_settling();
     const auto& in = window_.input();
+    const bool placement_escape = in.was_pressed(platform::Key::Escape) && automation_ &&
+                                  automation_->world_placement_aiming();
     update_mouse_look();
 
     // The original's movement commands (default keys: CMD_FORWARD W, CMD_BACK
@@ -472,7 +506,13 @@ void ClientApp::update_player(float dt) {
     drive_pick_test(mk);
     // The key map's commands (KeypressHandler::HandleKeyDown / HandleKeyUp): movement is held while its key is
     // down; the rest acts once (key_command).
-    key_events_ = actions_ui_->process_keys(in, keys);
+    if (placement_escape) {
+        auto input = in;
+        std::erase_if(input.key_events, [](const auto& event) { return event.down && event.code == 0x01; });
+        key_events_ = actions_ui_->process_keys(input, keys);
+    } else {
+        key_events_ = actions_ui_->process_keys(in, keys);
+    }
     const std::size_t player_keys = key_events_.size(); // the player's own, before the scripts' and the gamepad's
     // /keypress from scripts and plugins: this frame's presses, then a tap's release on the next.
     key_events_.insert(key_events_.end(), script_keys_.begin(), script_keys_.end());
@@ -751,7 +791,8 @@ void ClientApp::update_player(float dt) {
                 conn_->stop_follow(false);
             } else if (stand == net::kStandStanding || stand == net::kStandCrouching) {
                 const game::Spawn& t = it->second;
-                glm::vec3 me = game::world_to_server(feet_ + glm::vec3(0, 0, floor_offset_));
+                const glm::vec3 body = feet_ + glm::vec3(0, 0, floor_offset_);
+                glm::vec3 me = game::world_to_server(body);
                 glm::vec3 to = game::world_to_server(t.position);
                 game::FollowInput fi;
                 fi.y = me.y;
@@ -768,8 +809,12 @@ void ClientApp::update_player(float dt) {
                 fi.target_animation = t.is_corpse ? game::kFollowDeadAnimation : t.stand_state;
                 fi.distance = game::true_distance(me, to, 0.0f); // CDisplay::TrueDistance(..., 0): flat
                 // __CastRay(target, player): the line between them is clear.
-                fi.clear_line = !collision_ || collision_->line_of_sight(t.position, feet_ + glm::vec3(0, 0, floor_offset_));
+                fi.clear_line = !collision_ || collision_->line_of_sight(t.position, body);
                 const bool assist = !enhanced_profile && nav_ && nav_->follow_assist_on();
+                // At entry into the water the previous movement step can still report dry.
+                const bool swimming = !player_moved && zone_ && (zone_->regions.lookup(body).flags & 0xff) >= 5;
+                const bool target_wet = t.body_wet >= 5 || t.feet_wet >= 5;
+                const glm::vec3 target_feet = t.position - glm::vec3(0, 0, t.heights.avatar_height);
                 const float distance = fi.distance;
                 // With the mesh's help the follow keeps on past the original's 200, to the navigator's leash.
                 if (assist && fi.distance > game::kFollowTooFar && fi.distance <= Navigator::kFollowLeash)
@@ -790,9 +835,11 @@ void ClientApp::update_player(float dt) {
                     if (nav_) nav_->end_follow();
                 } else {
                     Navigator::FollowAssist help;
-                    if (assist)
-                        help = nav_->assist_follow(feet_, t.position - glm::vec3(0, 0, t.heights.avatar_height), fi.clear_line,
-                                                   nav_now);
+                    if (assist) {
+                        // A clear route between swimmers can be taken directly at the leader's depth.
+                        if (swimming && target_wet && fi.clear_line) nav_->end_follow();
+                        else help = nav_->assist_follow(feet_, target_feet, fi.clear_line, nav_now);
+                    }
                     if (help.detour) {
                         // The original's bands (stop inside 15 + both heights, walk inside 30 + both when the target is
                         // slower), measured along the path.
@@ -807,11 +854,23 @@ void ClientApp::update_player(float dt) {
                     } else {
                         yaw_ = game::heading_to_yaw(step.heading);
                     }
-                    // Swimming: the look pitch towards the path's next corner, or the spawn (forward follows it).
-                    if (assist && step.move) {
-                        glm::vec3 aim = help.detour ? help.aim : t.position - glm::vec3(0, 0, t.heights.avatar_height);
-                        if (auto p = nav_->swim_pitch(nf, aim, help.detour ? std::optional<glm::vec3>(help.along) : std::nullopt))
-                            pitch_ = *p;
+                    if (swimming) {
+                        auto swim_frame = nf;
+                        swim_frame.swimming = true;
+                        if (assist && (help.detour || !target_wet || Navigator::swim_needs_air(swim_frame))) {
+                            // The mesh still steers detours and keeps its shore and breathing rules.
+                            const glm::vec3 aim = help.detour ? help.aim : target_feet;
+                            const auto along = help.detour ? std::optional<glm::vec3>(help.along) : std::nullopt;
+                            if (step.move) {
+                                if (auto p = nav_->swim_pitch(swim_frame, aim, along)) {
+                                    pitch_ = *p;
+                                    mk.follow_swim = game::mechanics::SwimSteering{*p * 256.0f / glm::pi<float>(), false};
+                                }
+                            }
+                        } else {
+                            const auto swim = game::follow_swim_step(fi, step.move);
+                            mk.follow_swim = game::mechanics::SwimSteering{swim.pitch, swim.vertical_only};
+                        }
                     }
                     if (follow_logged_ != follow || step.move != follow_move_ || (step.move && step.run != follow_run_) ||
                         help.detour != follow_detour_)

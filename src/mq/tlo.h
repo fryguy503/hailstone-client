@@ -120,6 +120,7 @@ struct Context {
     nav::NavControl* nav = nullptr; // the client's navigation (/nav, the Navigation TLO); null: none
     std::function<bool(std::string_view window)> window_open; // Window[name].Open
     std::function<bool(std::string_view plugin)> plugin_loaded; // Plugin[name].IsLoaded
+    std::function<bool()> foreground; // EverQuest.Foreground: the game's window has the focus; null: false
     // One of the player's abilities by name (or an AA's group, a skill's number); nullopt: the player has none such.
     std::function<std::optional<AbilityState>(AbilityKind, std::string_view name)> ability;
     // Line of sight in the zone between two points (world coordinates, game/coords.h): nullopt while the zone's
@@ -130,6 +131,9 @@ struct Context {
     std::function<std::optional<bool>(std::uint32_t spawn)> can_see;
     std::string server_name;
     std::string ui_skin = "default";
+    // MacroQuest.Path[config] and Hailstone.Path[config]: the folder the scripts' settings go in (<data folder>/scripts/config, as UTF-8, with no
+    // trailing separator, as MQ gives its paths); empty answers nil.
+    std::string config_path;
 };
 
 class Registry {
@@ -196,7 +200,8 @@ bool iequals(std::string_view a, std::string_view b);
 bool icontains(std::string_view haystack, std::string_view needle);
 
 // The game's TLOs and types (mq/tlo_game.cpp): Me, Target, Spawn, SpawnCount, NearestSpawn, Group, Zone, Spell,
-// Cursor, FindItem, FindItemCount, Window, Time, GameTime, EverQuest, Int, Float, Bool, String, Math, If, Range, Plugin, ...
+// Cursor, FindItem, FindItemCount, Window, Time, GameTime, EverQuest, MacroQuest, Hailstone, Int, Float, Bool, String, Math, If,
+// Range, Plugin, ...
 void register_game_tlos(Registry& r);
 
 } // namespace hailstone::mq

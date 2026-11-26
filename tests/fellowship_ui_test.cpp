@@ -151,6 +151,43 @@ TEST_CASE("fellowship window: 64 members remain selectable by identity after sor
     CHECK(sent.size() == 1);
 }
 
+TEST_CASE("fellowship window: Make Leader asks first, naming the member, and promotes that member") {
+    // The packs' buttons ask nothing of their own (ui/*/fellowship.lua): this question is the only one.
+    plugin::Hooks hooks;
+    const auto owner = hooks.new_owner("fellowship window fixture");
+    std::vector<net::AppPacket> sent;
+    hooks.on_packet(owner, plugin::Stream::Zone, plugin::Direction::Out, net::kOpFellowshipRequest,
+                    [&](net::AppPacket& p) { sent.push_back(p); return plugin::Flow::Continue; });
+    auto options = test::quick_options();
+    options.hooks = &hooks;
+    test::Rig rig(test::MockConfig::standard(), options);
+    REQUIRE(rig.to_zone());
+    auto list = members(4);
+    rig.conn.receive_zone_packet_for_test(roster(list));
+    Window ui(rig);
+    REQUIRE(ui.window);
+    const auto* rows = ui.window->list(ui.host, "MemberList");
+    REQUIRE(rows);
+    int row = -1;
+    for (std::size_t i = 0; i < rows->rows.size(); ++i)
+        if (rows->rows[i].texts[0] == "Member2") row = static_cast<int>(i);
+    REQUIRE(row >= 0);
+    REQUIRE(ui.window->list_click(ui.host, "MemberList", row, false, 0));
+    REQUIRE(ui.child("MakeLeaderButton").enabled == true);
+    REQUIRE(ui.click("MakeLeaderButton"));
+    REQUIRE(ui.host.confirm);
+    CHECK(ui.host.confirm->text == "Make Member2 the fellowship leader?");
+    CHECK(sent.empty());
+    // The roster reorders while it asks: Yes still promotes the member it named.
+    std::reverse(list.begin() + 1, list.end());
+    rig.conn.receive_zone_packet_for_test(roster(list));
+    ui.answer(true);
+    REQUIRE(sent.size() == 1);
+    ByteReader request(sent.back().data);
+    CHECK(request.le<std::uint32_t>() == static_cast<std::uint32_t>(net::FellowshipAction::Promote));
+    CHECK(request.le<std::uint32_t>() == 1003u);
+}
+
 TEST_CASE("fellowship window: MOTD drafts, self sharing and confirmations follow current membership") {
     test::Rig rig;
     REQUIRE(rig.to_zone());

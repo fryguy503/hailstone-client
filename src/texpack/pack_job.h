@@ -40,12 +40,14 @@ using ModelSetFactory = std::function<std::unique_ptr<ModelSet>(std::string* err
 class GpuWorker {
 public:
     explicit GpuWorker(ModelSetFactory factory);
-    ~GpuWorker(); // finishes the task running, drops the rest
+    ~GpuWorker(); // finishes the task running, drops the rest (calling each one's `dropped`)
     GpuWorker(const GpuWorker&) = delete;
     GpuWorker& operator=(const GpuWorker&) = delete;
 
     using Task = std::function<void(const Models&)>;
-    void post(Task task, bool urgent = false);
+    // `dropped`, when given, runs instead of the task when the worker stops before it ran (on the stopping thread),
+    // so whoever waits for the task hears that it will not come: a PackJob's textures end as cancelled.
+    void post(Task task, bool urgent = false, std::function<void()> dropped = {});
     // Whether the models loaded (false until the thread has tried; error() says why they did not).
     bool ready() const { return ready_; }
     bool failed() const { return failed_; }
@@ -56,7 +58,11 @@ private:
     void run(ModelSetFactory factory);
     mutable std::mutex mutex_;
     std::condition_variable cv_;
-    std::deque<Task> tasks_;
+    struct Queued {
+        Task task;
+        std::function<void()> dropped;
+    };
+    std::deque<Queued> tasks_;
     bool stop_ = false;
     std::atomic<bool> ready_{false}, failed_{false};
     std::string error_;
@@ -95,6 +101,9 @@ struct JobStatus {
     std::size_t complete = 0;  // textures already whole in the pack when the build started
     std::size_t failures = 0;
     std::uint64_t files_written = 0, bytes_written = 0;
+    // The estimated bytes of the textures read and not yet written (their sources and pack images), now and at most
+    // so far: JobOptions::memory_budget bounds it.
+    std::uint64_t bytes_held = 0, bytes_held_peak = 0;
     double texels_total = 0, texels_done = 0; // source texels times the files made of them, for the rate
     double seconds = 0;                       // running, not paused
     std::string current;                      // a name of the texture on the GPU now
@@ -112,6 +121,9 @@ struct JobOptions {
     unsigned encoders = 0;     // 0: the hardware's threads less two
     bool low_impact = false;   // the GPU rests as long as it works, and the encoders are fewer and run at a low priority
     PackInfo info;             // written to pack.ini as the build finishes (its counts filled in)
+    // The bytes the textures between the reader and the encoders may hold at once (their sources and pack images,
+    // estimated from their sizes; one texture always goes, whatever its size). 0: kDefaultMemoryBudget.
+    std::uint64_t memory_budget = 0;
     // Photo materials (texpack/materials.h): the textures the plan names are composed from the library on the
     // encoders instead of upscaled, and made again when PACK/materials.txt says they were made by other rules (or
     // given back to the upscaler when the plan no longer names them). Both null: none.
@@ -119,7 +131,12 @@ struct JobOptions {
     std::shared_ptr<MaterialLibrary> material_library;
 };
 
-// One build, on threads of its own; the GPU stage runs on `gpu`, which must outlive it.
+// A few of the largest textures at once (an 8192 x 8192 pack image with its maps is about 1 GiB): the queues' item
+// counts alone let the textures waiting for the GPU and the encoders hold tens of GiB.
+inline constexpr std::uint64_t kDefaultMemoryBudget = std::uint64_t{4} << 30;
+
+// One build, on threads of its own; the GPU stage runs on `gpu`, which must outlive it (a worker that stops first
+// drops the textures it holds: the build then ends as cancelled instead of waiting for them).
 class PackJob {
 public:
     PackJob(JobOptions options, GpuWorker& gpu);
@@ -152,6 +169,8 @@ private:
     std::atomic<bool> cancel_{false}, paused_{false}, low_impact_{false};
     std::deque<std::shared_ptr<Made>> made_; // the GPU's results waiting for an encoder
     std::size_t in_gpu_ = 0;                 // textures posted to the GPU and not back yet
+    void release_bytes(std::uint64_t bytes); // (with the mutex held) a texture's estimate, written or dropped
+    void drop_made();                        // the results no encoder took (after a cancel)
     bool reading_done_ = false;
     std::chrono::steady_clock::time_point resumed_at_;
     std::map<std::uint64_t, std::string> material_record_; // PACK/materials.txt as this build leaves it

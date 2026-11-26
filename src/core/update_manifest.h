@@ -50,6 +50,9 @@ std::optional<UpdateManifest> parse_update_manifest(std::string_view text, const
 
 // The part a signature covers: everything before the "signature " line, or the whole text without one.
 std::string_view update_manifest_signed_part(std::string_view text);
+// What follows the "signature " line ("" without one). Every reader refuses a manifest that goes on after it, and
+// tools/hailstone_sign refuses to sign one rather than drop those lines.
+std::string_view update_manifest_after_signature(std::string_view text);
 
 // This build's platform as manifests name it ("linux-x64", "linux-arm64", "windows-x64", "windows-arm64",
 // "macos-arm64", "macos-x64"; "" for any other).

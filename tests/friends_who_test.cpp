@@ -1,16 +1,21 @@
-// /who friends over the real loopback zone and UCS sessions. The who replies below are scripted protocol
-// fixtures; they check dispatch and privacy formatting, not a live world's friend lookup or filtering.
+// Scripted /who replies exercise chat and Lua output. /who friends uses a real loopback zone and UCS session
+// to exercise requests and privacy formatting.
 #include <doctest/doctest.h>
 
 #include <fstream>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include <lua.hpp>
+
+#include "app/lua_ui.h"
 #include "core/byte_io.h"
 #include "mock_server/harness.h"
 #include "net/chat_server.h"
 #include "net/social_packets.h"
+#include "scratch_dir.h"
 
 using namespace hailstone;
 using namespace hailstone::net;
@@ -102,6 +107,86 @@ const AppPacket* last_packet(const MockEqServer& server, Op op) {
 }
 
 } // namespace
+
+TEST_CASE("who: zone replies show the same illusion race names in chat and Lua") {
+    ScratchDir scratch("who_race_names");
+    std::ofstream(scratch.path() / "eqstr_us.txt") << "5025 %4 (%5)\n";
+    std::ofstream(scratch.path() / "dbstr_us.txt")
+        << "0^11^Unused Name\n"
+        << "2^11^Not The Client's Barbarian\n"
+        << "143^11^UNKNOWN RACE\n"
+        << "209^11^Earth Elemental\n"
+        << "367^11^Skeleton\n"
+        << "530^11^Dragon\n"
+        << "645^11^Coldain\n"
+        << "65001^12^Wrong String Type\n";
+    GameDir game(scratch.path());
+    GameConnection conn(game);
+
+    constexpr struct {
+        std::uint32_t id;
+        const char* player;
+        const char* label;
+    } cases[] = {
+        {1, "Player", "Human"},
+        // A playable race takes the client's own name, not dbstr's (HandleWhoAllResponse).
+        {2, "Barbarian", "Barbarian"},
+        {367, "SkeletonIllusion", "Skeleton"},
+        {209, "ElementalIllusion", "Earth Elemental"},
+        {143, "TreeIllusion", "Tree"},
+        {530, "DragonIllusion", "Dragon"},
+        {645, "ColdainIllusion", "Coldain"},
+        {65001, "UnknownIllusion", "Race 65001"},
+        {0, "Unspecified", ""},
+    };
+    WhoResponse response;
+    for (const auto& row : cases) {
+        WhoEntry entry;
+        entry.format = 5025;
+        entry.name = row.player;
+        entry.race = row.id;
+        response.entries.push_back(entry);
+    }
+    conn.receive_zone_packet_for_test(encode(response));
+
+    app::UiHost host;
+    host.conn = &conn;
+    app::UiApi api(host);
+    std::unique_ptr<lua_State, decltype(&lua_close)> lua(luaL_newstate(), &lua_close);
+    auto* L = lua.get();
+    REQUIRE(L);
+    luaL_openlibs(L);
+    lua_newtable(L);
+    api.register_functions(L);
+    lua_setglobal(L, "hs");
+    const int result = luaL_dostring(L, "return hs.WhoResults()");
+    REQUIRE_MESSAGE(result == LUA_OK, (result == LUA_OK ? "" : lua_tostring(L, -1)));
+    CHECK(lua_tointeger(L, -2) == 1);
+    REQUIRE(lua_istable(L, -1));
+    REQUIRE(lua_rawlen(L, -1) == response.entries.size());
+
+    lua_Integer index = 0;
+    for (const auto& row : cases) {
+        CAPTURE(row.id);
+        const std::string line = std::string(row.player) + " (" + row.label + ")";
+        auto chat = conn.poll_chat();
+        REQUIRE(chat);
+        CHECK(chat->text == line);
+        CHECK(chat->color == 281);
+
+        REQUIRE(lua_rawgeti(L, -1, ++index) == LUA_TTABLE);
+        REQUIRE(lua_getfield(L, -1, "race") == LUA_TNUMBER);
+        CHECK(lua_tointeger(L, -1) == row.id);
+        lua_pop(L, 1);
+        REQUIRE(lua_getfield(L, -1, "raceName") == LUA_TSTRING);
+        CHECK(std::string_view(lua_tostring(L, -1)) == row.label);
+        lua_pop(L, 1);
+        REQUIRE(lua_getfield(L, -1, "line") == LUA_TSTRING);
+        CHECK(std::string_view(lua_tostring(L, -1)) == line);
+        lua_pop(L, 2);
+    }
+    CHECK_FALSE(conn.poll_chat());
+}
 
 TEST_CASE("mock server: who friends aliases with no friends send no lookup") {
     Rig rig(with_ucs());

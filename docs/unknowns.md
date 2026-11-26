@@ -195,6 +195,15 @@ The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/re
   - The original checks `bCanGoHome` and `bUseable` (`CCharacterListWnd::EnableButtons` @0x42f4b0); that `bUseable`
     comes from the list's `enabled` byte is assumed. Stock EQEmu always sends `enabled = 1`.
   - Settle: tracing where OP_SendCharInfo's handler fills `CharSelectInfo` +0x15c.
+- **Caps on server-keyed lists.** Lists the server fills by ids or names of its own choosing stop taking new entries
+  at generous caps, against a flood of made-up keys.
+  - Now: tributes and their descriptions, personal and guild, 4096 ids each (`net::kTributesKept`); bazaar traders and
+    search rows, 4096 each (`game::kBazaarTradersKept`, `kBazaarResultsKept`); the shared task's members, 1024
+    (`game::kSharedTaskMembersKept`); raid members, 1024 (`game::kRaidMembersKept`, an extension past RoF2's 72,
+    CRaid::AddRaidMember). Group mana and endurance, other casters' casts and augment solvent texts are kept only for
+    a spawn the client knows or a window that asked.
+  - Unknown: what the original holds of the tributes, bazaar traders and rows and shared task members.
+  - Settle: the original's containers for them (CTributeManager, CBazaarSearchWnd, CTaskManager's member list).
 - **Undefined zone-in packets.** The client does not send the zone-in packets EQEmu's RoF2 table does not define
   (tribute, social post and similar). EQEmu servers do not need them.
 - **Unnamed packets get no answer.**
@@ -406,7 +415,9 @@ The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/re
     standing-still shortcut skips the sweep; not checked against the original).
 - **Teleport zone points.** Zone points that request a teleport by index send 0xcadf and wait for the server's 0xcadf;
   untested, as EQEmu never sets them. While waiting the player neither acts nor moves, but the window keeps drawing;
-  the original blocks the whole client, with no time limit.
+  the original blocks the whole client, with no time limit. Keys, `/keypress` and pad buttons let go during the wait
+  still end their movement (presses are dropped), so nothing stays held after it; whether the original delivers the
+  queued key messages after its wait is not checked.
 - **Sense heading.**
   - The message reads the true heading, not the compass's; its bands are 64 units wide (225 to 288 is "South", 256
     due south); a negative heading gives an empty direction. Checked: UseSkill @0x45c85f.
@@ -461,6 +472,8 @@ The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/re
   - Settle: a live session with GM `#set flymode` and buffs, or a trace of the cache flag's writers.
 
 - **Animated zone objects** (docs/formats/wld.md "Placed-object animation", docs/mechanics.md "Animated zone objects").
+  - The jungle leaf correction follows the server collision maps. An original-client traversal of the same foliage
+    has yet to be recorded. The generic WLD polygon sweep reads the authored solid flags.
   - Phase: each definition's controller starts with the zone's load here; the original's starts when its first actor
     is made, also at the zone's load. The gap between the original's object creation and its first frame was not
     measured, so the phase may differ by that much.
@@ -539,11 +552,6 @@ The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/re
     Zoning while in combat leaves the crossed swords up until the next OP_RestState, if EQEmu sends none at zone-in.
   - Settle: whether the original clears +0x31bc elsewhere on zoning (the PcClient constructor or the zone-in path), or a
     capture of zoning while in combat against stock EQEmu.
-- **Slam under an illusion.**
-  - Now: granted for every race whose innate table has it (Barbarian, Troll, Ogre and their citizen models 90, 92, 93).
-  - EQEmu bypasses the Bash skill check only for races 2, 9 and 10, so under a 90 / 92 / 93 illusion a class without
-    Bash sends a Slam the server drops.
-  - Settle: trying it on a server, or a server change that adds those races.
 - **Leadership purchase costs.**
   - Now: RoF2's native progression (constructor `0x55d8e0`, next-cost getter `0x561750`): group Mark NPC costs 3/4/5,
     raid Delegate Main Assist (index 19) costs 6/7/8. Legacy EQEmu `zone/aa.h` charges 1/2/3 at index 0 and 6/6/6 at index 19.
@@ -608,6 +616,11 @@ The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/re
   - Alpha test: whether particles pass it (ALPHAREF 1, compare function not set by the particle render state) is
     not known; none is done.
   - The animation-started entries' timing is an approximation (docs/formats/particles.md).
+- **Spell, effect and nimbus emitters of a spawn that leaves** (`app/spell_particles.cpp` stop_gone_actors). The
+  client stops every emitter (but a missile's) hanging from a spawn that despawned, or whose id came back as another
+  spawn, and drops its OP_SpellEffect timer entries, so nothing freezes in place or moves to the new spawn. What the
+  original does with a deleted actor's spell emitters and timer entries was not traced; settle by reading
+  the actor's teardown and SpellEffectTimers_Update's spawn lookup.
 - **CalcTickHPChange's PvP scaling** (75% / 70% of a loss).
   - The original asks that the caster spawn's +0x2cc be set and its type be 0.
   - Now: any player caster counts (as CacheBuffSlotEffects reads it, without +0x2cc). If +0x2cc is set only for the
@@ -833,6 +846,9 @@ The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/re
   - **Open work:** the Alt modifier on MKPW_DetailsIcon's right click; 0x5f8920 → 0x5f84c0 after a wallet or result
     (may send 0x7679); what the Results OK click's 0x88e060(1) does; the tree's starting state of a new branch (only the
     toggle of "All Items" was read).
+  - **Catalog size.** Whether MarketplaceItemList::Parse (0x7f90e0) limits the count of a catalog (0x1e9f) is not
+    read. Now: a count over 10,000 refuses the catalog (Hailstone's limit against a flood of near-empty entries).
+    Settle: the parse loop's bound in the disassembly, or the largest catalog a server sends.
   - **Shelf on reset.** The original's ResetView, SyncShelfToSelection and NavigateToEntry set the shelf to array[1]
     ("Player Studio") while they highlight "All Items". This client uses "All Items" (a deliberate difference, docs/mechanics.md).
 - **Merchant sell price for a unit price outside int32** (a tiny, negative or NaN rate). `game::sell_value` gives
@@ -947,6 +963,11 @@ The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/re
   (item definition +0x570) of the primary (slot 7) or secondary (slot 8) item. Which serialised item field fills
   +0x570 is not traced, so Hailstone sends 0 (stock EQEmu also sends 0 for the spawn's tint indexes). Tracing the
   item unserialiser's write to +0x570 would settle it.
+
+- **DoItemSlot's animation 9.** `PlayerClient::DoItemSlot` @0x593680 sets no held model after a move through the
+  primary or secondary slot while the local player's `Animation` (+0x10c0) is 9. Which animation 9 is (a sequence
+  code, or a state the field also holds) is not traced, so Hailstone always sets both hands
+  (`net::GameConnection::do_item_slot`). Tracing what writes 9 to +0x10c0 would settle it.
 
 - **ActorTagInfo.txt beyond the shield flag** (docs/formats/characters.md "ActorTagInfo.txt").
   - Unknown: what fields 3 to 10 and kind 2 mean. Their layout is known (the loader @0x7f4130 keeps field 3 as an
@@ -1462,6 +1483,16 @@ Real estate is built to the original (docs/protocol/rof2-packets.md "Real estate
 - **`/target` at an equal distance.** RoF2's GetNearestSpawnMaybe (0x5a04e0) keeps the first of equally near matches
   in its spawn list's order. Now: the lower spawn id. Settle: how the original orders its spawn list (insertion on
   OP_NewSpawn or otherwise), from PlayerManagerClient's list code.
+- **`Spell.StacksWithDiscs` is not given** (NULL). MQ reads the spell's StacksWithDiscs flag, which the client's spell
+  record does not decode: which RoF2 spells_us.txt column holds it is not confirmed (MQ names only a later client's
+  offset). Settle: the column in RoF2's EQ_Spell layout (the spell parser's write to that field).
+- **`Spell.WillLandPet` past the pet's buffs.** When the pet's buffs fill every slot from the first with no gap, the
+  answer is the next slot + 1: the pet window's slot count (MQ's `GetMaxBuffs`) is not known, so a full pet bar is not
+  noticed. Settle: the RoF2 pet window's buff count.
+
+- **`Merchant.ItemsReceived` for a merchant with nothing to sell.** MQ sets it once the merchant window's list has
+  been filled (CMerchantWnd's PurchasePageHandler::UpdateList). Here it is TRUE once the merchant is open and an item
+  of its stock has come, so a merchant with no stock stays FALSE. Settle: whether UpdateList runs for an empty stock.
 
 ## Server-specific extensions
 

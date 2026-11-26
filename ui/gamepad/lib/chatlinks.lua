@@ -75,12 +75,13 @@ local function findName(text, name, from, spans, word)
   end
 end
 
--- text with each link's name back as its tag. A link whose name is still where it went in (nothing typed before it
+-- The ranges for both highlighting and sending. A link whose name is still where it went in (nothing typed before it
 -- since) goes back there: a plain word typed earlier with the same name stays plain. Else, the links being in the order
 -- they went in, each is looked for after the one before it first (two of the same item go back in their own places),
 -- a whole word before a part of one; then anywhere. A name inside a tag already put back is passed over (a tag in a
 -- tag is a broken link).
-function M.Expand(links, text)
+local function linkSpans(links, text)
+  if #links == 0 then return end
   local spans = {} -- the names that go back as tags: { first, last, tag } in text as it is
   local placed = {}
   for k, link in ipairs(links) do
@@ -105,8 +106,23 @@ function M.Expand(links, text)
     end
     if sp then after = sp[2] + 1 end
   end
-  if #spans == 0 then return text end
+  if #spans == 0 then return end
   table.sort(spans, function(a, b) return a[1] < b[1] end)
+  return spans
+end
+
+function M.ColorSpans(links, text, color)
+  local spans = linkSpans(links, text)
+  if spans then
+    for _, sp in ipairs(spans) do sp[3] = color end
+  end
+  return spans
+end
+
+-- Text with each link's name back as its tag.
+function M.Expand(links, text)
+  local spans = linkSpans(links, text)
+  if not spans then return text end
   local out, pos = {}, 1
   for _, sp in ipairs(spans) do
     out[#out + 1] = text:sub(pos, sp[1] - 1)

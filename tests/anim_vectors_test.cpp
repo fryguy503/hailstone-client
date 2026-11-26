@@ -8,11 +8,15 @@
 
 #include <bit>
 #include <chrono>
+#include <initializer_list>
+#include <map>
 #include <string>
 
+#include "assets/character.h"
 #include "game/anim_layers.h"
 #include "game/mechanics/anim_select.h"
 #include "game/world_state.h"
+#include "game_files.h"
 #include "manual_clock.h"
 #include "vector_files.h"
 
@@ -292,18 +296,22 @@ TEST_CASE("ChooseIdleAnimation") {
 namespace {
 
 struct Model {
-    std::vector<std::string> clips;
-    bool has(std::string_view c) const {
-        for (const auto& k : clips)
-            if (k == c) return true;
-        return false;
+    explicit Model(std::initializer_list<const char*> codes) {
+        for (const char* code : codes) clips[code].frame_count = 2;
     }
+
+    std::map<std::string, hailstone::assets::AnimationClip, std::less<>> clips;
+    const hailstone::assets::AnimationClip* clip(std::string_view code) const {
+        auto it = clips.find(code);
+        return it == clips.end() ? nullptr : &it->second;
+    }
+    bool has(std::string_view code) const { return clip(code) != nullptr; }
 };
 
 hailstone::game::SpawnAnimChoice frame(hailstone::game::SpawnAnimState& st, const hailstone::game::SpawnAnimInput& in, const Model& m,
                                   bool done = false, int roll = 50) {
     return hailstone::game::choose_spawn_animation(
-        st, in, [&](std::string_view c) { return m.has(c); }, done, [roll] { return roll; });
+        st, in, [&](std::string_view c) { return m.clip(c); }, done, [roll] { return roll; });
 }
 
 } // namespace
@@ -344,6 +352,63 @@ TEST_CASE("Classic models: walk, run, backward, still") {
     c = frame(st, in, m, false, 90);
     CHECK(c.clip == "O01");
     CHECK_FALSE(c.loop);
+}
+
+TEST_CASE("Classic movement falls back from a one-frame walk or run") {
+    Model m{{"P01", "L01", "L02"}};
+    m.clips.at("P01").frame_count = 1;
+    hailstone::game::SpawnAnimState st;
+    hailstone::game::SpawnAnimInput in;
+    in.npc = true;
+    in.race = Race::Gnoll;
+    in.walk_speed = 0.46f;
+    in.now_ms = 1000;
+    CHECK(frame(st, in, m).clip == "P01");
+
+    in.velocity = {0.3f, 0.4f, 0.0f};
+    in.speed_run = 0.4f;
+    m.clips.at("L01").frame_count = 1;
+    auto walk = frame(st, in, m);
+    CHECK(walk.clip == "L02");
+    CHECK(walk.rate == doctest::Approx(1.25f));
+    CHECK(walk.loop);
+    CHECK_FALSE(walk.reverse);
+
+    in.speed_run = 0.7f;
+    auto run = frame(st, in, m);
+    CHECK(run.clip == "L02");
+    CHECK_FALSE(run.restart);
+
+    m.clips.at("L01").frame_count = 2;
+    m.clips.at("L02").frame_count = 1;
+    CHECK(frame(st, in, m).clip == "L01");
+
+    m.clips.at("L01").frame_count = 1;
+    CHECK(frame(st, in, m).clip == "P01");
+}
+
+TEST_CASE("South Karana's classic gnoll animates its patrol" * doctest::skip(!hailstone::test::game_dir())) {
+    if (!hailstone::test::game_file("southkarana_chr.s3d")) return;
+    auto library = hailstone::assets::CharacterLibrary::load(*hailstone::test::game_dir(), "southkarana");
+    const auto gnoll = library.model("GNN");
+    REQUIRE(gnoll);
+    const auto* walk = gnoll->clip("L01");
+    const auto* run = gnoll->clip("L02");
+    REQUIRE(run);
+    CHECK(run->frame_count > 1);
+
+    hailstone::game::SpawnAnimState st;
+    hailstone::game::SpawnAnimInput in;
+    in.npc = true;
+    in.race = Race::Gnoll;
+    in.walk_speed = 0.46f;
+    in.now_ms = 1000;
+    in.velocity = {0.3f, 0.4f, 0.0f};
+    in.speed_run = 0.4f;
+    auto choice = hailstone::game::choose_spawn_animation(
+        st, in, [&](std::string_view code) { return gnoll->clip(code); }, false, [] { return 50; });
+    CHECK(choice.clip == (walk && walk->frame_count > 1 ? "L01" : "L02"));
+    CHECK(choice.loop);
 }
 
 TEST_CASE("Classic models: moving in deep water swims P06 (0x25), not the C10 action") {

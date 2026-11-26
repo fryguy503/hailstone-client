@@ -128,6 +128,9 @@ void GameConnection::augment_menu_select(const Item& window_item, int socket, st
 void GameConnection::request_augment_info(std::uint32_t solvent_id, std::uint32_t window) {
     augment_info_.erase(window); // SetItem clears SolventText when the item changes
     if (state_ != ConnectionState::InZone || solvent_id == 0) return;
+    // The window waits for its answer with an empty text: the original's reply lands in an open window by its index,
+    // and here only a window that asked takes one, so the server's window ids cannot add entries.
+    augment_info_[window];
     send_zone(encode_augment_info_request(solvent_id, window));
 }
 
@@ -143,7 +146,9 @@ void GameConnection::handle_augment_info(const AppPacket& p) {
     if (!v) return;
     std::string text = v->unknown072 == game::kItemTypeSolvent ? strings_.format(13325, {})
                                                                  : strings_.format(5881, std::vector<std::string>{v->name});
-    augment_info_[v->window] = "<BR>" + text;
+    auto window = augment_info_.find(v->window);
+    if (window == augment_info_.end()) return; // no item display asked with that index
+    window->second = "<BR>" + text;
     log::info("augment info for window {}: {}", v->window, text);
 }
 

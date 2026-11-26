@@ -595,7 +595,9 @@ void GameConnection::handle_group(Op op, const AppPacket& p) {
         break;
     case Op::MobManaUpdate:
     case Op::MobEnduranceUpdate:
-        if (auto m = decode_mob_percent(p)) {
+        // Handle_OP_MobEnduranceUpdate @0x4bd350 (and the mana handler @0x4bd210) keep the value on the spawn and
+        // ignore an id with none.
+        if (auto m = decode_mob_percent(p); m && world_.spawns.contains(m->spawn_id)) {
             auto& map = op == Op::MobManaUpdate ? group_.mana_percent : group_.endurance_percent;
             map[m->spawn_id] = m->percent;
         }

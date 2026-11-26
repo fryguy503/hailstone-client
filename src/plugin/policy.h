@@ -4,13 +4,14 @@
 // (docs/plugins.md). A server without one sets no rules: everything runs with every capability. A server with one
 // always runs its own plugins and scripts (those it sent into servers/<profile>/plugins and scripts, named by their
 // SHA-256), with every capability; the player's own run only when the file allows them, with the capabilities it
-// grants. The player's own typed commands are never limited; the capabilities check what plugins and scripts do on
-// the player's behalf.
+// grants. The optional [commands] section is a server-opted extension to RoF2 behavior. It advises Hailstone's
+// slash-command dispatch for players and add-ons. The game server still owns authorization for gameplay actions.
 
 #include <cstdint>
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -90,8 +91,24 @@ private:
     std::uint32_t prev_caps_ = 0;
     std::string prev_name_;
 };
-// Whether this is the client's thread: the one that started the program (taken before main runs).
+// Whether this is the client's thread: the one that started the program (taken before main runs), or a plugin's
+// thread the client's thread is lent to for one host call (ThreadLent).
 bool on_main_thread();
+// While it lives, this thread acts as the client's: on_main_thread() is true here. For a host call from a plugin's
+// own thread while the plugin lends it the client's thread (lend_thread, native_plugins.cpp), made under the lock
+// that keeps every host call one at a time meanwhile.
+class ThreadLent {
+public:
+    ThreadLent();
+    ~ThreadLent();
+    ThreadLent(const ThreadLent&) = delete;
+    ThreadLent& operator=(const ThreadLent&) = delete;
+
+private:
+    bool prev_ = false;
+};
+// Whether a ThreadLent is live on this thread (on_main_thread() is true here, though it is not the client's own).
+bool on_lent_thread();
 
 enum class FileKind : std::uint8_t { Plugin = 1, Script = 2 };
 
@@ -142,6 +159,46 @@ bool addon_identity_matches(std::string_view identity, std::string_view source);
 bool addon_required(const AddonRules& rules, std::string_view source);
 bool addon_allowed(const AddonRules& rules, std::string_view source);
 
+enum class CommandOrigin { Stock, Extended, Addon };
+
+struct CommandCatalogEntry {
+    std::string name, description;
+    CommandOrigin origin = CommandOrigin::Stock;
+    std::vector<std::string> aliases, groups;
+    bool gm_only = false;
+};
+
+std::vector<CommandCatalogEntry> command_catalog(std::span<const std::string> registered = {});
+std::string_view command_origin_text(CommandOrigin origin);
+// The same spelling used by policy for aliases and built-in abbreviations. Unknown names are retained for add-ons.
+std::string canonical_command_name(std::string_view name);
+bool known_extended_command(std::string_view name);
+bool known_command_group(std::string_view name);
+
+inline constexpr std::size_t kCommandBlockedMessageMaxBytes = 240;
+inline constexpr std::string_view kDefaultCommandBlockedMessage = "This command has been blocked by your server administrator.";
+
+struct CommandDecision {
+    bool allowed;
+    std::string_view reason;
+    std::optional<int> minimum_status;
+};
+
+struct CommandRules {
+    bool enabled = false, default_allow = true;
+    std::vector<std::string> allow, block, allow_groups, block_groups;
+    // A malformed entry with a known spelling remains a denial until it is corrected.
+    std::map<std::string, std::optional<int>, std::less<>> gm;
+    std::string blocked_message;
+    CommandDecision decision(std::string_view name, std::optional<int> account_status = std::nullopt) const;
+    bool allowed(std::string_view name, std::optional<int> account_status = std::nullopt) const {
+        return decision(name, account_status).allowed;
+    }
+    std::string_view denial_message() const {
+        return blocked_message.empty() ? kDefaultCommandBlockedMessage : std::string_view(blocked_message);
+    }
+};
+
 // The server's rules: its hailstone.cfg, or none.
 struct Rules {
     bool configured = false; // false: no hailstone.cfg, no rules
@@ -151,6 +208,7 @@ struct Rules {
     bool provisional = false;
     std::filesystem::path dir; // servers/<profile>/ (empty: a login without one)
     bool deny_client = false; // [client] deny: stop Hailstone before it completes the first zone-in
+    int management_min_status = 200; // [management] min_status: the encounter authorizes with the account status
     // The player's own scripts and plugins: what they may do (0: they do not run).
     std::uint32_t player_script_caps = 0, player_plugin_caps = 0;
     bool player_assets = true; // false: of servers/<profile>/assets, only the server's files and textures count
@@ -160,6 +218,7 @@ struct Rules {
     int social_press_commands = 5;
     bool social_faces = true;
     bool autoskill = true; // [abilities] autoskill: the Ability Book's autoskill may run (game/ability_book.h)
+    bool map_vanilla = false; // [map] vanilla: only the map background, without marks or overlays
     bool npc_collision = true; // [movement] npc_collision: live NPCs stop the player (game/npc_collision.h)
     // [movement] passable_ladders: walking into a ladder whose polygons are all passable climbs it
     // (CollisionMesh::touches_passable_ladder).
@@ -173,9 +232,10 @@ struct Rules {
     // addon_source_text writes them; the login screen offers each one the player does not have.
     std::vector<std::string> suggest_addons;
     AddonRules addons;
+    CommandRules commands;
     std::vector<ServerFile> server_files; // the server's scripts and plugins
-    // Sections that are not the client's own, for scripts (hailstone.server_rule) to read as they like: names and
-    // keys lower-cased, values as written (comments and quotes taken off).
+    // Custom and formerly custom sections for hailstone.server_rule. Case and inline comments follow the
+    // existing script lookup behavior.
     std::map<std::string, std::map<std::string, std::string>> script_sections;
 };
 

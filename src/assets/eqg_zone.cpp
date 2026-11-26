@@ -643,11 +643,15 @@ void load_heightmap(Zone& zone, const Source& src, std::span<const std::byte> zo
     for (std::size_t t = 0; t < map.tiles.size(); ++t)
         if (!map.tiles[t].layers.empty()) painted.emplace(std::pair{map.tiles[t].lng, map.tiles[t].lat}, t);
     std::size_t unpainted = 0;
+    // Cells the fill may look up in all: a shipped zone needs a few (scorchedwoods one tile, ring 1), while a DAT of
+    // millions of unpainted tiles far from paint would cost some thousand lookups each. Past it, the rest are holes,
+    // as in the original.
+    std::uint64_t fill_budget = std::uint64_t{16} << 20;
     for (std::size_t t = 0; t < map.tiles.size(); ++t) {
         const auto& tile = map.tiles[t];
         std::vector<eqg::HeightmapLayer> borrowed;
         if (tile.layers.empty()) {
-            if (auto near = eqg::nearest_painted_tile(tile.lng, tile.lat, painted)) {
+            if (auto near = eqg::nearest_painted_tile(tile.lng, tile.lat, painted, 16, &fill_budget)) {
                 borrowed.push_back({map.tiles[*near].layers.front().ecosystem, 0, {}});
                 ++unpainted;
                 log::debug("{}: the unpainted tile at ({}, {}) takes {}", zone.name, static_cast<float>(tile.lng) * tile_size,

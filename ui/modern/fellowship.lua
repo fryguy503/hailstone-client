@@ -6,6 +6,8 @@
 --     "Show all possible", the selected kit's description, and Refresh List.
 -- Every field, list and button uses the shared model (app/lua_ui_fellowship.cpp). The server decides membership,
 -- permissions and campsite availability; the member list scrolls through rosters of up to 64 players.
+-- Make Leader, Remove, Leave, End Fellowship and Destroy Camp ask first: the shared model's own question, naming the
+-- member, in the confirmation dialog. The buttons ask nothing of their own, or they would ask twice.
 local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")

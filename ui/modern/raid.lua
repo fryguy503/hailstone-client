@@ -395,6 +395,13 @@ local function leaderStrip(s)
   ui.SetCursorScreenPos(x, y + h + 6 * s)
 end
 
+-- Leave and Make Leader ask first (as the gamepad pack's), Make Leader naming the selected member (the raid target
+-- it hands the lead to): the question goes when another member is selected.
+local leaderName = ""
+local ASK_LEAVE = function() return "Leave the raid?" end
+local ASK_LEADER = function()
+  return "Make " .. (leaderName ~= "" and leaderName or "the selected member") .. " the raid leader?"
+end
 local ACTIONS = {
   { "RAID_MemberActionsButton", "Member actions", { tooltip = "Open the selected member's actions; right-clicking a member opens the same menu" } },
   { "RAID_InviteExpedButton", "Invite Expedition", { tooltip = "Invite expedition members who are missing from this raid" } },
@@ -402,14 +409,14 @@ local ACTIONS = {
   { "RAID_InviteButton", "Invite", { primary = true, tooltip = "Invite your target to the raid" } },
   { "RAID_OptionsButton", "Options", { tooltip = "The raid's loot type, looters and class colours" } },
   { "RAID_DumpButton", "Dump", { tooltip = "Write the raid roster with its notes to a file" } },
-  { "RAID_DisbandButton", "Leave", { danger = true, tooltip = "Leave the raid" } },
+  { "RAID_DisbandButton", "Leave", { danger = true, tooltip = "Leave the raid", ask = ASK_LEAVE } },
 }
 -- Context menus can be switched off globally. Keep the member controls usable in that mode.
 local DIRECT_ACTIONS = {
   { "RAID_MainAssistButton", "Main Assist", { tooltip = "Delegate raid main assist to the selected member" } },
   { "RAID_MarkNPCButton", "Mark NPC", { tooltip = "Delegate raid target marking to the selected member" } },
   { "RAID_FindPCButton", "Find PC", { tooltip = "Find a path to the selected raid member" } },
-  { "RAID_MakeLeaderButton", "Make Leader", { tooltip = "Hand the raid lead to your target" } },
+  { "RAID_MakeLeaderButton", "Make Leader", { tooltip = "Hand the raid lead to your target", ask = ASK_LEADER } },
   { "RAID_RemoveLeaderButton", "Remove Leader", { tooltip = "Remove the selected member's group leadership" } },
   { "RAID_AddLooterButton", "Add Looter", { tooltip = "Let the selected player loot (Raid Looters loot type)" } },
   { "RAID_RemoveLooterButton", "Remove Looter", { tooltip = "Take the selected player off the looters" } },
@@ -424,6 +431,7 @@ end
 local function actions(raid, s)
   local btnH = S.ButtonHeight(s)
   local sel = raid.selected
+  leaderName = sel and sel.name or ""
   if sel then
     ui.TextColored(C.muted[1], C.muted[2], C.muted[3], 1, "Selected")
     ui.SameLine()

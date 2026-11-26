@@ -235,13 +235,17 @@ int SetPluginOption(lua_State* L) {
     const char* name = luaL_checkstring(L, 2);
     lua_Integer v = lua_isboolean(L, 3) ? (lua_toboolean(L, 3) ? 1 : 0) : luaL_checkinteger(L, 3);
     if (!h.plugin_ui) return 0;
-    const std::string owner = target_owner(h, plugin);
-    if (owner.empty() || !may_reach(owner)) return 0;
-    if (auto* o = h.plugin_ui->find_option(owner, name); o && o->set) {
-        lua_Integer clamped = v < o->min ? o->min : v > o->max ? o->max : v;
-        auto set = o->set; // the call may change the list
-        set(static_cast<int>(clamped));
-    }
+    // The owner, the setter's copy and the plugin's own call inside cxx_guard: an exception the plugin's code throws
+    // becomes a Lua error here rather than crossing Lua's C frames.
+    plugin::cxx_guard(L, [&] {
+        const std::string owner = target_owner(h, plugin);
+        if (owner.empty() || !may_reach(owner)) return;
+        if (auto* o = h.plugin_ui->find_option(owner, name); o && o->set) {
+            lua_Integer clamped = v < o->min ? o->min : v > o->max ? o->max : v;
+            auto set = o->set; // the call may change the list
+            set(static_cast<int>(clamped));
+        }
+    });
     return 0;
 }
 
@@ -449,7 +453,9 @@ int PluginConsent(lua_State* L) {
 
 // ok = hs.AnswerPluginConsent(allow, serial): allow true, false, or nil (put away until the next zone-in); serial the
 // question's (hs.PluginConsent().serial). An answer to a question that is no longer the one asked (another server's,
-// or the same server's with other bytes, come up between the draw and the click) is refused: false, nothing kept.
+// or the same server's with other bytes, come up between the draw and the click) is refused: false, nothing kept. As
+// hs.AddonPolicyAction, only the interface's own files answer it: false for plugin code, for another Lua state that
+// has the hs API (not the UI pack's), and under an interface Hailstone does not ship.
 int AnswerPluginConsent(lua_State* L) {
     UiHost& h = host_of(L);
     std::optional<bool> allow;
@@ -458,10 +464,11 @@ int AnswerPluginConsent(lua_State* L) {
         allow = lua_toboolean(L, 1) != 0;
     }
     const lua_Integer serial = luaL_checkinteger(L, 2);
+    const bool pack = ui::lua::pack_code(L);
     bool asked = false;
     plugin::cxx_guard(L, [&] {
         // Only the client's own interfaces answer it (UiHost::trusted_ui); under another one the client draws it.
-        if (plugin_code() || !h.trusted_ui || !h.answer_plugin_consent || !h.plugin_consent) return;
+        if (plugin_code() || !h.trusted_ui || !pack || !h.answer_plugin_consent || !h.plugin_consent) return;
         const auto q = h.plugin_consent();
         asked = q && static_cast<lua_Integer>(q->serial) == serial;
     });

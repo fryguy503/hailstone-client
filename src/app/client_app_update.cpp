@@ -48,6 +48,7 @@ void ClientApp::start_updater() {
     n.check = "checking";
     UpdaterEnv env;
     env.install_dir = install;
+    env.data_dir = platform::data_dir();
     env.feed = update_settings_.feed.empty() ? default_update_feed() : update_settings_.feed;
     env.version = release_version();
     env.platform = std::string(update_platform());
@@ -70,16 +71,18 @@ void ClientApp::start_updater() {
 
 void ClientApp::update_updater() {
     if (!opts_.updates) return;
-    // The login screen is up: an update installed at the last quit started fine.
-    if (!update_confirmed_ && screen_ == Screen::Login) {
+    // The login screen is up: an update installed at the last quit started fine. While another Hailstone holds the
+    // install lock (a moment: it cannot install while this one runs), the next frame tries again.
+    if (!update_confirmed_ && screen_ == Screen::Login &&
+        update_started_fine(platform::install_dir(), release_version())) {
         update_confirmed_ = true;
-        update_started_fine(platform::install_dir(), release_version());
         retire_old_release_files(platform::install_dir());
     }
     if (!updater_) return;
     const UpdateStatus s = updater_->status();
     ui::UpdateNotice& n = login_view_.update;
     n.version = s.version;
+    n.seen = s.seen;
     n.notes = s.notes;
     n.error = s.error;
     n.has_package = s.has_package;
@@ -98,6 +101,7 @@ void ClientApp::update_updater() {
     case UpdateState::Idle:
     case UpdateState::Checking: n.check = "checking"; break;
     case UpdateState::UpToDate: n.check = "uptodate"; break;
+    case UpdateState::FeedBehind: n.check = "behind"; break;
     // A failed check has no version; a failed download does.
     case UpdateState::Failed: n.check = s.version.empty() ? "unknown" : "newer"; break;
     // (a skipped release is still newer than this build: the corner says so, with no buttons, as its state is "")
@@ -153,10 +157,9 @@ ClientApp::UpdateExit ClientApp::update_exit() {
 void finish_update_at_exit(bool restart) {
     const std::filesystem::path install = platform::install_dir();
     const InstallResult r = install_staged_update(install, release_version());
-    if (!r.ok) {
-        log::warn("Update: not installed: {}", r.error);
-        return;
-    }
+    // A player who pressed Restart gets a window back even when the update could not go in (another Hailstone runs
+    // from the folder, say): this version again, with the update still staged.
+    if (!r.ok) log::warn("Update: not installed: {}", r.error);
     if (restart) start_installed_client();
 }
 

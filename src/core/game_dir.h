@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -131,6 +132,12 @@ private:
     std::shared_ptr<const Index> index_; // the merged view, never null
 };
 
-std::optional<std::vector<std::byte>> read_file(const std::filesystem::path& path);
+// No game file comes near this; a whole archive can be larger than one member (PfsArchive's kMaxMemberSize).
+inline constexpr std::uint64_t kMaxReadFileSize = std::uint64_t{1} << 30;
+
+// The whole of a regular file, or nullopt when it cannot be read, is not a regular file (a directory, a FIFO) or
+// is larger than max_size.
+std::optional<std::vector<std::byte>> read_file(const std::filesystem::path& path,
+                                                std::uint64_t max_size = kMaxReadFileSize);
 
 } // namespace hailstone

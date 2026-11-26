@@ -12,6 +12,7 @@
 #include "app/lua_ui_windows.h"
 #include "core/byte_io.h"
 #include "mock_server/harness.h"
+#include "mq_test_world.h"
 #include "net/real_estate_packets.h"
 
 using namespace hailstone;
@@ -233,6 +234,55 @@ TEST_CASE("real estate windows: the plot window's purchase, the manage window's 
             CHECK(r.le<std::uint32_t>() == 2);
             CHECK(r.le<std::uint32_t>() == 9);
         }
+    }
+    ImGui::DestroyContext(ctx);
+}
+
+// Transfer asks first, naming the target (dialog 0x65, eqstr 7635); its Yes goes to that player only. Hailstone: a
+// target changed while the question was up gets nothing (the original reads the target at the Yes).
+TEST_CASE("real estate windows: Transfer goes only to the player the question named") {
+    ImGuiContext* ctx = ImGui::CreateContext();
+    {
+        Ui ui;
+        auto& rig = ui.rig;
+        auto& server = rig.server;
+        REQUIRE(rig.to_zone());
+        ReCatalog catalog;
+        catalog.definitions = {def(10, ReType::Neighborhood), def(20, ReType::Plot, 7)};
+        server.zone.send_reliable(encode(catalog));
+        ReRecord owned = rec(2, 1, 20);
+        owned.owner = rig.conn.character_name();
+        server.zone.send_reliable(encode_re_record(kOpReRecord, rec(1, game::kReNone, 10, {2})));
+        server.zone.send_reliable(encode_re_record(kOpReSetCurrent, owned));
+        REQUIRE(rig.until([&] { return rig.conn.real_estate().occupancy().current == 2; }));
+        auto& world = GameConnectionTestAccess::world(rig.conn);
+        for (std::uint32_t id : {501u, 502u}) {
+            game::Spawn pc;
+            pc.id = id;
+            pc.name = id == 501 ? "Anna" : "Bert";
+            world.spawns[id] = pc;
+        }
+        ++world.spawn_set_serial;
+        auto transfer = [&](std::uint32_t asked, std::uint32_t answered) {
+            world.target_id = asked;
+            REQUIRE(rig.conn.re_can_transfer(false));
+            REQUIRE(ui.api.click_child("RealEstateManageWnd", "TransferButton"));
+            REQUIRE(ui.host.confirm);
+            auto yes = std::move(ui.host.confirm->done);
+            ui.host.confirm.reset();
+            world.target_id = answered;
+            yes(true);
+        };
+        transfer(501, 502); // the target changed: nothing
+        transfer(502, 502);
+        REQUIRE(rig.until([&] { return last_sent(server.zone_log, kOpReTransfer) != nullptr; }));
+        int transfers = 0;
+        for (const auto& p : server.zone_log) transfers += p.opcode == kOpReTransfer;
+        CHECK(transfers == 1);
+        const AppPacket& p = *last_sent(server.zone_log, kOpReTransfer);
+        std::string body;
+        for (std::byte b : p.data) body.push_back(static_cast<char>(b));
+        CHECK(body.find("Bert") != std::string::npos);
     }
     ImGui::DestroyContext(ctx);
 }

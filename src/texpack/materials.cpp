@@ -15,6 +15,7 @@
 #include "core/float_chars.h"
 #include "core/game_dir.h"
 #include "core/ini_file.h"
+#include "core/zone_name.h"
 #include "platform/http_get.h"
 
 namespace hailstone::texpack {
@@ -145,6 +146,12 @@ std::optional<MaterialRules> parse_material_rules(std::string_view materials_txt
         rules.classes.push_back(std::move(c));
     }
     for (const auto& [zone, text] : zone_files) {
+        // The zone names a folder of the pack (trees.cpp write_tree: models/<zone>/): a zone short name only, so a
+        // file named "...txt" (zone "..") cannot write into the pack folder itself, or above it.
+        if (!is_zone_short_name(zone)) {
+            fail(error, zone + ".txt: not a zone's rules (<zone>.txt, the zone's short name of letters, digits and '_')");
+            return std::nullopt;
+        }
         std::map<std::string, std::array<float, 3>> colours; // the file's colour lines
         const std::size_t first_tile = rules.tiles.size();
         std::istringstream in(text);

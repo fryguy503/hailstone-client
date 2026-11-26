@@ -18,6 +18,7 @@
 
 #include "assets/pfs.h"
 #include "assets/texture_overrides.h"
+#include "core/atomic_file.h"
 #include "core/byte_io.h"
 
 namespace hailstone::texpack {
@@ -614,24 +615,20 @@ bool save_scan(const fs::path& file, const std::vector<fs::path>& archives, cons
     if (file.has_parent_path()) fs::create_directories(file.parent_path(), ec);
     std::map<fs::path, std::size_t> index;
     for (std::size_t i = 0; i < archives.size(); ++i) index[archives[i]] = i;
-    const fs::path tmp = file.string() + ".tmp";
-    {
-        std::ofstream out(tmp, std::ios::binary);
-        if (!out) return false;
-        out << kScanMagic << "\n";
-        for (const fs::path& a : archives) out << "A " << archive_stamp(a) << "\n";
-        for (const TextureInfo& t : textures) {
-            auto it = index.find(t.source_archive);
-            if (it == index.end()) continue;
-            std::string line = manifest_line(t);
-            line.pop_back();
-            line += ",\"src\":" + std::to_string(it->second) + ",\"src_name\":" + json_string(t.source_name) + "}";
-            out << "T " << line << "\n";
-        }
-        if (!out) return false;
+    std::string out;
+    out += kScanMagic;
+    out += "\n";
+    for (const fs::path& a : archives) out += "A " + archive_stamp(a) + "\n";
+    for (const TextureInfo& t : textures) {
+        auto it = index.find(t.source_archive);
+        if (it == index.end()) continue;
+        std::string line = manifest_line(t);
+        line.pop_back();
+        line += ",\"src\":" + std::to_string(it->second) + ",\"src_name\":" + json_string(t.source_name) + "}";
+        out += "T " + line + "\n";
     }
-    fs::rename(tmp, file, ec);
-    return !ec;
+    // (checked after the last flush, so a full disk never leaves a short cache in place)
+    return write_file_atomic(file, out);
 }
 
 std::optional<std::vector<TextureInfo>> load_scan(const fs::path& file, const std::vector<fs::path>& archives) {

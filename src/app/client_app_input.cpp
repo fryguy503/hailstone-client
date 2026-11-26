@@ -28,8 +28,9 @@ void ClientApp::face_target() {
 }
 
 void ClientApp::face_degrees(double degrees) {
-    // MQ's degrees are clockwise from north; EQ's heading units count counter-clockwise (game/coords.h).
-    yaw_ = game::heading_to_yaw(static_cast<float>((360.0 - degrees) * 512.0 / 360.0));
+    // MQ's degrees are clockwise from north; EQ's heading units count counter-clockwise (game/coords.h). NaN or an
+    // infinity (a script's or plugin's) leaves the facing as it is.
+    if (auto h = game::mq_degrees_to_heading(degrees)) yaw_ = game::heading_to_yaw(*h);
 }
 
 bool ClientApp::script_keypress(std::string_view command, int mode) {

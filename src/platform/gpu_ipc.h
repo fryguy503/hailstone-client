@@ -76,7 +76,9 @@ struct GpuIpcPeer {
 struct GpuIpcReply {
     std::vector<std::byte> body;
     void* borrowed_handle = nullptr;
-    // Required with borrowed_handle. Keeps the underlying export/resource alive until duplication and reply send.
+    // Required with borrowed_handle, a handle in the broker. Held (keeping the export/resource and the handle open)
+    // until the client's next request on the connection, or its end: the client duplicates the handle from the broker
+    // itself before it sends another.
     std::shared_ptr<const void> handle_owner;
 };
 

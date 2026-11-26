@@ -4,7 +4,7 @@
 // app/client_app_commands.cpp).
 
 #include <ctime>
-#include <fstream>
+#include <cstdio>
 
 #include "core/log.h"
 #include "core/server_profile.h"
@@ -14,6 +14,7 @@
 #include "game/zone_names.h"
 #include "net/game_connection.h"
 #include "net/packet_io.h"
+#include "platform/process.h"
 
 namespace hailstone::net {
 
@@ -228,16 +229,23 @@ void GameConnection::write_chat_log(const std::string& text) {
         clean += link ? link->text : tag;
         at = b + 1;
     }
-    if (!chat_log_ || !*chat_log_ || chat_log_open_path_ != chat_log_path_) {
-        // (A stream that failed is opened again: the folder may have gone, or the disk filled.)
+    if (!chat_log_ || std::ferror(chat_log_.get()) || chat_log_open_path_ != chat_log_path_) {
+        // (A file that failed is opened again: the folder may have gone, or the disk filled.)
         chat_log_.reset();
         std::error_code ec;
         std::filesystem::create_directories(chat_log_path_.parent_path(), ec);
-        chat_log_ = std::make_unique<std::ofstream>(chat_log_path_, std::ios::app | std::ios::binary);
+        chat_log_.reset(platform::open_c_file(chat_log_path_, "ab"));
         chat_log_open_path_ = chat_log_path_;
     }
+    if (!chat_log_) return;
     // Flushed each line, as the closing write was: a log parser reading the file sees the line at once.
-    if (*chat_log_) *chat_log_ << game::log_line(std::time(nullptr), clean) << std::flush;
+    const std::string line = game::log_line(std::time(nullptr), clean);
+    std::fwrite(line.data(), 1, line.size(), chat_log_.get());
+    std::fflush(chat_log_.get());
+}
+
+void GameConnection::CloseChatLog::operator()(std::FILE* f) const noexcept {
+    if (f) std::fclose(f);
 }
 
 void GameConnection::close_chat_log() {

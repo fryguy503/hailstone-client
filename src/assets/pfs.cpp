@@ -86,6 +86,19 @@ void inflate_prefix(std::span<const std::byte> in, std::span<std::byte> out) {
     inflateEnd(&z);
     if (!full) throw std::runtime_error("zlib block is shorter than its declared size");
 }
+// The buffer a read copies a mapped archive's bytes into (PfsArchive::span_at). Each thread keeps one between reads, so
+// a zone load does not fault in fresh pages for every member; one grown past kKeptScratch is let go after its read.
+constexpr std::size_t kKeptScratch = 4u << 20;
+thread_local std::vector<std::byte> t_scratch;
+struct Scratch {
+    std::vector<std::byte> bytes{std::move(t_scratch)};
+    Scratch() = default;
+    Scratch(const Scratch&) = delete;
+    Scratch& operator=(const Scratch&) = delete;
+    ~Scratch() {
+        if (bytes.capacity() <= kKeptScratch) t_scratch = std::move(bytes);
+    }
+};
 } // namespace
 
 std::uint32_t pfs_name_crc(std::string_view name) {
@@ -191,13 +204,25 @@ std::size_t PfsArchive::storage_bytes() const { return bytes().size(); }
 
 std::size_t PfsArchive::owned_bytes() const { return mapped() ? 0 : bytes().size(); }
 
+std::span<const std::byte> PfsArchive::span_at(std::uint64_t offset, std::uint64_t size,
+                                               std::vector<std::byte>& scratch) const {
+    const auto all = bytes();
+    if (offset > all.size() || size > all.size() - offset) throw std::out_of_range(label_ + ": PFS read past end");
+    const auto at = static_cast<std::size_t>(offset), n = static_cast<std::size_t>(size);
+    if (!storage_ || !storage_->mapped_file.mapped()) return all.subspan(at, n);
+    scratch.resize(n);
+    storage_->mapped_file.read(at, scratch);
+    return scratch;
+}
+
 void PfsArchive::parse_index() {
-    ByteReader r(bytes());
-    auto dir_offset = r.le<std::uint32_t>();
-    if (r.le<std::uint32_t>() != kMagic) throw std::runtime_error(label_ + ": not a PFS archive");
-    r.seek(dir_offset);
-    auto count = r.le<std::uint32_t>();
-    if (count > r.remaining() / 12) throw std::runtime_error(label_ + ": bad PFS directory count");
+    Scratch scratch;
+    ByteReader h(span_at(0, 8, scratch.bytes));
+    auto dir_offset = h.le<std::uint32_t>();
+    if (h.le<std::uint32_t>() != kMagic) throw std::runtime_error(label_ + ": not a PFS archive");
+    auto count = ByteReader(span_at(dir_offset, 4, scratch.bytes)).le<std::uint32_t>();
+    if (count > (bytes().size() - dir_offset - 4) / 12) throw std::runtime_error(label_ + ": bad PFS directory count");
+    ByteReader r(span_at(std::uint64_t{dir_offset} + 4, std::uint64_t{count} * 12, scratch.bytes));
 
     std::vector<Entry> entries(count);
     for (auto& e : entries) {
@@ -249,17 +274,19 @@ std::optional<std::vector<std::byte>> PfsArchive::read_prefix(std::string_view n
     if (e.size > kMaxMemberSize) throw std::runtime_error(label_ + ": PFS file is larger than any game file");
     // At most the member's declared size, itself capped above: `max` cannot make this allocate more.
     std::vector<std::byte> out(std::min<std::size_t>(max, e.size));
-    ByteReader r(bytes());
-    r.seek(e.offset);
+    Scratch scratch;
+    std::uint64_t at = e.offset;
     std::size_t have = 0;
     for (std::uint64_t total = 0; have < out.size();) {
-        auto deflated = r.le<std::uint32_t>();
-        auto inflated = r.le<std::uint32_t>();
+        ByteReader h(span_at(at, 8, scratch.bytes));
+        auto deflated = h.le<std::uint32_t>();
+        auto inflated = h.le<std::uint32_t>();
         if (inflated > e.size - total) throw std::runtime_error(label_ + ": PFS block overruns its file");
         if (inflated > std::uint64_t{deflated} * kMaxDeflateRatio)
             throw std::runtime_error(label_ + ": PFS block is larger than its compressed bytes can hold");
         const std::size_t n = std::min<std::size_t>(inflated, out.size() - have);
-        inflate_prefix(r.bytes(deflated), std::span<std::byte>(out).subspan(have, n));
+        inflate_prefix(span_at(at + 8, deflated, scratch.bytes), std::span<std::byte>(out).subspan(have, n));
+        at += 8 + std::uint64_t{deflated};
         have += n;
         total += inflated;
     }
@@ -271,21 +298,24 @@ std::vector<std::byte> PfsArchive::inflate_entry(const Entry& e) const {
     // as its compressed bytes back it: each block expands by at most kMaxDeflateRatio, and the blocks add up to
     // exactly the file's size.
     if (e.size > kMaxMemberSize) throw std::runtime_error(label_ + ": PFS file is larger than any game file");
-    ByteReader r(bytes());
-    r.seek(e.offset);
+    Scratch scratch;
+    std::uint64_t end = e.offset;
     for (std::uint64_t total = 0; total < e.size;) {
-        auto deflated = r.le<std::uint32_t>();
-        auto inflated = r.le<std::uint32_t>();
+        ByteReader h(span_at(end, 8, scratch.bytes));
+        auto deflated = h.le<std::uint32_t>();
+        auto inflated = h.le<std::uint32_t>();
         if (inflated > e.size - total) throw std::runtime_error(label_ + ": PFS block overruns its file");
         if (inflated > std::uint64_t{deflated} * kMaxDeflateRatio)
             throw std::runtime_error(label_ + ": PFS block is larger than its compressed bytes can hold");
-        r.skip(deflated);
+        end += 8 + std::uint64_t{deflated};
         total += inflated;
     }
+    // The member's blocks in one piece: for a mapped file a private copy of its compressed bytes, which the walk below
+    // and zlib read without meeting the mapping again.
+    ByteReader r(span_at(e.offset, end - e.offset, scratch.bytes));
     // Even within the ratio, ~4 MB of compressed junk can declare 4 GB, so memory follows the bytes zlib writes.
     std::vector<std::byte> out;
     out.reserve(std::min<std::size_t>(e.size, std::size_t{16} << 20));
-    r.seek(e.offset);
     while (out.size() < e.size) {
         auto deflated = r.le<std::uint32_t>();
         auto inflated = r.le<std::uint32_t>();

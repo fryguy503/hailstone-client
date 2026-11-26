@@ -2,7 +2,8 @@
 --   * Roster: the member list as a sortable table (click a header) with a search (name, class, rank, zone, note)
 --     and the window's Show offline / Hide alts toggles; offline members are greyed as the game colours them. The member actions
 --     under it (Invite your target, Remove, Promote, Demote, Make Leader, the Alt flag) are the window's buttons:
---     the game enables them for a selected member.
+--     the game enables them for a selected member. Promote, Demote, Make Leader and Remove ask first, naming the
+--     member (Hailstone; the gamepad pack asks the same).
 --   * Notes: every member's public note and your personal note on them (kept on this computer); selecting a member
 --     puts the notes in the fields below, Update sets each.
 --   * Information: the message of the day (who set it, and a field to set a new one when your rank may), the
@@ -63,6 +64,15 @@ local ROSTER_SEARCHED = { 1, 3, 4, 7, 8 }
 local rosterNeedle = ""
 local function rosterFilter(_, texts) return S.Matches(texts, rosterNeedle, ROSTER_SEARCHED) end
 
+-- The member actions that are asked first, naming the selected member (as the gamepad pack's): the question goes
+-- when another member is selected, so its Yes acts on the member it named.
+local selectedName = ""
+local function memberName() return selectedName ~= "" and selectedName or "the selected member" end
+local ASK_PROMOTE = function() return "Promote " .. memberName() .. "?" end
+local ASK_DEMOTE = function() return "Demote " .. memberName() .. "?" end
+local ASK_LEADER = function() return "Make " .. memberName() .. " the guild leader?" end
+local ASK_REMOVE = function() return "Remove " .. memberName() .. " from the guild?" end
+
 local function roster(s)
   local btnH = S.ButtonHeight(s)
   -- the views: a search and two toggles on one line
@@ -88,9 +98,11 @@ local function roster(s)
   end
   -- the selected member, then the actions
   local rows, _, sel = API.windows.ListInfo(WINDOW, "MemberList")
+  selectedName = ""
   if rows and sel and sel >= 0 then
     local t = API.windows.ListRow(WINDOW, "MemberList", sel)
     if t then
+      selectedName = t[1] or ""
       ui.TextColored(C.muted[1], C.muted[2], C.muted[3], 1, "Selected")
       ui.SameLine()
       ui.TextColored(C.text[1], C.text[2], C.text[3], 1, t[1] or "")
@@ -103,11 +115,13 @@ local function roster(s)
   end
   local buttons = {
     { "InviteButton", "Invite", { primary = true, tooltip = "Invite your target to the guild" } },
-    { "PromoteButton", "Promote", { tooltip = "Raise the selected member's rank" } },
-    { "DemoteButton", "Demote", { tooltip = "Lower the selected member's rank" } },
-    { "MakeLeaderButton", "Make Leader", { tooltip = "Hand the guild's leadership to the selected member" } },
+    { "PromoteButton", "Promote", { tooltip = "Raise the selected member's rank", ask = ASK_PROMOTE } },
+    { "DemoteButton", "Demote", { tooltip = "Lower the selected member's rank", ask = ASK_DEMOTE } },
+    { "MakeLeaderButton", "Make Leader", { tooltip = "Hand the guild's leadership to the selected member",
+      ask = ASK_LEADER } },
     { "AltFlagButton", "Alt", { tooltip = "Mark or unmark the selected member as an alt" } },
-    { "RemoveButton", "Remove", { danger = true, tooltip = "Remove the selected member from the guild" } },
+    { "RemoveButton", "Remove", { danger = true, tooltip = "Remove the selected member from the guild",
+      ask = ASK_REMOVE } },
     { "DumpButton", "Dump", { tooltip = "Write the roster with its notes to a file" } },
   }
   if wide then

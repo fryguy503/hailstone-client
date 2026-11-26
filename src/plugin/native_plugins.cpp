@@ -10,6 +10,7 @@
 #include <format>
 #include <fstream>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -38,6 +39,7 @@
 #include "game/item_links.h"
 #include "game/merchant.h"
 #include "game/server_ext_chain.h"
+#include "game/slash_commands.h"
 #include "game/spa_ids.h"
 #include "game/spell_effect_text.h"
 #include "game/spells.h"
@@ -79,35 +81,58 @@ static_assert(sizeof(HailstoneWorldFrame) == 136 && offsetof(HailstoneWorldFrame
 static_assert(sizeof(HailstoneWorldAnchor) == 32 && sizeof(HailstoneWorldVertex) == 28);
 static_assert(sizeof(HailstoneWorldSurfacePatch) == 64 && sizeof(HailstoneWorldSurfacePatchResult) == 576 &&
               offsetof(HailstoneWorldSurfacePatchResult, region_xy) == 64);
-static_assert(sizeof(HailstoneWorldReceipt) == 48);
+static_assert(sizeof(HailstoneWorldReceipt) == 48 && sizeof(HailstoneWorldPlacement) == 28);
 static_assert(sizeof(void*) != 8 || (sizeof(HailstoneWorldSubmission) == 56 && offsetof(HailstoneWorldSubmission, vertices) == 40));
 static_assert(sizeof(void*) != 8 || (sizeof(HailstoneUiContribution) == 56 && offsetof(HailstoneUiContribution, command) == 48));
 
 #if defined(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256) || defined(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256) || \
-    defined(HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256)
-// Published preview binaries added popup services after different canonical ABI 3 prefixes.
-// Give only a matched binary its frozen view, with its own table size and no colliding canonical slots.
+    defined(HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256) || defined(HAILSTONE_LEGACY_POPUP_SPELL_PLUGIN_SHA256) || \
+    defined(HAILSTONE_LEGACY_PLACEMENT_PLUGIN_SHA256)
+// Published preview binaries appended different extensions to canonical SDK prefixes.
+// Matched binaries read the frozen view using their own C ABI table type.
+template <typename Legacy>
+void populate_legacy_prefix(Legacy& legacy, const PluginHostApi& table, std::uint32_t abi) {
+    std::memcpy(legacy.prefix.data(), &table, legacy.prefix.size());
+    const std::uint32_t size = sizeof(legacy);
+    std::memcpy(legacy.prefix.data() + offsetof(PluginHostApi, abi), &abi, sizeof(abi));
+    std::memcpy(legacy.prefix.data() + offsetof(PluginHostApi, size), &size, sizeof(size));
+}
+
 template <std::size_t PrefixSize>
 struct LegacyPopupHostApi {
     alignas(PluginHostApi) std::array<std::byte, PrefixSize> prefix;
     decltype(PluginHostApi::get_large_dialog) get_large_dialog;
     decltype(PluginHostApi::answer_large_dialog) answer_large_dialog;
 
-    const PluginHostApi* populate(const PluginHostApi& table) {
-        std::memcpy(prefix.data(), &table, prefix.size());
-        constexpr std::uint32_t abi = 3;
-        const std::uint32_t size = sizeof(*this);
-        std::memcpy(prefix.data() + offsetof(PluginHostApi, abi), &abi, sizeof(abi));
-        std::memcpy(prefix.data() + offsetof(PluginHostApi, size), &size, sizeof(size));
+    const PluginHostApi* populate(const PluginHostApi& table, std::uint32_t abi) {
+        populate_legacy_prefix(*this, table, abi);
         get_large_dialog = table.get_large_dialog;
         answer_large_dialog = table.answer_large_dialog;
-        // Passed across the C ABI, where the plugin reads its own table type.
         return reinterpret_cast<const PluginHostApi*>(this);
     }
 };
 using LegacyPopupBeforeNameplates = LegacyPopupHostApi<offsetof(PluginHostApi, nameplate_register)>;
 using LegacyPopupAfterUi = LegacyPopupHostApi<offsetof(PluginHostApi, get_spells_by_name_data_bulk)>;
 using LegacyPopupAfterBulk = LegacyPopupHostApi<offsetof(PluginHostApi, spell_id_limit)>;
+using LegacyPopupAfterSpellIds = LegacyPopupHostApi<offsetof(PluginHostApi, command_exists)>;
+
+struct LegacyPlacementAfterSpellIds {
+    alignas(PluginHostApi) std::array<std::byte, offsetof(PluginHostApi, command_exists)> prefix;
+    decltype(PluginHostApi::world_placement_start) world_placement_start;
+    decltype(PluginHostApi::world_placement_get) world_placement_get;
+    decltype(PluginHostApi::world_placement_cancel) world_placement_cancel;
+
+    const PluginHostApi* populate(const PluginHostApi& table,
+                                  decltype(PluginHostApi::world_capabilities) capabilities) {
+        populate_legacy_prefix(*this, table, 4);
+        std::memcpy(prefix.data() + offsetof(PluginHostApi, world_capabilities), &capabilities, sizeof(capabilities));
+        world_placement_start = table.world_placement_start;
+        world_placement_get = table.world_placement_get;
+        world_placement_cancel = table.world_placement_cancel;
+        return reinterpret_cast<const PluginHostApi*>(this);
+    }
+};
+
 static_assert(offsetof(PluginHostApi, set_class_name) == 848 && offsetof(PluginHostApi, nameplate_register) == 856);
 static_assert(offsetof(LegacyPopupBeforeNameplates, get_large_dialog) == 856 &&
               offsetof(LegacyPopupBeforeNameplates, answer_large_dialog) == 864 &&
@@ -118,6 +143,12 @@ static_assert(offsetof(LegacyPopupAfterUi, get_large_dialog) == 920 &&
 static_assert(offsetof(PluginHostApi, release_bulk_buffer) == 936);
 static_assert(offsetof(LegacyPopupAfterBulk, get_large_dialog) == 944 &&
               offsetof(LegacyPopupAfterBulk, answer_large_dialog) == 952 && sizeof(LegacyPopupAfterBulk) == 960);
+static_assert(offsetof(LegacyPopupAfterSpellIds, get_large_dialog) == 960 &&
+              offsetof(LegacyPopupAfterSpellIds, answer_large_dialog) == 968 && sizeof(LegacyPopupAfterSpellIds) == 976);
+static_assert(offsetof(LegacyPlacementAfterSpellIds, world_placement_start) == 960 &&
+              offsetof(LegacyPlacementAfterSpellIds, world_placement_get) == 968 &&
+              offsetof(LegacyPlacementAfterSpellIds, world_placement_cancel) == 976 &&
+              sizeof(LegacyPlacementAfterSpellIds) == 984);
 
 bool contains_legacy_digest(std::string_view digests, const Sha256Digest& hash) {
     while (!digests.empty()) {
@@ -150,6 +181,13 @@ bool iequal(std::string_view a, std::string_view b) {
     return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
                return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
            });
+}
+
+// The subject of a plugin's zoning notices (PluginEnv::zone_notice): its name, case folded as plugins are found.
+std::string notice_subject(std::string_view name) {
+    std::string subject = "plugin:";
+    for (char c : name) subject += ascii_lower(c);
+    return subject;
 }
 
 mq::Value from_c(const HailstoneValue& v) {
@@ -205,6 +243,7 @@ struct NativePlugins::Impl {
     Hooks::Owner owner = 0;
     std::vector<std::unique_ptr<Loaded>> loaded;
     WorldGeometryHost world_geometry;
+    WorldPlacementHost world_placement;
     std::vector<Hooks::Owner> world_owners;
     std::vector<Info> failures; // the last load error by name
     std::vector<std::pair<std::string, Sha256Digest>> required; // files found at the last policy check
@@ -239,8 +278,11 @@ struct NativePlugins::Impl {
         return env.policy && env.policy->current() && env.policy->current()->configured &&
                (env.policy->server_file(FileKind::Plugin, hash) || env.policy->required_file(FileKind::Plugin, hash));
     }
-    void say(const std::string& text) const {
-        if (env.print) env.print(text, 0);
+    // `subject` names the plugin a zoning notice is about; `stop` marks one that unloads it (PluginEnv::zone_notice).
+    void say(const std::string& text, bool zone_policy = false, const std::string& subject = {},
+             bool stop = false) const {
+        if (zone_policy && env.zone_notice) env.zone_notice(text, subject, stop);
+        else if (env.print) env.print(text, 0);
     }
     void command(std::string_view args);
 
@@ -306,8 +348,10 @@ struct Loaded {
     void* lib = nullptr; // platform::load_library's
     PluginHostApi table{};
 #if defined(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256) || defined(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256) || \
-    defined(HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256)
-    std::variant<std::monostate, LegacyPopupBeforeNameplates, LegacyPopupAfterUi, LegacyPopupAfterBulk> legacy_popup_table;
+    defined(HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256) || defined(HAILSTONE_LEGACY_POPUP_SPELL_PLUGIN_SHA256) || \
+    defined(HAILSTONE_LEGACY_PLACEMENT_PLUGIN_SHA256)
+    std::variant<std::monostate, LegacyPopupBeforeNameplates, LegacyPopupAfterUi, LegacyPopupAfterBulk,
+                 LegacyPopupAfterSpellIds, LegacyPlacementAfterSpellIds> legacy_table;
 #endif
     Hooks::Owner owner = 0;
     std::vector<std::string> tlos;
@@ -343,6 +387,16 @@ struct Loaded {
     bool read_denied = false;   // ... HAILSTONE_CAP_READ (the readers)
     bool web_denied = false;    // ... HAILSTONE_CAP_WEB (web_*)
     std::atomic<bool> thread_warned{false}; // said once that it called the host from another thread
+    // write_chat / write_chat_color from one of its own threads (not a lent one): shown at the next pulse, in order,
+    // as MacroQuest's WriteChatColor posts a line from another thread to its main thread. Any of its threads may add.
+    struct QueuedChat {
+        std::string text;
+        std::uint32_t color = 0;
+        bool chat_color = false; // write_chat_color's
+    };
+    std::mutex chat_mutex;
+    std::vector<QueuedChat> queued_chat;
+    bool chat_queue_full = false; // said once that lines were dropped
     std::vector<std::string> threw_at;       // the callbacks that let an exception out (said once each)
 
     // next_spawn's walk: the zone's spawn ids in order, made again at a walk's start (after_id 0) and whenever the
@@ -360,6 +414,9 @@ struct Loaded {
     // deeper (nested) callback leaves it held, and it goes back when the callback it was acquired in returns (Busy).
     std::unique_ptr<unsigned char[]> bulk_buffer;
     int bulk_held_at = 0;
+    // The callback depth (busy) it lent the client's thread at (lend_thread), 0 while it lends nothing: the lending
+    // ends with lend_thread(0) or when that callback returns (Busy).
+    int lend_held_at = 0;
     bool unload_pending = false; // unload asked for while busy: done at the next pulse
     bool host_threw_warned = false; // (host_threw)
     bool map_policy_running = false; // get_map_policy cannot recursively invoke its caller's policy hook
@@ -392,12 +449,40 @@ struct Loaded {
     }
 };
 
+// lend_thread: the plugin lending the client's thread to its own threads, null while none does. One at a time: a
+// plugin lends from inside its callback, so the client's thread is in that plugin until it ends. While one lends,
+// every host call takes g_lend_mutex (the client's thread's own too), so they run one at a time on whatever thread.
+// Recursive: a host call from a lent thread may call into a plugin that calls the host again on that thread.
+namespace {
+std::recursive_mutex g_lend_mutex;
+std::atomic<Loaded*> g_lender{nullptr};
+// How many host calls the client's own thread is making while holding g_lend_mutex (HostThread), nested ones counted;
+// read and written on that thread alone. Inside such a call a lent thread cannot get the lock until it returns, so a
+// callback it dispatches must not wait for one (h_lend_thread refuses there).
+int g_main_locked_calls = 0;
+
+// Ends l's lending, once the host call a lent thread may be making has returned (the lock).
+void end_lending(Loaded& l) {
+    if (g_lender.load() != &l) return;
+    std::lock_guard<std::recursive_mutex> lock(g_lend_mutex);
+    g_lender.store(nullptr);
+    l.lend_held_at = 0;
+}
+} // namespace
+
 // Inside a plugin's code: its capabilities, and it stays loaded until this ends.
 struct Busy {
     explicit Busy(Loaded& l) : l_(l), scope_(l.caps, l.name) { ++l_.busy; }
     ~Busy() {
+        // While a plugin lends, a lent thread's host call may run this plugin's callbacks (their Busy) under
+        // g_lend_mutex at the same time: the counts change under it too. (A callback's return here may come while a
+        // lent call is in flight, when the lending ends with that callback.)
+        std::unique_lock<std::recursive_mutex> lock;
+        if (g_lender.load()) lock = std::unique_lock<std::recursive_mutex>(g_lend_mutex);
         // The callback its bulk buffer was acquired in has returned: the pointer is no longer the plugin's to use.
         if (--l_.busy < l_.bulk_held_at) l_.bulk_held_at = 0;
+        // ... and the one it lent the client's thread in: its threads can no longer act for it.
+        if (l_.lend_held_at && l_.busy < l_.lend_held_at) end_lending(l_);
     }
     Busy(const Busy&) = delete;
     Busy& operator=(const Busy&) = delete;
@@ -1108,6 +1193,7 @@ void h_set_active(void* h, int active) {
         if (!l.active) {
             l.world_ready = false;
             l.host->world_geometry.retire(l.owner);
+            l.host->world_placement.retire(l.owner);
             remove_nameplates(l);
             if (l.host->env.ui) l.host->env.ui->remove_contributions(l.name);
         }
@@ -1328,6 +1414,44 @@ int h_set_ui_contribution(void* h, const HailstoneUiContribution* entry) {
 int h_remove_ui_contribution(void* h, const char* id) {
     auto& l = Loaded::of(h);
     return l.host->env.ui && l.can(kCapUi | kCapExtend) && l.host->env.ui->remove_contribution_from_sdk(l.name, id);
+}
+
+// The order a typed line takes (Hooks::command before the game's table, as GameConnection's
+// parse_command_line), so the answer is what the line would run.
+int h_command_exists(void* h, const char* name) {
+    Loaded& l = Loaded::of(h);
+    if (!name) return HAILSTONE_COMMAND_NONE;
+    std::string n(name);
+    if (!n.empty() && n.front() != '/') n.insert(n.begin(), '/');
+    // "/" alone would be a prefix of every game command; a word with a space is never looked up as one.
+    if (n.size() < 2 || n.find_first_of(" \t") != std::string::npos) return HAILSTONE_COMMAND_NONE;
+    if (l.host->env.hooks->has_command(n)) return HAILSTONE_COMMAND_ADDED;
+    const net::GameConnection* c = connection_of(l);
+    if (game::find_slash_command(n, c && c->player_is_gm(), c ? &c->strings() : nullptr)) return HAILSTONE_COMMAND_GAME;
+    return HAILSTONE_COMMAND_NONE;
+}
+
+// lend_thread (sdk/hailstone_plugin.h): from inside one of l's callbacks on the client's own thread, lends that
+// thread to l's other threads until lend_thread(0) or until the callback returns (Busy). Refused on a lent thread
+// (only the client's own thread lends itself), outside a callback, and while another plugin lends it (this callback
+// runs inside that plugin's). 2 when l already lends it: the caller did not start it, so must not end it. Refused
+// too inside a host call the client's thread makes while l lends (a callback that call dispatched): that call holds
+// the lock until it returns, so the lent threads cannot call the host meanwhile and a callback waiting for them would
+// never return. This call itself is one such (main_only's HostThread), hence more than one.
+int h_lend_thread(void* h, int lend) {
+    Loaded& l = Loaded::of(h);
+    if (on_lent_thread()) return 0;
+    if (!lend) {
+        end_lending(l);
+        return 1;
+    }
+    if (l.busy == 0) return 0;
+    Loaded* const lender = g_lender.load();
+    if (lender == &l) return g_main_locked_calls > 1 ? 0 : 2;
+    if (lender) return 0;
+    l.lend_held_at = l.busy;
+    g_lender.store(&l);
+    return 1;
 }
 
 // The plugin's folder: plugins/<name>/ when its binary is there, else plugins/<name>/ beside the binary.
@@ -1704,8 +1828,18 @@ bool world_allowed(const Loaded& l) {
 
 std::uint32_t h_world_capabilities(void* h) {
     const auto& l = Loaded::of(h);
-    return world_allowed(l) && l.world_ready ? l.host->world_geometry.capabilities() : 0;
+    if (!world_allowed(l)) return 0;
+    const std::uint32_t geometry = l.world_ready ? l.host->world_geometry.capabilities() : 0;
+    return geometry | HAILSTONE_WORLD_PLACEMENT;
 }
+
+#ifdef HAILSTONE_LEGACY_PLACEMENT_PLUGIN_SHA256
+std::uint32_t h_legacy_placement_capabilities(void* h) {
+    constexpr std::uint32_t legacy_placement = 128u;
+    const auto caps = h_world_capabilities(h);
+    return (caps & ~HAILSTONE_WORLD_PLACEMENT) | ((caps & HAILSTONE_WORLD_PLACEMENT) ? legacy_placement : 0u);
+}
+#endif
 
 int h_world_floor_below(void* h, std::uint64_t frame, std::uint32_t epoch,
                          float x, float y, float z, float* out) {
@@ -1724,6 +1858,33 @@ int h_world_anchor(void* h, std::uint64_t frame, std::uint32_t epoch,
 int h_world_submit(void* h, const HailstoneWorldSubmission* submission) {
     auto& l = Loaded::of(h);
     return world_allowed(l) && l.host->world_geometry.submit(l.owner, submission) ? 1 : 0;
+}
+
+int h_world_placement_start(void* h) {
+    if (on_lent_thread()) return 0;
+    auto& l = Loaded::of(h);
+    const auto& env = l.host->env;
+    if (!world_allowed(l) || !env.world_placement_scene || !env.world_placement_input_allowed ||
+        !env.world_placement_input_allowed()) return 0;
+    const auto scene = env.world_placement_scene();
+    return scene && l.host->world_placement.start(l.owner, *scene) ? 1 : 0;
+}
+
+int h_world_placement_get(void* h, HailstoneWorldPlacement* out) {
+    if (on_lent_thread()) return 0;
+    auto& l = Loaded::of(h);
+    const auto& env = l.host->env;
+    if (!l.active || l.unload_pending || !l.can(kCapUi | kCapExtend) || !env.world_placement_scene ||
+        !out || out->size < sizeof(*out)) return 0;
+    if (!env.world_placement_input_allowed || !env.world_placement_input_allowed())
+        l.host->world_placement.cancel(l.owner);
+    return l.host->world_placement.get(l.owner, env.world_placement_scene(), out) ? 1 : 0;
+}
+
+void h_world_placement_cancel(void* h) {
+    if (on_lent_thread()) return;
+    auto& l = Loaded::of(h);
+    l.host->world_placement.cancel(l.owner);
 }
 
 int h_world_surface_patch(void* h, const HailstoneWorldSurfacePatch* query,
@@ -1945,7 +2106,11 @@ int h_get_buff_data_bulk(void* h, unsigned char* data, int32_t datamax)
                     default:                           match = false;       break;
                     }
                     if (match) { // the first counter effect only
-                        rec->counterTotal = spell->base[i];
+                        // The counters left (the effect's slot data, as MQ2Mono's SlotData and the buff window's
+                        // counter overlay), once the client knows them; until then (a zone-in list or the profile
+                        // fills no slot data) the counters the spell starts with.
+                        rec->counterTotal = buff.counters_known && i < buff.slot_data.size() ? buff.slot_data[i]
+                                                                                              : spell->base[i];
                         break;
                     }
                 }
@@ -2038,7 +2203,11 @@ int32_t h_get_buff_name_data_bulk(void* h, unsigned char* data, int32_t datamax)
                     default:                           match = false;       break;
                     }
                     if (match) { // the first counter effect only
-                        rec->counterTotal = spell->base[i];
+                        // The counters left (the effect's slot data, as MQ2Mono's SlotData and the buff window's
+                        // counter overlay), once the client knows them; until then (a zone-in list or the profile
+                        // fills no slot data) the counters the spell starts with.
+                        rec->counterTotal = buff.counters_known && i < buff.slot_data.size() ? buff.slot_data[i]
+                                                                                              : spell->base[i];
                         break;
                     }
                 }
@@ -2712,6 +2881,36 @@ void h_write_chat_color(void* h, const char* text, std::uint32_t color) {
     else if (l.host->env.print) l.host->env.print(text, 0);
 }
 
+int h_write_chat_group(void* h, const char* title, const char* const* lines, std::uint32_t count) {
+    net::GameConnection* connection = connection_of(Loaded::of(h));
+    if (!connection || !lines || count == 0 || count > net::kChatGroupMaxRows) return 0;
+
+    const auto bounded_text = [](const char* text, std::size_t max_bytes) -> std::string_view {
+        if (text) {
+            for (std::size_t size = 0; size <= max_bytes; ++size) {
+                if (text[size] == '\0') return {text, size};
+            }
+        }
+        return {};
+    };
+    const auto group_title = bounded_text(title, net::kChatGroupMaxTitleBytes);
+    if (group_title.empty()) return 0;
+    std::vector<std::string> messages;
+    messages.reserve(count);
+    for (std::uint32_t index = 0; index < count; ++index) {
+        const auto line = bounded_text(lines[index], net::kChatGroupMaxRowBytes);
+        if (line.empty()) return 0;
+        messages.emplace_back(line);
+    }
+    return connection->write_chat_group(std::string(group_title), std::move(messages)) ? 1 : 0;
+}
+
+int h_get_scripts_config_dir(void* h, char* out, std::size_t out_size) {
+    const Loaded& l = Loaded::of(h);
+    if (l.host->env.scripts_config_dir.empty()) return 0;
+    return dir_out(l.host->env.scripts_config_dir, out, out_size);
+}
+
 int h_server_config_dir(void* h, char* out, std::size_t out_size) {
     Loaded& l = Loaded::of(h);
     const Policy* policy = l.host->env.policy;
@@ -3085,11 +3284,48 @@ void host_threw(void* h) noexcept {
         }
     }
 }
+// Whether a host call may run on this thread, held for the call: the client's thread, or (lend_thread) a thread of
+// the plugin that lends it the client's thread, which then acts as the client's for the call. While a plugin lends,
+// every host call takes g_lend_mutex, so they run one at a time whichever thread makes them.
+class HostThread {
+public:
+    explicit HostThread(void* h) {
+        if (on_main_thread()) {
+            if (g_lender.load()) {
+                lock_ = std::unique_lock<std::recursive_mutex>(g_lend_mutex);
+                counted_ = !on_lent_thread(); // the client's own thread (a lent one acts as it, but is not it)
+                if (counted_) ++g_main_locked_calls;
+            }
+            ok_ = true;
+            return;
+        }
+        Loaded* l = h ? &Loaded::of(h) : nullptr;
+        if (!l || g_lender.load() != l) return;
+        lock_ = std::unique_lock<std::recursive_mutex>(g_lend_mutex);
+        if (g_lender.load() != l) return; // the lending ended while this waited
+        lent_.emplace();
+        ok_ = true;
+    }
+    ~HostThread() {
+        if (counted_) --g_main_locked_calls;
+    }
+    HostThread(const HostThread&) = delete;
+    HostThread& operator=(const HostThread&) = delete;
+    bool ok() const { return ok_; }
+
+private:
+    std::unique_lock<std::recursive_mutex> lock_; // destroyed after lent_: the thread stops acting first
+    std::optional<ThreadLent> lent_;
+    bool ok_ = false;
+    bool counted_ = false; // in g_main_locked_calls
+};
+
 template <auto F> struct MainOnly;
 template <typename R, typename... A, R (*F)(void*, A...)> struct MainOnly<F> {
     static R call(void* h, A... a) {
         try {
-            if (!on_main_thread()) {
+            HostThread thread(h);
+            if (!thread.ok()) {
                 off_thread(h);
                 if constexpr (std::is_void_v<R>) return;
                 else return R{};
@@ -3105,12 +3341,63 @@ template <typename R, typename... A, R (*F)(void*, A...)> struct MainOnly<F> {
     }
 };
 template <auto F> constexpr auto main_only = &MainOnly<F>::call;
+
+// write_chat and write_chat_color: on the client's thread (or a lent one) at once; from another of the plugin's
+// threads queued for the next pulse (show_queued_chat), as MacroQuest's WriteChatColor does, where every other host
+// function is refused there. At most kQueuedChatLines wait; past them a line is dropped and the log says so once.
+constexpr std::size_t kQueuedChatLines = 1000;
+void queue_chat(void* h, const char* text, std::uint32_t color, bool chat_color) {
+    if (!h || !text) return;
+    Loaded& l = Loaded::of(h);
+    std::lock_guard<std::mutex> lock(l.chat_mutex);
+    if (l.queued_chat.size() >= kQueuedChatLines) {
+        if (!l.chat_queue_full) {
+            l.chat_queue_full = true;
+            log::warn("plugin {}: more than {} chat lines from its own threads before a pulse; the rest dropped",
+                      l.name, kQueuedChatLines);
+        }
+        return;
+    }
+    l.queued_chat.push_back({text, color, chat_color});
+}
+template <bool ChatColor> void write_chat_entry(void* h, const char* text, std::uint32_t color) {
+    try {
+        {
+            HostThread thread(h);
+            if (thread.ok()) {
+                if constexpr (ChatColor) h_write_chat_color(h, text, color);
+                else h_write_chat(h, text, color);
+                return;
+            }
+        }
+        queue_chat(h, text, color, ChatColor);
+    } catch (...) {
+        host_threw(h);
+    }
+}
+// The lines queue_chat held, on the client's thread at a pulse.
+void show_queued_chat(Loaded& l) {
+    std::vector<Loaded::QueuedChat> lines;
+    {
+        std::lock_guard<std::mutex> lock(l.chat_mutex);
+        lines.swap(l.queued_chat);
+        l.chat_queue_full = false;
+    }
+    // As the plugin's own line, as it would be from one of its callbacks: GameConnection::chat keeps MacroQuest's
+    // colour codes only in a plugin's or script's line, and this runs from the client's pulse, outside any.
+    CallerScope scope(l.caps, l.name);
+    for (const auto& c : lines) {
+        if (c.chat_color) h_write_chat_color(&l, c.text.c_str(), c.color);
+        else h_write_chat(&l, c.text.c_str(), c.color);
+    }
+}
 // The same, for a host function whose 0 means something: off the client's thread it returns `off` instead.
 template <auto F, auto Off> struct MainOnlyOr;
 template <typename R, typename... A, R (*F)(void*, A...), auto Off> struct MainOnlyOr<F, Off> {
     static R call(void* h, A... a) {
         try {
-            if (!on_main_thread()) {
+            HostThread thread(h);
+            if (!thread.ok()) {
                 off_thread(h);
                 return static_cast<R>(Off);
             }
@@ -3180,8 +3467,9 @@ NativePlugins::NativePlugins(NativeEnv env) : impl_(std::make_unique<Impl>()) {
     Impl* m = impl_.get();
     m->owner = m->env.hooks->new_owner("plugins");
     m->env.hooks->add_command(m->owner, "/plugin", [m](std::string_view args) { m->command(args); }, kCapCommands);
-    // Unloads a plugin asked for from its own code.
+    // Shows the chat lines plugins wrote from their own threads, and unloads a plugin asked for from its own code.
     m->env.hooks->on_pulse(m->owner, [m] {
+        for (const auto& l : m->loaded) show_queued_chat(*l);
         std::vector<std::string> pending;
         for (const auto& l : m->loaded)
             if (l->unload_pending && !l->busy) pending.push_back(l->name);
@@ -3228,6 +3516,16 @@ bool NativePlugins::world_wanted() const {
     return m.world_geometry.active() || !m.world_owners.empty() ||
            std::any_of(m.loaded.begin(), m.loaded.end(), [](const auto& l) { return l->hooks.world_frame && world_allowed(*l); });
 }
+
+bool NativePlugins::world_placement_aiming() const { return impl_->world_placement.aiming(); }
+
+void NativePlugins::world_placement_update(std::optional<WorldPlacementPoint> ground, bool pressed, bool released) {
+    impl_->world_placement.update(ground, pressed, released);
+}
+
+void NativePlugins::world_placement_cancel() { impl_->world_placement.cancel(); }
+void NativePlugins::world_placement_player_cancel() { impl_->world_placement.player_cancel(); }
+void NativePlugins::world_placement_player_input() { impl_->world_placement.player_input(); }
 
 void NativePlugins::world_frame(HailstoneWorldFrame frame, WorldQueries queries) {
     auto& m = *impl_;
@@ -3354,6 +3652,7 @@ void discard(NativePlugins::Impl& m, std::unique_ptr<Loaded> l, bool shutdown) {
     l->unload_pending = true; l->active = false;
     remove_nameplates(*l);
     m.world_geometry.retire(l->owner);
+    m.world_placement.retire(l->owner);
     std::erase(m.world_owners, l->owner);
     if (shutdown && l->shutdown) guarded(*l, "ShutdownPlugin", [&] { l->shutdown(); });
     m.env.hooks->remove(l->owner);
@@ -3373,7 +3672,7 @@ bool NativePlugins::load(std::string_view name, std::string* why) {
     return load_file(name, why, caller_name().empty() ? Asker::Player : Asker::Script);
 }
 
-bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker asker) {
+bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker asker, bool zone_policy) {
     Impl& m = *impl_;
     std::string name(name_in);
     auto refuse = [&](std::string text, bool say = true) {
@@ -3479,7 +3778,7 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     p.table.caps = main_only<h_caps>;
     p.table.name = main_only<h_name>;
     p.table.log = main_only<h_log>;
-    p.table.write_chat = main_only<h_write_chat>;
+    p.table.write_chat = write_chat_entry<false>;
     p.table.do_command = main_only<h_do_command>;
     p.table.add_command = main_only<h_add_command>;
     p.table.remove_command = main_only<h_remove_command>;
@@ -3517,7 +3816,7 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     p.table.out_end = main_only<h_out_end>;
     p.table.add_option = main_only<h_add_option>;
     p.table.add_menu = main_only<h_add_menu>;
-    p.table.write_chat_color = main_only<h_write_chat_color>;
+    p.table.write_chat_color = write_chat_entry<true>;
     p.table.server_config_dir = main_only<h_server_config_dir>;
     p.table.character_config_dir = main_only<h_character_config_dir>;
     p.table.zone_name = main_only<h_zone_name>;
@@ -3596,6 +3895,13 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     p.table.release_bulk_buffer = main_only<h_release_bulk_buffer>;
     p.table.spell_id_limit = main_only<h_spell_id_limit>;
     p.table.spell_data_ready = main_only<h_spell_data_ready>;
+    p.table.command_exists = main_only<h_command_exists>;
+    p.table.lend_thread = main_only<h_lend_thread>;
+    p.table.get_scripts_config_dir = main_only<h_get_scripts_config_dir>;
+    p.table.world_placement_start = main_only<h_world_placement_start>;
+    p.table.world_placement_get = main_only<h_world_placement_get>;
+    p.table.world_placement_cancel = main_only<h_world_placement_cancel>;
+    p.table.write_chat_group = main_only<h_write_chat_group>;
     p.table.get_large_dialog = main_only<h_get_large_dialog>;
     p.table.answer_large_dialog = main_only<h_answer_large_dialog>;
     Hooks& hooks = *m.env.hooks;
@@ -3668,17 +3974,28 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     const PluginHostApi* host_table = &p.table;
 #ifdef HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256
     if (got == 3 && contains_legacy_digest(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256, hash)) {
-        host_table = p.legacy_popup_table.emplace<LegacyPopupBeforeNameplates>().populate(p.table);
+        host_table = p.legacy_table.emplace<LegacyPopupBeforeNameplates>().populate(p.table, got);
     }
 #endif
 #ifdef HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256
     if (got == 3 && contains_legacy_digest(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256, hash)) {
-        host_table = p.legacy_popup_table.emplace<LegacyPopupAfterUi>().populate(p.table);
+        host_table = p.legacy_table.emplace<LegacyPopupAfterUi>().populate(p.table, got);
     }
 #endif
 #ifdef HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256
     if (got == 3 && contains_legacy_digest(HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256, hash)) {
-        host_table = p.legacy_popup_table.emplace<LegacyPopupAfterBulk>().populate(p.table);
+        host_table = p.legacy_table.emplace<LegacyPopupAfterBulk>().populate(p.table, got);
+    }
+#endif
+#ifdef HAILSTONE_LEGACY_POPUP_SPELL_PLUGIN_SHA256
+    if (got == 4 && contains_legacy_digest(HAILSTONE_LEGACY_POPUP_SPELL_PLUGIN_SHA256, hash)) {
+        host_table = p.legacy_table.emplace<LegacyPopupAfterSpellIds>().populate(p.table, got);
+    }
+#endif
+#ifdef HAILSTONE_LEGACY_PLACEMENT_PLUGIN_SHA256
+    if (got == 4 && contains_legacy_digest(HAILSTONE_LEGACY_PLACEMENT_PLUGIN_SHA256, hash)) {
+        host_table = p.legacy_table.emplace<LegacyPlacementAfterSpellIds>()
+                         .populate(p.table, main_only<h_legacy_placement_capabilities>);
     }
 #endif
     if (!guarded(p, "hailstone_plugin_set_host", [&] {
@@ -3733,7 +4050,7 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
             return x && x->active();
         });
     }
-    m.say(std::format("[Plugin] {} loaded ({})", name, caps_text(caps)));
+    m.say(std::format("[Plugin] {} loaded ({})", name, caps_text(caps)), zone_policy, notice_subject(name));
     log::info("plugin {} loaded from {} (sha256 {}, caps {})", name, file->string(), to_hex(hash), caps_text(caps));
     return true;
 }
@@ -3748,12 +4065,13 @@ bool NativePlugins::unload(std::string_view name) {
     return unload_file(name);
 }
 
-bool NativePlugins::unload_file(std::string_view name) {
+bool NativePlugins::unload_file(std::string_view name, bool zone_policy) {
     Impl& m = *impl_;
     auto it = std::find_if(m.loaded.begin(), m.loaded.end(), [&](const auto& l) { return iequal(l->name, name); });
     if (it == m.loaded.end()) return false;
     if ((*it)->busy) { // the plugin asked from its own code: not under its feet
         (*it)->unload_pending = true;
+        m.world_placement.retire((*it)->owner);
         if (m.env.ui) m.env.ui->remove_contributions((*it)->name);
         return true;
     }
@@ -3761,7 +4079,7 @@ bool NativePlugins::unload_file(std::string_view name) {
     m.loaded.erase(it);
     const std::string gone = l->name;
     discard(m, std::move(l), true);
-    m.say("[Plugin] " + gone + " unloaded");
+    m.say("[Plugin] " + gone + " unloaded", zone_policy, notice_subject(gone), true);
     return true;
 }
 
@@ -3771,7 +4089,7 @@ void NativePlugins::unload_all() {
     for (auto it = names.rbegin(); it != names.rend(); ++it) unload_file(*it);
 }
 
-void NativePlugins::policy_changed(const std::vector<std::string>& autoload) {
+void NativePlugins::policy_changed(const std::vector<std::string>& autoload, bool zone_policy) {
     Impl& m = *impl_;
     std::vector<std::string> drop, revoked;
     for (auto& l : m.loaded) {
@@ -3793,6 +4111,7 @@ void NativePlugins::policy_changed(const std::vector<std::string>& autoload) {
         if (!l->can(kNameplateCaps)) remove_nameplates(*l);
         if (!l->can(kCapUi | kCapExtend)) {
             l->world_ready = false; m.world_geometry.retire(l->owner); std::erase(m.world_owners, l->owner);
+            m.world_placement.retire(l->owner);
         }
         // No longer allowed to extend the client: its class names go, and it is out of the chain (a plugin that
         // gains it needs a reload).
@@ -3809,8 +4128,8 @@ void NativePlugins::policy_changed(const std::vector<std::string>& autoload) {
         if (!l->can(kCapNet)) l->tcp.clear();
     }
     for (const auto& n : drop) {
-        m.say("[Plugin] " + n + ": it may not run here");
-        unload_file(n);
+        m.say("[Plugin] " + n + ": it may not run here", zone_policy, notice_subject(n), true);
+        unload_file(n, zone_policy);
     }
     for (const auto& n : revoked) {
         m.say("[Plugin] " + n + ": you no longer allow it on this server");
@@ -3845,7 +4164,7 @@ void NativePlugins::policy_changed(const std::vector<std::string>& autoload) {
         });
         bool wanted = i.server || required || all ||
                       std::any_of(autoload.begin(), autoload.end(), [&](const std::string& a) { return iequal(a, i.name); });
-        if (wanted) load_file(i.name, nullptr, Asker::Rules);
+        if (wanted) load_file(i.name, nullptr, Asker::Rules, zone_policy);
     }
 }
 

@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <chrono>
+#include <cmath>
 
 #include "app/perf_ui.h"
 #include "core/frame_sections.h"
@@ -14,6 +15,27 @@ TEST_CASE("perf: a hitch is 2.5 times the typical frame, 20 ms at least") {
     CHECK(is_hitch(20.0f, 4.0f));
     CHECK_FALSE(is_hitch(40.0f, 16.7f));
     CHECK(is_hitch(42.0f, 16.7f));
+}
+
+TEST_CASE("perf: the typical frame follows ordinary frames and starts again after a long run of hitches") {
+    HitchBaseline b;
+    CHECK_FALSE(b.add(10.0f)); // the first frame sets it
+    CHECK(b.typical_ms == doctest::Approx(10.0f));
+    CHECK_FALSE(b.add(12.0f));
+    CHECK(b.typical_ms == doctest::Approx(10.1f));
+    // A short run of hitches leaves it alone; an ordinary frame ends the run.
+    for (int i = 0; i < kHitchRunReset - 1; ++i) CHECK(b.add(50.0f));
+    CHECK(b.typical_ms == doctest::Approx(10.1f));
+    CHECK_FALSE(b.add(10.1f));
+    CHECK(b.run == 0);
+    // The frame time went up for good: after kHitchRunReset hitches in a row the slower frame is the typical one.
+    for (int i = 0; i < kHitchRunReset; ++i) CHECK(b.add(50.0f));
+    CHECK(b.typical_ms == doctest::Approx(50.0f));
+    CHECK_FALSE(b.add(50.0f));
+    // NaN and negative times are not frames.
+    CHECK_FALSE(b.add(std::nanf("")));
+    CHECK_FALSE(b.add(-1.0f));
+    CHECK(b.typical_ms == doctest::Approx(50.0f));
 }
 
 TEST_CASE("perf: a hitch's log line lists its phases longest first") {

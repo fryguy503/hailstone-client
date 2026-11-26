@@ -96,7 +96,7 @@ ui.window("Loot", function()
       refocus = (lastFocus > 0 and #items > 0) and math.min(lastFocus, #items) or 0
       lastFocus = nil
     end
-    if W.pressed("lb") and #items > 0 then API.windows.ClickChild(LOOT, "LootAllButton", "left") end
+    if W.pressed("lb") and enabled ~= false and #items > 0 then API.windows.ClickChild(LOOT, "LootAllButton", "left") end
     if W.pressed("rb") and #items > 0 then API.windows.ClickChild(LOOT, "BroadcastButton", "left") end
   end
   if W.finish() then API.windows.ClickChild(LOOT, "DoneButton", "left") end

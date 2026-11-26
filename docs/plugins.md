@@ -140,7 +140,9 @@ The packs (`ui/modern/pluginconsent.lua`, the Gamepad UI's `dialogs.lua`) use tw
   required}}}`. Title, intro and warning are worded for what is asked; `required` is true for the player's own add-on
   the server requires.
 - `hs.AnswerPluginConsent(true | false | nil, serial)`. An answer to a question since replaced (another server's,
-  other bytes) is refused (false) and nothing is kept.
+  other bytes) is refused (false) and nothing is kept. Only the interface's own files answer, as with
+  `hs.AddonPolicyAction`: plugin code, another Lua state with the hs API, and an interface Hailstone does not ship get
+  false.
 
 Both packs keep Allow and Don't allow off for a second after a question shows or changes. Plugin code gets nil.
 Without a pack window (`hs.ReplaceWindow("PluginConsent")`) the client draws its own.
@@ -183,7 +185,7 @@ close.
 | 1 | `read` | read game state: `mq.TLO`, `${...}`, `mq.parse`, `ParseMacroData`, spawn events, `ability_state`, `get_ability_data_bulk`, `get_spells_data_bulk` |
 | 2 | `commands` | run commands outside the groups below: windows, options, `/who`, other plugins' commands, `/lua`; add commands of its own (`mq.bind`, `AddCommand`). The player is told "run other commands (windows, options, /who, other plugins' commands)" |
 | 4 | `target` | change the target: `/target`, `/assist`, `/xtarget`, ... |
-| 8 | `actions` | act: `/cast`, `/disc`, `/doability`, `/useitem`, `/attack`, `/memspellset`, `/pet`, `/loot`, `/autoinventory`, `/alternateadv` (`/alt`), `/split`, `/consent`, `/guilddelete`, non-movement `/keypress`; Hailstone's own item commands `/destroy`, `/destroycursor` and `/stowcursor`, and `use_ability` |
+| 8 | `actions` | act: `/cast`, `/disc`, `/doability`, `/useitem`, `/attack`, `/memspellset`, `/pet`, `/loot`, `/autoinventory`, `/alternateadv` (`/alt`), `/split`, `/consent`, `/guilddelete`, non-movement `/keypress`; Hailstone's own item commands `/destroy`, `/destroycursor`, `/stowcursor`, `/exchange` and `/unequip`, and `use_ability` |
 | 16 | `move` | move: `/face`, movement `/keypress` (forward, jump, ...), `/follow`, `/sit`, `/stand`, `/duck`, `/camp` |
 | 32 | `chat` | speak: plain text, `/say`, `/tell`, `/g`, `/gu`, `/rs`, channels, emotes |
 | 64 | `events` | see chat lines: `mq.event`, `OnIncomingChat`, and hide them (`OnFilterChat`) |
@@ -199,7 +201,7 @@ capabilities (`src/mq/commands.cpp`).
 
 - The game's own commands are classified by their entry in the command table.
 - Hailstone's own commands need `commands`, except those that destroy or move items (`/destroy`, `/destroycursor`,
-  `/stowcursor`), which need `actions`.
+  `/stowcursor`, `/exchange`, `/unequip`), which need `actions`.
 - MQ's and plugins' commands declare what they need.
 
 ## MacroQuest Lua scripts
@@ -289,7 +291,8 @@ A script whose `events` permission the server takes away gets no more lines: tho
 - `loadfile` hands back only what it returned, and refuses a file whose values are or hold a function (`nil` and why;
   `dofile` raises it).
 - A file is at most 8 MiB. A write that would leave `mq.configDir` holding more than 1000 files or 64 MiB is refused
-  (an error).
+  (an error). The folder is counted at a script's first write and kept up to date by the writes after it; files
+  added or removed there by other means count from the next script's start.
 
 #### Modules
 
@@ -313,8 +316,16 @@ clipboard may hold a password, and what a script puts there is pasted where the 
 
 `Me`, `Target`, `Spawn[...]`, `SpawnCount[...]`, `NearestSpawn[n, ...]`, `Group`, `Zone`, `Spell[id|name]`, `Cursor`,
 `FindItem[name|=exact]`, `FindItemCount[...]`, `Pet`, `Window[name]` (`.Open`), `Plugin[name]` (`.IsLoaded`), `Time`,
-`GameTime`, `EverQuest` (`.GameState`, `.Server`), `Heading[deg]`, `Int`, `Float`, `Bool`, `String`, `Select`, `Math`,
-`If`, `Range`, `LineOfSight[...]`, `Navigation` and `Stick` (below). Compiled plugins can add more.
+`GameTime`, `EverQuest` (`.GameState`, `.Server`), `MacroQuest` (`.Path[config]`: `scripts/config/` in Hailstone's
+folder, without a trailing separator; MQ's other folder names are NULL. `.Build`: MQ's build target, 4 for Emu.
+`.BuildDate`: the day the client was built, as an int, yyyymmdd. `.Version`: Hailstone's release version. Other
+members are `EverQuest`'s, as in MQ, so `.Server` is the server's name), `Hailstone` (the same members as
+`MacroQuest`),
+`Heading[deg]`, `Int`, `Float`, `Bool`, `String`, `Select`, `Math`,
+`If`, `Range`, `LineOfSight[...]`, `Debuff` and `Debuff[pet]` (`.Count`, `.Poisoned`, `.Diseased`, `.Cursed`,
+`.Corrupted`: the counters on the player or the pet; `.Silenced`; docs/scripting-reference.md), `Navigation`, `Stick`,
+`MoveTo` and `AdvPath` (below).
+Compiled plugins can add more.
 
 The data types use MQ's member names and inheritance:
 
@@ -385,8 +396,8 @@ The server sends target buffs only to some players (stock EQEmu: GMs, Inspect Bu
 - `Target.Buff[n|name]` (a buff: `.Duration`, `.Caster`, `.ID` the slot ...), `.BuffCount`, `.BuffDuration[name]`;
 - `.MyBuff[name]` and `.MyBuffDuration[name]` (cast by the player);
 - the state a buff puts it in, by spell effect (EQEmu's spdat.h): `.Mezzed` (SPA 31), `.Charmed` (22), `.Feared`
-  (23), `.Rooted` (99), `.Snared` (3, negative), `.Slowed` (11, under 100%); `.Poisoned` (36), `.Diseased` (35),
-  `.Cursed` (116), `.Corrupted` (369), a buff with counters of that kind.
+  (23), `.Rooted` (99), `.Snared` (3, negative), `.Slowed` (11, under 100%), `.Silenced` (96); `.Poisoned` (36),
+  `.Diseased` (35), `.Cursed` (116), `.Corrupted` (369), a buff with counters of that kind.
 
 #### Spawn searches
 
@@ -435,21 +446,25 @@ Differences from MQ:
 
 Not yet:
 
-- TLOs: `Raid`, `Mercenary`, `Corpse`, `Merchant`, `Ground`, `Macro` and other MQ plugins' TLOs (`Navigation` is
-  built in: `docs/navigation.md`)
-- the `AltAbility` type (`Me.AltAbility[...]`)
+- TLOs: `Ground`, `Macro` and other MQ plugins' TLOs (`Navigation` is built in: `docs/navigation.md`; `Raid`,
+  `Mercenary`, `Corpse`, `Merchant`, `DoorTarget`, `InvSlot` and `Me.AltAbility[...]` are listed in
+  docs/scripting-reference.md)
 
 ### MQ commands
 
 `/echo`, `/target` (`id N`, `clear`, `mycorpse`, `myself`, or a spawn search; with nothing, yourself; `next` / `prev`
 walk the search's matches), `/face` (target, `id`, `heading H`, `loc y,x`,
-a search; `fast`), `/keypress <command> [hold|release]` (the game's key command names: `forward`, `jump`, `hot1_1`, ...),
-`/squelch <cmd>`, `/docommand <cmd>`, `/noparse <cmd>`, `/lua ...`, `/plugin ...`. `/nav` (MQ2Nav's commands),
-`/moveto` and `/stick` are built in (`docs/navigation.md`).
+a search; `fast`), `/mapfilter` (MacroQuest's map filters and colours), `/keypress <command> [hold|release]` (the game's
+key command names: `forward`, `jump`, `hot1_1`, ...), `/squelch <cmd>`, `/docommand <cmd>`, `/noparse <cmd>`, `/timed <deciseconds> <cmd>`, `/nomodkey`, `/shiftkey` and
+`/ctrlkey <cmd>`, `/itemnotify`, `/doortarget`, `/memspell`, `/click`, `/makemevisible`, `/removelev`, `/removeaura`,
+`/lua ...`, `/plugin ...` (docs/commands.md). `/nav` (MQ2Nav's commands), `/moveto` and `/stick` are built in (`docs/navigation.md`).
 
 `${...}` is parsed in every command line, typed or scripted, except:
 
 - `/noparse`;
+- `/timed`, whose line is parsed when it runs, as in MQ;
+- `/nomodkey`, `/shiftkey` and `/ctrlkey`, whose command is parsed once, when it runs under the keys (MQ registers
+  them unparsed);
 - the lines the client's own windows send for a button (the guild window's Go to URL, Join Channel and Update MOTD, a
   member's or friend's name): their text is what other players and the server wrote.
 
@@ -482,12 +497,22 @@ compiled plugin does. Each part needs the same capability as in a compiled plugi
 | `hs.DisplaySpellId(n)`, `hs.DisplayItemData(n)` | see "Display instances" below |
 | `right_click_item(slot [, class])`, `close_spell_book()`, `clear_spell_recovery()`, `set_window_pet(id)`, `inspect_item(id [, augments])`, `set_max_camera_distance(d)` | the client's own actions (`actions`) |
 | `chat(text [, color])`, `server_dir()`, `character_dir()`, `max_camera_distance()` | a chat line in one of the game's colours; its folders for the server and the character (see "Lua plugin folders" below) |
+| `chat_group(title, lines)` | a locally displayed, initially collapsed chat group. Uses the same permissions as `chat` |
 | `server_rule(section, key)` | a setting from a non-client section of the server's `hailstone.cfg` (`[autocombat] hunter = off`), as written; nil when absent |
 | `autoskill_list()` | the player's autoskill list in order: `{key, name, endurance, mana, target_hp_below, target_hp_above, self_hp_below, when, keep_buff}` (`read`) |
 | `alt_abilities()` | the abilities the AA window lists, in its order (by tab, then rank id); see "Alternate abilities" below (`read`) |
 | `train_aa(group)` | buys the next rank of an ability as `/alternateadv buy` does (no question), when the window's own check allows it; false, with nothing sent, otherwise. One rank a call; points and ranks change when the server answers (`actions`) |
 | `use_ability(kind, name)` | uses a skill (`"skill"`), combat ability (`"disc"`) or activated AA (`"aa"`) by name (a combat ability's also without its rank), an AA's group or a skill's number, as its hot button does; false when the player has none such (`actions`) |
 | `hold_autoskill(on)` | the Ability Book's autoskill uses nothing while held (its switch stays; the button shows "On (held)"); the hold goes when the script stops (`actions`) |
+
+#### Collapsible chat groups from Lua
+
+```lua
+local client = require('hailstone')
+client.chat_group('Inventory Check', {'Checked four bags.', 'Seven slots are free.'})
+```
+
+The title appears in the system chat window with a count. The player can expand it to read the individual rows. Pass a plain-text title of up to 80 bytes and a dense list of one to 32 nonempty strings of up to 1024 bytes each. The title and rows refuse control bytes (anything below 0x20 but a tab, 0x7f, and U+0080 to U+009F), so a group carries no MacroQuest colour codes and no item or other chat links; a call with one is refused whole. The function returns `true` for accepted input and `false` if the arguments are invalid or there is no session. Existing chat filters, hooks, and logging receive the individual messages.
 
 #### The nameplate hook
 
@@ -729,12 +754,90 @@ Callbacks:
 
 Host functions:
 
-- `WriteChatf`, `DoCommand(f)`;
+- `WriteChatf` (MacroQuest's colour codes work: "Colour codes" below), `DoCommand(f)`;
 - `AddCommand` (needs `commands`; 0 for one of the client's own commands, as `mq.bind`), `RemoveCommand`;
+- `host->command_exists(host->host, name)`: whether a typed `/name` would run, and what: `HAILSTONE_COMMAND_ADDED`
+  (a plugin's, a script's or the client's own, such as `/echo`), `HAILSTONE_COMMAND_GAME` (the game's own, which
+  takes any prefix of its names, its GM commands only for a GM) or `HAILSTONE_COMMAND_NONE`. Added commands are
+  looked up first, as a typed line is. Needs no capability. Added later in ABI 3: test
+  `HAILSTONE_HOST_HAS(host, command_exists)` first;
+- `host->lend_thread(host->host, 1 / 0)`: lends the client's thread to the plugin's own threads while its callback
+  waits for them (see **Threads** below). Added later in ABI 4: test `HAILSTONE_HOST_HAS(host, lend_thread)` first;
+- `host->get_scripts_config_dir(host->host, out, size)`: the scripts' settings folder, `scripts/config/` in
+  Hailstone's folder (`${MacroQuest.Path[config]}`, Lua's `mq.configDir`), shared by every plugin and script. Made
+  on demand and written as `config_dir` writes its folder; 0 when the client has none. Needs no capability. Added
+  later in ABI 4: test `HAILSTONE_HOST_HAS(host, get_scripts_config_dir)` first;
+- `host->world_placement_start`, `world_placement_get` and `world_placement_cancel`: a one-shot ground aim for the
+  player (needs `ui` and `extend`; see "Mouse-aimed ground placement"). Added later in ABI 4: test
+  `HAILSTONE_HOST_HAS` for all three first;
 - `ParseMacroData` (`${...}`, any TLO);
 - `AddTopLevelObject`: a TLO with members the plugin answers; refused when the name is already a TLO (as in MQ);
 - `RemoveTopLevelObject` (only the plugin's own);
 - `host->send_packet`, `host->resize_packet`, `host->config_dir`, `host->caps`, `host->imgui_context`.
+
+#### C++ plugins: the wrapper
+
+A C++ plugin may also include `sdk/hailstone_plugin.hpp` (C++20, header only, MIT). It takes any callable for a
+command or a TLO, a capturing lambda among them, as MacroQuest's `mq::AddCommand` does:
+
+```cpp
+#include "hailstone_plugin.h"
+#include "hailstone_plugin.hpp"
+HAILSTONE_PLUGIN
+
+class Bot {
+public:
+    Bot() {
+        for (std::string name : {"/follow", "/stay"})
+            commands_.add(name, [this, name](const char* args) { order(name, args); });
+    }
+private:
+    void order(const std::string& name, const char* args) { WriteChatf("%s %s", name.c_str(), args); }
+    hs::Commands commands_; // last: its commands go before what they capture
+};
+static std::unique_ptr<Bot> bot;
+
+HAILSTONE_API void InitializePlugin(void) { bot = std::make_unique<Bot>(); }
+HAILSTONE_API void ShutdownPlugin(void) { bot.reset(); hs::RemoveAllCommands(); hs::RemoveAllTopLevelObjects(); }
+```
+
+| In `hs::` | What |
+|---|---|
+| `AddCommand(name, fn)`, `RemoveCommand(name)`, `RemoveAllCommands()` | `fn(const char* args)`; adding a name the plugin has replaces it |
+| `Commands` | commands removed with their holder: a member of the object the lambdas capture |
+| `CommandExists(name)` | `command_exists`, empty on a client without it |
+| `LendThread` | `lend_thread` for a scope: lends while it lives; `ok()` false where refused or missing, and nested in a lending scope it leaves the ending to that one |
+| `AddTopLevelObject(name, fn)`, `RemoveTopLevelObject`, `RemoveAllTopLevelObjects()` | `fn(index, member, member_index, HailstoneValue& out)`, true with `out` filled; `member` is null for `${Name}` itself. Adding the plugin's own name again replaces its answer |
+| `Bool`, `Int`, `Float`, `String` | `HailstoneValue`s for a TLO's `out` (a string must live until the TLO returns) |
+| `GetPlayer()`, `GetSpawn(id)`, `NextSpawn(after_id)` | the readers with the struct's `size` filled in, as `std::optional` |
+
+Only C function pointers and `void*` cross into the client: the callables stay in the plugin, one registry per plugin
+binary, so a plugin built with the wrapper loads in any client of its ABI, whatever compiler built either. A handler
+may remove or replace itself while it runs, and the wrapper catches what a handler throws. Call it on the client's
+thread, as the rest of the host table; remove what captures an object before the object goes.
+
+#### Colour codes
+
+A line a plugin or script writes (`WriteChatf`, `write_chat`, `write_chat_color`, Lua's `print`) may colour its parts
+with MacroQuest's colour codes, as `WriteChatColor` takes them: BEL (`\a` in C, C++, C# and Lua) and what follows it.
+
+| Code | Colour |
+|---|---|
+| `\ay` `\ao` `\ag` `\au` `\ar` `\at` `\am` `\ap` `\aw` | yellow, orange, green, blue, red, teal, magenta, purple, white |
+| `\ab` | black |
+| `\a-` and one of the letters above | its dark shade (`\a-w` grey) |
+| `\a#rrggbb` | that colour (six hex digits) |
+| `\ax` | back to the colour before the last code |
+
+- The chat windows draw them as STML colours, as MacroQuest's `MQToSTML` does; the chat log, the client's log and
+  copied text get the line without them.
+- Each code but `\ax` starts a colour and `\ax` ends the last one started. Unlike MacroQuest, an `\ax` with no colour
+  started does nothing (MacroQuest's would end the line's own colour), and colours still started at the end of the
+  line end there.
+- A code for the colour already showing starts nothing, an unknown letter changes nothing, and `\a#` without six hex
+  digits changes nothing.
+- Only plugins and scripts can colour a line: in a server's message or a player's text, a BEL is taken out when the
+  line comes, before any hook sees it.
 
 #### Chat hooks
 
@@ -753,7 +856,28 @@ calling plugin.
 **Threads.** Call host functions only from inside the plugin's callbacks (`InitializePlugin`, `OnPulse`, a command,
 a hook, ...), on the client's thread: its state has no locks. From another thread a call does nothing and returns
 0 / NULL (logged once); `ability_state` returns -1 ("unknown"), since its 0 means "on reuse". Hand a worker thread's
-results over and act on them in `OnPulse`.
+results over and act on them in `OnPulse`. The one exception is chat: `write_chat` and `write_chat_color` (and so
+`WriteChatf`) from another thread queue the line, and the client shows it at the next pulse, in order, as MacroQuest's
+`WriteChatColor` does. At most 1000 lines wait per plugin; past that they are dropped (logged once), and lines still
+waiting when the plugin unloads are not shown.
+
+A plugin whose callback waits while a thread of its own does the work (a script runtime whose script thread runs
+while `OnPulse` blocks, as MQ2Mono's C# scripts do) can lend that thread the client's: `lend_thread(host, 1)` from
+inside the callback, on the client's thread. Until `lend_thread(host, 0)`, or until that callback returns, the
+plugin's threads may call host functions as the client's thread would, with the plugin's capabilities. Every host call
+then takes one lock, the client's thread's own included, so the calls run one at a time; nothing else of the client
+runs meanwhile, since the client's thread is inside the plugin. `lend_thread(host, 1)` returns 1 when it started
+lending, 2 when the plugin already lends (a nested callback: leave the ending to the one that started it), and 0 on a
+lent thread, outside a callback, or inside another plugin's lending callback. `lend_thread(host, 0)` waits for a host
+call another thread is making, then returns 1. C++ plugins can hold an `hs::LendThread` for the waiting.
+
+A host call the client's thread makes while the plugin lends (a `do_command`, a `parse`, a `write_chat` from the
+waiting callback itself) holds that lock until it returns, the callbacks it runs included: a command's handler, a TLO,
+a chat event, in this plugin or another. Such a callback must not wait for the plugin's threads, whose calls wait for
+the lock: the client would hang. `lend_thread(host, 1)` returns 0 there (an `hs::LendThread`'s `ok()` is false), not 2.
+A lent thread may call any host function, commands included. A script runtime does well to keep its threads to reads
+and hand changes to the client's thread, as E3 does (its `MainProcessor` thread queues each command for `OnPulse`),
+and to have its callbacks only queue work, never wait.
 
 **Exceptions.** A C++ plugin must not let an exception out of anything the client calls (callbacks, commands, TLOs,
 hooks, UI functions, options). The client catches what it can: the call counts as unanswered (a TLO is NULL, a hook
@@ -872,6 +996,7 @@ ABI 3, so test `HAILSTONE_HOST_HAS(host, set_class_name)` first. Lua:
   - `character_config_dir` is the character's `characters/<world>/<character>/plugin-config/<name>/` (0 before there
     is one);
   - `config_dir` stays the folder for every server;
+  - `get_scripts_config_dir` is `scripts/config/`, the folder the scripts' settings share;
   - `write_chat_color` writes a line in one of the game's chat colours, and `zone_name` gives a zone's short name.
 - **read and write packets** with the SDK's `hailstone_byte_io.h` (C++20, header only): the client's own
   `ByteReader` and `ByteWriter`.
@@ -930,10 +1055,24 @@ the client runs it.
 
 #### Spawns on the maps
 
-The game's maps (map window, minimap, zone map) show only the group, as RoF2's does. `map_spawn` is asked for every
-other spawn each time a map draws (the minimap: only inside its circle) and shows those it answers for, with a colour,
-a map layer (layer switches and height filter apply) and a label, prefilled from the con colour and name. A Lua
-plugin's `map_spawn(spawn)` answers true for the defaults, or a table with `color`, `layer` and `label`.
+The game's maps (map window, minimap, zone map) show the group by themselves. `/mapfilter` adds MQ2Map's own spawn and
+ground-object marks, colours, target overlays and custom searches; the command changes the shared C++ map presenter,
+so no UI-pack control is needed (`docs/commands.md`). `TargetPath` is Hailstone's own behaviour, not MQ2Map's (there it
+only lets a right-click on a map label reach the game's handler): it requests a silent server path
+(`OP_FindPersonRequest`) when enabled and again when the target or zone changes, once the target has stayed selected
+for half a second and at most once a second; it never turns the player or plays path sounds and chat. A shown or
+pending player Find takes ownership back and is not replaced. A server whose `[commands]` rules deny `/mapfilter`
+also switches off the saved options while the player is on it: no filter marks, lines or circles, no TargetPath
+requests and no player vanilla mode (the settings stay saved for other servers). A ground label uses its actor name
+(for example `IT63`) when the client has not received an item name; Hailstone does not invent one. `map_spawn` is still asked for every other
+spawn each time a map draws (the minimap: only inside its circle) and shows those it answers for, with a colour, a map
+layer (layer switches and height filter apply) and a label, prefilled from the con colour and name. A Lua plugin's
+`map_spawn(spawn)` answers true for the defaults, or a table with `color`, `layer` and `label`. Plugin marks are
+independent of `/mapfilter`: hiding a spawn type with `/mapfilter` does not hide a mark supplied by `map_spawn`.
+Vanilla mode is the exception: it hides every map mark and does not call `map_spawn`. A server's `map_visible` denial
+wins over both `/mapfilter` and plugin spawn marks; its spawn-only hook does not cover ground objects. `/mapfilter`'s
+marks for living NPCs (NPC, Named, custom searches) also follow the map policy as the packs' Find overlays do (see
+"Map policy").
 
 #### Activity, order and compatibility
 
@@ -954,15 +1093,36 @@ Several plugins may extend the client at once: they are asked in load order and 
 - The structs a plugin passes to be filled (`HailstonePlayer`, `HailstoneSpawn`, ..., `HailstoneWebState`) carry
   their size too. `HailstoneWebState`'s `size` is a `size_t` (as ABI 3 shipped it), the others' a `uint32_t`.
 
-The current SDK appends `get_large_dialog` and `answer_large_dialog` after the ABI 4 spell ID services. Windows x64
-builds can provide frozen ABI 3 popup tables to exact binaries by setting their SHA-256 digests. Use
+The current SDK appends `get_large_dialog` and `answer_large_dialog` after `write_chat_group`. Windows x64
+builds can provide frozen host tables to exact preview binaries by setting their SHA-256 digests. Use
 `HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256` for the layout before nameplate services,
-`HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256` for the layout after UI contributions, and
-`HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256` for the layout after bulk buffer services. Separate multiple digests
-for the same layout with semicolons.
+`HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256` for the layout after UI contributions,
+`HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256` for the ABI 3 layout after bulk buffer services, or
+`HAILSTONE_LEGACY_POPUP_SPELL_PLUGIN_SHA256` for the ABI 4 layout after the spell ID services.
+`HAILSTONE_LEGACY_PLACEMENT_PLUGIN_SHA256` supports the earlier ABI 4 placement layout and capability bit.
+Separate multiple digests for the same layout with semicolons.
 
 A C++ allocation or provider exception at an SDK entry point returns the ordinary zero/void failure result. Side
 effects completed before it are not retried or undone.
+
+#### Collapsible local chat
+
+`write_chat_group` submits one collapsed group with a title the plugin supplies. It needs a game connection
+and no capability. Call on the client's thread or on a thread using `lend_thread`. The client copies the title
+and rows during the call. Use a title of 1 to 80 bytes and 1 to 32 rows of 1 to 1024 bytes each. Pass one line
+of plain text per row: the title and rows refuse control bytes (as the Lua `chat_group`), so no colour codes or
+chat links. The function returns 1 on acceptance and 0 if the input is invalid or the service is unavailable.
+
+```c
+const char* rows[] = {"Checked four bags.", "Seven slots are free.", "One item is ready to parcel."};
+if (HAILSTONE_HOST_HAS(host, write_chat_group)) {
+    host->write_chat_group(host->host, "Inventory Check", rows, 3);
+} else {
+    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
+        host->write_chat(host->host, rows[i], 0);
+    }
+}
+```
 
 #### Extended spell IDs
 
@@ -1096,12 +1256,18 @@ slots, then the one discipline slot, always last.
   | 12 | i32 | hits left |
   | 16 | i32 | the spell's type: 0 detrimental, 1 beneficial, 2 beneficial group-only (0 for a spell not in spells_us.txt) |
   | 20 | i32 | counter type of the spell's first counter effect: -1 none, 0 disease, 1 poison, 2 curse, 3 corruption. An empty slot also has 0 here, so test the spell id before reading it as disease |
-  | 24 | i32 | that effect's base: the counters the buff starts with (MacroQuest's `Spell.CounterNumber`); 0 with no counter effect |
+  | 24 | i32 | that effect's counters left, once the client knows them; until then its base, the counters the buff starts with (MacroQuest's `Spell.CounterNumber`); 0 with no counter effect. See the note below |
   | 28 | u8 | the slot's window: 0 buff (`HAILSTONE_BUFF_SLOT_BUFF`, RoF2's slots 0 to 41), 1 song (`HAILSTONE_BUFF_SLOT_SONG`, 42 to 61), 2 discipline (`HAILSTONE_BUFF_SLOT_DISC`, the last slot, 62); 0 in an empty slot. Taken from the slot, not the spell |
 
 Tics left is the server's count less the 6 s ticks since it came (none while the buff timers are on hold). A permanent
 buff is negative, the server's count as sent, never counted down (EQEmu: -1 for duration formula 50, -4 for an aura's
-buff, formula 51, -1000 for one a script made permanent). The counters left are not included.
+buff, formula 51, -1000 for one a script made permanent).
+
+The counters left are the counter effect's slot data, as MQ2Mono reports them and the buff window's counter overlay
+draws them: a cure that spends some lowers them, and 0 means every counter is cured while the buff is still on. The
+client knows them once the spell lands on the player (it fills the slot data then, as the original client does), or
+once the server sends the buff with slot data that is not all zero (`OP_Buff`; EQEmu sends zeros, so on EQEmu it is the
+landing). A buff that came with the profile or a zone-in list has none yet, and reads its base until then.
 
 ##### `get_buff_name_data_bulk`
 
@@ -1851,9 +2017,15 @@ The pack's tables reach the plugin only as views: what a pack function it calls 
 passes its functions as arguments (its own tables handed back stay its own), and a metatable it did not set itself
 from `getmetatable`. It cannot get the pack's own `hs` or `ui` functions to act under the player's authority.
 
-Not covered: a function or table the plugin hands a pack function, or returns to the pack. The pack may keep it as it
-is (docs/todo.md). A player who copies the same files into a UI pack makes them the pack's own, with the player's
-authority.
+What the plugin hands the pack goes the other way the same: an argument to a pack function, and what its function
+returns or raises to the pack's code, reaches the pack as what it puts in a shared table does. Its own table comes as
+a view whose metamethods and functions run as the plugin (and whose `next` and `rawget` see nothing, as above); its
+function runs as the plugin. A pack that keeps either and uses it later runs none of the plugin's code under the
+player's authority. Operators the view has none of (`==` with another table, `<`, `..`, a call, `tostring`) do not
+reach the plugin's metatable. A client function that reads a table raw (`ui.PushStyleColors`) still gets the table
+behind the view.
+
+A player who copies the same files into a UI pack makes them the pack's own, with the player's authority.
 
 #### How plugins load
 
@@ -2081,6 +2253,10 @@ faces = on                ; button faces (default on)
 autoskill = on            ; the Ability Book's autoskill (default on). Off: its switch is greyed out and a
                           ; running autoskill stops
 
+[map]
+vanilla = off            ; only the map background, without labels, marks, routes or overlays (default off).
+                          ; Navigation keeps working; the minimap's ring, north marker, controls and clock stay
+
 [movement]
 npc_collision = on        ; live NPCs stop the player, who slides along them (default on, with or without this
                           ; file). Off: everyone walks through everyone, as in the original client
@@ -2100,6 +2276,20 @@ suggest = owner/repo      ; add-ons the login screen suggests to players who do 
                           ; between; docs/addons.md "Suggested add-ons"). They come with this file, so at the
                           ; first zone-in: Hailstone's add-on index is how a first-time player hears of one
 ```
+
+#### Vanilla maps
+
+`[map] vanilla = on` makes the map window, zone map and minimap show only their background lines. Labels, player and
+group marks, `/mapfilter` marks, pins, routes, paths, target overlays, plugin spawn marks and registered map overlays
+are hidden. What a UI pack or add-on draws itself with `ui.Draw*` is its own to leave out: `hs.UI.map.Vanilla()`
+says whether the maps are vanilla. The Modern pack then leaves out its markers, Find marks and zone exits, and both
+packs keep their map frames, bars, text, minimap ring, north marker, zoom controls and clocks. Map panning, Find,
+TargetPath and other navigation keep working; only their drawn lines and markers disappear.
+
+The player's `/mapfilter vanilla` setting is shared by every character and saved in `hailstone.ini`. The server rule
+locks the effective mode on without overwriting that saved choice. With no rule, or `vanilla = off`, the player's
+choice decides. A GM can switch the rule in Server Management (Client & gameplay, Vanilla maps). This is client-side and
+advisory: a modified client can ignore `hailstone.cfg`.
 
 #### Autoskill
 
@@ -2123,6 +2313,51 @@ NPC collision (`game/npc_collision.h`, docs/mechanics.md "NPC collision"; player
 mounts stay passable), climbing passable ladders and solid ladders (docs/mechanics.md "Ladders") are Hailstone's own
 rules, not the original client's. Each is on unless `[movement]` turns it off; the player has no switch. A change
 reaches players at their next login.
+
+### Command policy
+
+`[commands]` is **advisory client policy**. Stock RoF2, older Hailstone builds and modified clients can ignore it.
+Add-on APIs and UI controls that perform an action directly can still use that action. Enforce account permissions
+and gameplay restrictions on the server.
+
+The server opts into this extension by setting command rules in `hailstone.cfg`. Blocking a stock command changes
+RoF2 behavior on supporting Hailstone clients. The client checks slash commands from chat, ordinary socials and
+add-on calls, including abbreviations, aliases and nested commands. Rules also cover Hailstone extensions,
+registered add-on commands, and the `/pause` and `/timer` social directives. Blocking `/target`, for example,
+blocks regular targeting by name and extended spawn searches through that command. EQEmu handles `#` commands.
+
+```ini
+[commands]
+default = allow
+block_groups = movement_automation, command_helpers
+allow = /echo
+block = /follow, /random
+gm = /nav:200, /exampleaddon:150
+blocked_message = "This command is blocked here. Ask a GM if you need it unblocked."
+```
+
+Command names are case-insensitive. Individual rules override group rules. For a command in multiple explicit
+lists, `block` takes priority, followed by `gm` and then `allow`. A GM rule uses the minimum numeric EQEmu account
+status from 1 through 32767. Hailstone receives that status from the encounter at zone-in and requests a refresh
+every 30 seconds while GM rules are active. A GM rule denies execution if the status is unavailable or expires.
+Groups can allow or block commands, with block taking priority when groups disagree.
+
+The built-in groups are:
+
+| Group | Commands |
+|---|---|
+| `non_rof2` | Hailstone's built-in extended commands |
+| `movement_automation` | `/nav`, `/afollow`, `/moveto`, `/stick`, `/face`, `/keypress` |
+| `command_helpers` | `/docommand`, `/echo`, `/noparse`, `/squelch`, `/timed` |
+| `addon_commands` | Commands registered by add-ons |
+
+Use `default = deny` and `allow` or `allow_groups` for an allowlist. Without command rules, all commands retain
+their ordinary behavior. `blocked_message` is an optional single line up to 240 UTF-8 bytes. Use whole-value quotes
+to include semicolons or hash characters. An empty value uses the client's default notice.
+
+Run `hailstone_check --list-commands` for the built-in catalog or `hailstone_check client_files/ --commands` for
+effective rules. A GM can also review and edit them in [Server Management](../server/README.md#in-game-server-management).
+These rules depend on an up-to-date, unmodified Hailstone client.
 
 ### Opt-in add-on policies
 
@@ -2362,6 +2597,10 @@ The flags:
   target and local Bazaar traders. These guides use actor identity and action eligibility. Map and Find discovery
   permissions still govern markers and rows. `DISABLE_NPC_FIND` takes precedence over both optional values.
 - Restrictive flags combine across providers; removing them restores stock defaults, saved UI preferences untouched.
+- `/mapfilter`'s marks for living NPCs follow the same rules: none with `HIDE_STOCK_NPCS`, `DISABLE_NPC_FIND` or
+  `CUSTOM_SPAWNS`, only listed NPCs with server-only Find, and each through the `HAILSTONE_MAP_FIND` hook as well as
+  the marker hook. The current target keeps its mark, line and circles; corpses, players and ground objects are not
+  NPC Find's and stay.
 - Unaffected: PC group/raid Find, coordinates, ordinary navigation, static map labels, user pins, raw spawn getters.
 - Guides and Find walks pin connection/player/NPC identity and recheck eligibility before observing or moving.
 - Invalid hook sizes, unknown flags, unterminated names and control characters abstain.
@@ -2484,6 +2723,34 @@ SHA-256, and FNV-1a64 with bit 63 cleared.
 - Frame and epoch tokens expire, query/vertex/batch budgets are bounded, and a complete submission is copied before
   admission. Owners come from the host, never the add-on.
 - Resubmit every batch each frame. Unloading, deactivation and permission loss retire owned geometry.
+
+#### Mouse-aimed ground placement
+
+Check `HAILSTONE_WORLD_PLACEMENT` through `world_capabilities` to identify the placement SDK layout, then
+check `HAILSTONE_HOST_HAS` for `world_placement_start`, `world_placement_get` and `world_placement_cancel`.
+The host advertises the bit in the zone even without an available render frame, so a non-zero
+`world_capabilities` no longer means a geometry frame is ready: test `HAILSTONE_WORLD_GEOMETRY` for that.
+Placement calls require an
+active native add-on with `ui` and `extend` on the client's own thread because they use window focus and input.
+
+- `start` arms one interactive aim in the loaded world. The active aim belongs to one add-on.
+  To switch tools, cancel the old aim first. A failed start preserves the active aim. Starting a new
+  aim clears the same owner's unread result.
+- Initialize `HailstoneWorldPlacement::size` before calling `get`. It returns the loaded zone and instance even
+  while inactive, and either an invalid aim or a valid preview in zone-file coordinates. Use the existing
+  world geometry API to draw a preview.
+- A world press and release on valid ground confirms one position. The host consumes the gesture before
+  regular targeting, object use and click-to-move. A window, sky, or blocked surface clears the pending gesture.
+- Escape, a world right click, loss of focus and scene retirement cancel aiming. After the player's own cancel
+  (Escape or the right click), `start` returns 0 for that add-on until the player presses a mouse button over one
+  of the windows, so an add-on that arms again on its own cannot keep the world's clicks; start the aim from the
+  add-on's own button or window. `get` returns confirmation or
+  cancellation once to the owner. When the scene is unavailable, it returns zero unless returning a pending
+  cancellation with zero for the zone and instance. Deactivation, unload and permission loss discard owned state.
+- The aim resolves solid static ground the camera can see, on the drawn world (the surface `world_floor_below`
+  answers from): a tree's trunk or another drawn surface in the way leaves the aim invalid. Placed objects and
+  animated scenery block it too; players and NPCs do not. Nothing in the
+  host API sends game packets, syncs coordinates with players or records positions beyond the aim.
 
 #### The floor below
 

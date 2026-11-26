@@ -13,6 +13,7 @@
 #include "game/keymap.h"
 #include "game/option_commands.h"
 #include "game/task_window.h"
+#include "platform/binary_stdio.h"
 #include "platform/local_time.h"
 #include "mq_test_world.h"
 
@@ -385,19 +386,21 @@ TEST_CASE("option commands: the chat log keeps its file open, each line on disk 
     const std::filesystem::path raid = c.chat_log_path();
     A::chat(c, "first line");
     CHECK(read(raid).ends_with("] first line\n"));
-    std::ofstream* const stream = A::chat_log_stream(c);
+    std::FILE* const stream = A::chat_log_stream(c);
     REQUIRE(stream != nullptr);
+    CHECK_FALSE(platform::stream_inherited_by_children(stream)); // the browser helper does not hold it open
     A::chat(c, "second line");
     CHECK(A::chat_log_stream(c) == stream); // the same open file, not one per line
     std::string text = read(raid);
     CHECK(text.find("] first line\n") != std::string::npos);
     CHECK(text.ends_with("] second line\n"));
 
-    // A write that failed (a full disk, a file pulled away) leaves the stream bad: the next line opens it anew.
-    A::chat_log_stream(c)->setstate(std::ios::badbit);
+    // A write that failed (a full disk, a file pulled away) leaves the file in error: the next line opens it anew.
+    A::fail_chat_log(c);
+    REQUIRE(std::ferror(A::chat_log_stream(c)));
     A::chat(c, "after a failure");
     REQUIRE(A::chat_log_stream(c) != nullptr);
-    CHECK(A::chat_log_stream(c)->good());
+    CHECK_FALSE(std::ferror(A::chat_log_stream(c)));
     CHECK(read(raid).ends_with("] after a failure\n"));
 
     A::open_chat_log(c, "other");

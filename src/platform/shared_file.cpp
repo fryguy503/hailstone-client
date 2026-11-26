@@ -256,29 +256,32 @@ ScopedFileLock& ScopedFileLock::operator=(ScopedFileLock&& other) noexcept {
 }
 void ScopedFileLock::reset() noexcept { close_file(file_); file_ = -1; }
 
-std::optional<ScopedFileLock> ScopedFileLock::try_acquire(const std::filesystem::path& path, FileLockMode mode) {
+std::optional<ScopedFileLock> ScopedFileLock::try_acquire(const std::filesystem::path& path, FileLockMode mode,
+                                                         LockFolder folder) {
+    const bool priv = folder == LockFolder::Private;
     const auto absolute = absolute_path(path);
-    if (!absolute || !directory_chain(absolute->parent_path(), false, true)) return std::nullopt;
+    if (!absolute || !directory_chain(absolute->parent_path(), false, priv)) return std::nullopt;
     ScopedFileLock result;
 #if defined(_WIN32)
     UserSecurity user;
-    if (!user.initialize()) return std::nullopt;
+    if (priv && !user.initialize()) return std::nullopt;
     HANDLE file = ::CreateFileW(absolute->c_str(), GENERIC_READ | GENERIC_WRITE | READ_CONTROL,
-                               FILE_SHARE_READ | FILE_SHARE_WRITE, &user.attributes, OPEN_ALWAYS,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE, priv ? &user.attributes : nullptr, OPEN_ALWAYS,
                                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (file == INVALID_HANDLE_VALUE) return std::nullopt;
     result.file_ = reinterpret_cast<std::intptr_t>(file);
-    if (!regular_handle(file) || !private_handle(file, user.sid())) return std::nullopt;
+    if (!regular_handle(file) || (priv && !private_handle(file, user.sid()))) return std::nullopt;
     OVERLAPPED overlap{};
     const DWORD flags = LOCKFILE_FAIL_IMMEDIATELY | (mode == FileLockMode::Exclusive ? LOCKFILE_EXCLUSIVE_LOCK : 0);
     if (!::LockFileEx(file, flags, 0, 1, 0, &overlap)) return std::nullopt;
 #else
-    const int file = ::open(absolute->c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0600);
+    const int file =
+        ::open(absolute->c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, priv ? 0600 : 0644);
     if (file < 0) return std::nullopt;
     result.file_ = file;
     struct stat info{};
-    if (::fstat(file, &info) != 0 || !S_ISREG(info.st_mode) || info.st_uid != ::geteuid() ||
-        (info.st_mode & 0077) != 0) return std::nullopt;
+    if (::fstat(file, &info) != 0 || !S_ISREG(info.st_mode)) return std::nullopt;
+    if (priv && (info.st_uid != ::geteuid() || (info.st_mode & 0077) != 0)) return std::nullopt;
     if (::flock(file, (mode == FileLockMode::Exclusive ? LOCK_EX : LOCK_SH) | LOCK_NB) != 0) return std::nullopt;
 #endif
     return result;

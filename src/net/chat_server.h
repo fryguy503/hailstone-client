@@ -96,6 +96,13 @@ public:
         std::size_t max_pending_bytes = 256u << 10;
         std::size_t max_before_login_events = 256;
         std::size_t max_before_login_bytes = 1u << 20;
+        // Events waiting for poll() after the login. Hailstone's own: once this many are waiting, update() leaves
+        // further packets in the session's queue (bounded by SessionOptions::max_received_bytes, which ends the link)
+        // instead of decoding them, so a burst cannot grow this queue without bound and nothing accepted is dropped.
+        // A stock UCS sends one packet per mail header, so a full mailbox is the largest burst; the owner polls every
+        // frame.
+        std::size_t max_events = 4096;
+        std::size_t max_event_bytes = 4u << 20;
     };
     ChatServer();
     explicit ChatServer(Options options);
@@ -143,6 +150,7 @@ private:
     std::size_t retries_ = 0; // automatic retries since connect() or the last accepted login
     bool channels_until_disconnect_polled_ = false; // undelivered messages still need the old channel numbers
     std::deque<ChatServerEvent> events_;
+    std::size_t events_bytes_ = 0; // event_bytes() of events_
     std::deque<ChatServerEvent> before_login_; // EQEmu sends friend/ignore lists before its login reply
     std::size_t before_login_bytes_ = 0;
     std::deque<AppPacket> pending_; // commands held until the login is accepted, never across a failed attempt

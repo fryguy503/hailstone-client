@@ -56,6 +56,17 @@ ProfiledFollowStep profiled_follow_step(const FollowInput& in, const FollowProfi
     return out;
 }
 
+FollowSwimStep follow_swim_step(const FollowInput& in, bool move) {
+    // Both positions use server spawn Z, which is independent of the height of either avatar.
+    constexpr float kDepthTolerance = 1.0f;
+    const float dz = in.target_z - in.z;
+    if (!in.clear_line || !std::isfinite(dz) || std::abs(dz) <= kDepthTolerance) return {};
+    const float horizontal = move ? std::hypot(in.target_x - in.x, in.target_y - in.y) : 0.0f;
+    if (!std::isfinite(horizontal)) return {};
+    constexpr float kPitchUnits = 256.0f / 3.14159265358979323846f;
+    return {std::atan2(dz, horizontal) * kPitchUnits, !move};
+}
+
 namespace {
 
 using mechanics::Fpu;

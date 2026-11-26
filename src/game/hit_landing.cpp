@@ -445,6 +445,15 @@ hit::Hit hit_record(std::uint16_t source, std::uint16_t level, float modifier, f
     return h;
 }
 
+int buff_landing_slot(std::uint32_t spell, const HitLandingContext& ctx) {
+    if (!ctx.world || !ctx.spell_state || !ctx.world->player()) return -1;
+    HitLandingResult out;
+    Landing q(ctx, out);
+    std::int32_t slot = -1;
+    mechanics::affect::find_affect_slot(&q.self(), static_cast<std::int32_t>(spell), &q.me(), &slot, 1, ctx.level, q);
+    return slot;
+}
+
 HitLandingResult land_spell(const hit::Hit& h, const HitLandingContext& ctx) {
     HitLandingResult out;
     out.drunkenness = ctx.drunkenness;

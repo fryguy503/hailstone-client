@@ -376,6 +376,7 @@ void ClientApp::unload_zone() {
     }
     actor_library_.reset();
     if (nav_) nav_->zone_unloaded();
+    cancel_iso_clicks(); // the old zone's spawn, door or point must not be clicked in the next one
     collision_.reset();
     world_visual_collision_.reset();
     animated_objects_.reset();
@@ -555,6 +556,7 @@ void ClientApp::update_music() {
 void ClientApp::enter_zone() {
     local_body_movement_.reset();
     driven_eye_ = 0;
+    cancel_iso_clicks();
     const game::Spawn* me = conn_->world().player();
     if (!me) return;
     // AvatarHeight (+0x138): EQPlayer::SetHeights' moddat.ini ROffset (3.125 for the player races, which have
@@ -606,7 +608,7 @@ void ClientApp::enter_zone() {
     use_character_settings(files.dir); // (taken over at the entry into the world: the same, unless the name differs)
     actions_ui_->enter_zone(files.hot_buttons());
     // The character's autorun scripts (the Scripts window; the same file at each zone-in starts nothing again).
-    if (automation_) automation_->scripts().set_autorun_file(files.scripts_ini());
+    if (automation_) automation_->set_zone_autorun_file(files.scripts_ini());
     // The UI's window layout is the character's (ui-<pack>.txt), its other settings shared.
     ui_character_dir_ = files.dir;
     if (lua_ui_) lua_ui_->set_character_settings(files.ui_settings(ui_name_));

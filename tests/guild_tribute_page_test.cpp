@@ -500,7 +500,7 @@ TEST_CASE("guild rank permissions and names survive a zone change; a staged tabl
     connection.receive_zone_packet_for_test(net::encode_guild_rank_permission(5, 23, true, 9));
     CHECK(connection.received_guild_permission_context() == 9);
 
-    connection.receive_world_packet_for_test(net::encode(net::ZoneServerInfo{"127.0.0.1", 9000}));
+    net::GameConnectionTestAccess::zone_hand_off(connection, 9000);
     CHECK(connection.guild().permissions.has(5, 23));
     CHECK(connection.guild().rank_names[5] == "Officer");
     // The staged table is gone, so an untagged rank name reaches the current guild again.

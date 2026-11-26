@@ -26,6 +26,10 @@
 
 #include "game/animation_types.h"
 
+namespace hailstone::assets {
+struct AnimationClip;
+}
+
 namespace hailstone::game {
 
 // StandState (+0x35c) as SpawnAnimInput::stand_state uses it.
@@ -99,11 +103,12 @@ struct SpawnAnimChoice {
     std::int32_t column = 0; // new-style track's resolved style, after fallbacks
 };
 
-// `has_clip(code)`: the model has that clip. `clip_done`: the playing clip
+// `find_clip(code)`: the model's clip, or null if absent. `clip_done`: the playing clip
 // reached its end (a non-looping clip). `roll()`: RandomPercentRoll, 1..100;
 // `rand()`: the C rand() a new-style track's variant takes (0 when empty).
 SpawnAnimChoice choose_spawn_animation(SpawnAnimState& state, const SpawnAnimInput& in,
-                                       const std::function<bool(std::string_view)>& has_clip, bool clip_done,
+                                       const std::function<const assets::AnimationClip*(std::string_view)>& find_clip,
+                                       bool clip_done,
                                        const std::function<int()>& roll, const std::function<int()>& rand = {});
 
 // What finding a new-style track reads.

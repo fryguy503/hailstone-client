@@ -7,8 +7,37 @@
 #include "app/nameplate_input.h"
 #include "app/spawn_pick.h"
 #include "game/clicks.h"
+#include "game/swept_sphere.h"
 
 using namespace hailstone;
+
+TEST_CASE("ground placement: closest visible solid floor, with walls and props blocking farther ground") {
+    const game::PickSegment ray{{0, 0, 6}, {8, 0, -8}};
+    const game::PickTriangle floor{{0, -5, 0}, {12, -5, 0}, {6, 5, 0}, {0, 0, 1}, 0};
+    game::PickTriangle upper{{0, -5, 2}, {12, -5, 2}, {6, 5, 2}, {0, 0, 1}, 0};
+    game::PickTriangle wall{{3, -5, -2}, {3, 5, -2}, {3, 0, 10}, {-1, 0, 0}, 0};
+    game::PickScene scene;
+    scene.world = [&](const auto&, const auto& sink) { sink(floor); sink(upper); };
+
+    auto hit = game::pick_ground_placement(ray, scene);
+    REQUIRE(hit);
+    CHECK(hit->z == doctest::Approx(2));
+    upper.flags = game::kTrianglePassable;
+    CHECK_FALSE(game::pick_ground_placement(ray, scene));
+    upper.flags = game::kTriangleInvisible;
+    hit = game::pick_ground_placement(ray, scene);
+    REQUIRE(hit);
+    CHECK(hit->z == doctest::Approx(0));
+    scene.world = [&](const auto&, const auto& sink) { sink(floor); sink(wall); };
+    CHECK_FALSE(game::pick_ground_placement(ray, scene));
+    wall.flags = game::kTriangleTransparent;
+    CHECK(game::pick_ground_placement(ray, scene).has_value());
+    wall.flags = 0;
+    wall.normal = {1, 0, 0};
+    CHECK(game::pick_ground_placement(ray, scene).has_value());
+    wall.visual_two_sided = true;
+    CHECK_FALSE(game::pick_ground_placement(ray, scene));
+}
 
 namespace {
 

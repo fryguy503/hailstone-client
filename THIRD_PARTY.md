@@ -127,6 +127,9 @@ files in MacroQuest's repository.
   and `Spawn::IsNamed`, `GetSpawnType`, `GetTypeDesc` and `GetRaceIDName` follow MacroQuest's eqlib constants and
   `src/main/MQ2Utilities.cpp` almost line for line. `IsNamed` was changed in Hailstone and mixes MacroQuest's older
   and newer tests.
+- `src/game/mq_colors.h`, `mq_colors.cpp`: the chat colour codes (`\a` and a letter, its dark shade, `\a#rrggbb`,
+  `\ax`), their colours and when a colour opens follow `MQToSTML` in `src/main/MQ2Utilities.cpp`. Hailstone gives the
+  pieces to its own STML; an `\ax` with nothing open does nothing there, and colours left open are closed.
 - `src/game/dbstr_types.h`: the dbstr_us.txt string types (`eDatabaseStringType`) are copied from
   `src/eqlib/include/eqlib/game/EQClasses.h`.
 - `src/game/spell_effect_text.cpp`: a spell effect slot's text is ported from `src/main/MQ2Spells.cpp`:
@@ -142,7 +145,16 @@ files in MacroQuest's repository.
   `ParseSearchSpawnArgs`, `SpawnMatchesSearch`, `IsNamed`, `IsInGroup`, `IsInRaid`, `IsPCNear`, `CleanupName` and
   `NthNearestSpawn` (`src/main/MQ2Utilities.cpp`) and its light names (`szLights`). The code was written for
   Hailstone; none is copied.
+- `src/mq/map_filter.cpp`: the `/mapfilter` option names, defaults, colours, dependencies, radius and marker rules
+  follow MacroQuest's `src/plugins/map/MQ2Map.cpp`, `MQ2MapCommands.cpp`, `MQ2MapAPI.cpp` and `MapObject.cpp`. The
+  emulator branch at `f4b77136` has the same option set and rendering; its colour command modifies a copy and only
+  takes effect after reload. That bug is deliberately not reproduced. The implementation was written for Hailstone;
+  none is copied.
 - `src/mq/calc.cpp` (Calculate, FastCalculate, EvaluateRPN, GetArg, GetIntFromString in `MQ2Utilities.cpp` and
   `include/mq/base/String.h`), and the `Math`, `If` and `Range` TLOs and the int, float and string members in
   `src/mq/tlo.cpp` and `src/mq/tlo_game.cpp` (`MQ2MathType.cpp`, `MQ2Data.cpp`, `MQ2BasicTypes.cpp`): written for
   Hailstone from MQ's behaviour; none is copied.
+- MacroQuest plugins' commands and TLOs that scripts such as E3 use, written for Hailstone from their behaviour, none
+  copied: MQ2AdvPath (github.com/RedGuides/MQ2AdvPath; `/afollow` and `${AdvPath}`, `src/app/navigator.cpp` and
+  `src/mq/nav_commands.cpp`), MQ2MoveUtils (`/stick`, `/moveto`, `${Stick}`, `${MoveTo}`) and MQ2Exchange
+  (`/exchange`, `/unequip`, `src/game/exchange.h`).

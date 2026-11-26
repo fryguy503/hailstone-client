@@ -4,6 +4,7 @@
 #include <charconv>
 #include <chrono>
 #include <fstream>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <system_error>
@@ -13,6 +14,7 @@
 #include "core/log.h"
 #include "core/zip_read.h"
 #include "platform/durable_file.h"
+#include "platform/shared_file.h"
 
 namespace hailstone::app {
 
@@ -146,7 +148,8 @@ bool is_directory_entry(const fs::path& p) {
 }
 
 // Whether `name` is in a plugin's folder (plugins/<x>/...) that an add-on installed into (docs/addons.md): the
-// add-on's files, which no package of an update writes or takes out.
+// add-on's files, which no package of an update writes or takes out. Every other add-on kind's folder (scripts/,
+// tools/, upscalers/, ui-addons/) is one of the player's paths (is_player_path), which no update touches at all.
 bool owned_by_addon(const fs::path& install_dir, std::string_view name) {
     constexpr std::string_view plugins = "plugins/";
     if (lower(name.substr(0, plugins.size())) != plugins) return false;
@@ -314,7 +317,7 @@ bool is_player_path(std::string_view path) {
     const std::string_view first = std::string_view(p).substr(0, p.find('/'));
     static const std::set<std::string_view> folders = {"update", "servers", "logs",  "cache", "screenshots",
                                                        "bug-reports", "maps", "scripts", "textures", "web",
-                                                       "addons", "tools", "ui-data", "ui-addons"};
+                                                       "addons", "tools", "upscalers", "ui-data", "ui-addons"};
     static const std::set<std::string_view> files = {"hailstone.ini", "hailstone-windows.ini", "notes.txt"};
     if (first.size() < p.size() && folders.count(first)) return true;
     if (files.count(p)) return true;
@@ -356,10 +359,63 @@ std::string failed_update_version(const fs::path& install_dir) {
     return lines.empty() ? std::string() : lines[0];
 }
 
+namespace {
+// One process at a time installs or rolls back in a folder: the install clears new/ and the rollback reads the one
+// journal, so a second process doing either at once undoes the first's work (a half-new folder). The lock goes
+// with the process, so a crash never leaves it held.
+std::optional<platform::ScopedFileLock> lock_install(const fs::path& install_dir) {
+    const fs::path dir = update_dir(install_dir);
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    return platform::ScopedFileLock::try_acquire(dir / "install.lock", platform::FileLockMode::Exclusive,
+                                                platform::LockFolder::Ordinary);
+}
+
+// Every Hailstone running from the folder holds running.lock shared (claim_running). Taken exclusively it says that
+// no other one runs: one that does has its files in use (an install or a rollback would change them under it) and
+// has had its own start counted. The exclusive one is taken only under the install lock, so a claim made under the
+// install lock never fails on another process's passing check.
+std::optional<platform::ScopedFileLock> lock_running(const fs::path& install_dir, platform::FileLockMode mode) {
+    const fs::path dir = update_dir(install_dir);
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    return platform::ScopedFileLock::try_acquire(dir / "running.lock", mode, platform::LockFolder::Ordinary);
+}
+
+std::optional<platform::ScopedFileLock> take_claim(const fs::path& install_dir) {
+    auto claim = lock_running(install_dir, platform::FileLockMode::Shared);
+    if (!claim)
+        log::warn("Update: cannot mark this Hailstone as running from {} (another one is installing or rolling back "
+                  "an update, or the folder cannot be written); an update may be installed while it runs",
+                  install_dir.string());
+    return claim;
+}
+} // namespace
+
+std::optional<platform::ScopedFileLock> claim_running(const fs::path& install_dir) {
+    // Under the install lock when it can be had (see lock_running); without it, the claim may still be had.
+    const auto lock = lock_install(install_dir);
+    return take_claim(install_dir);
+}
+
 InstallResult install_staged_update(const fs::path& install_dir, const std::string& running,
                                     const std::function<void(float)>& progress) {
     InstallResult r;
     const fs::path dir = update_dir(install_dir);
+    const auto lock = lock_install(install_dir);
+    if (!lock) {
+        r.error = "another Hailstone is installing or rolling back an update in this folder";
+        log::warn("Update: {}; this one leaves it to that one", r.error);
+        return r;
+    }
+    // Another Hailstone running from these files (started on its own, not as this one's box set window) would have
+    // them replaced under it: the update stays staged for a later quit.
+    const auto alone = lock_running(install_dir, platform::FileLockMode::Exclusive);
+    if (!alone) {
+        r.error = "another Hailstone is running from this folder; the update is installed at a later quit";
+        log::info("Update: {}", r.error);
+        return r;
+    }
     auto staged = read_staged(install_dir);
     if (!staged) {
         r.error = "no update is staged";
@@ -521,14 +577,29 @@ InstallResult install_staged_update(const fs::path& install_dir, const std::stri
 StartNote update_at_start(const fs::path& install_dir, const std::string& running) {
     StartNote note;
     const fs::path dir = update_dir(install_dir);
-    remove_quietly(dir / "trash");
+    // Another Hailstone is installing (its state reads "installing") or rolling back: not this one's to undo.
+    const auto lock = lock_install(install_dir);
+    if (!lock) {
+        log::warn("Update: another Hailstone is installing or rolling back in this folder; leaving it to that one");
+        note.running_claim = take_claim(install_dir);
+        return note;
+    }
+    // Whether another Hailstone runs from the folder now: then its files are in use, and its start (of the same
+    // version) was counted already. Held until the work below is done, so no claim is made in between.
+    auto alone = lock_running(install_dir, platform::FileLockMode::Exclusive);
+    if (alone) remove_quietly(dir / "trash"); // (another one's may still be open)
     // A rollback's news, left by the version that was rolled back for this one to show.
     if (auto text = read_text_file(dir / "note.txt")) {
         note.message = lines_of(*text).empty() ? std::string() : lines_of(*text)[0];
         remove_quietly(dir / "note.txt");
     }
     const State st = read_state(install_dir);
-    if (st.kind == "installing") {
+    if (st.kind == "installing" && !alone) {
+        // Not under another one running from these files; the next start while none does puts the folder back.
+        log::warn("Update: the update to Hailstone {} was cut off, but another Hailstone runs from this folder; it is "
+                  "put back at a start while none does",
+                  st.new_version);
+    } else if (st.kind == "installing") {
         roll_back(install_dir);
         note.message = "The update to Hailstone " + st.new_version + " was cut off, so " + st.old_version +
                        " was put back.";
@@ -537,6 +608,10 @@ StartNote update_at_start(const fs::path& install_dir, const std::string& runnin
     } else if (st.kind == "pending") {
         if (running != st.new_version) {
             end_pending(install_dir); // another version is here: the player's own
+        } else if (!alone) {
+            // Another window of this version runs: this start is not one that failed, nor counted as one. Counting
+            // every window would roll back an update that runs, from under the windows that run it.
+            log::info("Update: this start of {} is not counted: another Hailstone runs from this folder", running);
         } else if (st.starts >= 2) {
             roll_back(install_dir);
             write_file_atomic(update_dir(install_dir) / "failed.txt", st.new_version + "\n");
@@ -553,15 +628,24 @@ StartNote update_at_start(const fs::path& install_dir, const std::string& runnin
         log::warn("Update: {}", note.message);
         write_file_atomic(dir / "note.txt", note.message + "\n");
     }
+    alone.reset();
+    note.running_claim = take_claim(install_dir); // still under the install lock
     return note;
 }
 
-void update_started_fine(const fs::path& install_dir, const std::string& running) {
+bool update_started_fine(const fs::path& install_dir, const std::string& running) {
+    // Nothing pending (nearly every start, and every start of a folder that cannot be written): no lock wanted.
+    const State before = read_state(install_dir);
+    if (before.kind != "pending" || before.new_version != running) return true;
+    // end_pending removes what a rollback in another process would be reading (journal.txt, previous/).
+    const auto lock = lock_install(install_dir);
+    if (!lock) return false;
     const State st = read_state(install_dir);
     if (st.kind == "pending" && st.new_version == running) {
         end_pending(install_dir);
         log::info("Update: Hailstone {} started fine; the files it replaced are removed", running);
     }
+    return true;
 }
 
 // The files under plugins/nms/ and plugins/projecttriune/ in 0.2.0-alpha's two zips and 0.1.0-alpha's NMS plugin
@@ -611,6 +695,13 @@ std::vector<std::string> retire_old_release_files(const fs::path& install_dir) {
 std::vector<std::string> retire_old_release_files(const fs::path& install_dir,
                                                   const std::vector<RetiredFile>& retired) {
     std::vector<std::string> removed;
+    // Not while another process installs or rolls back (it may be putting these very files back).
+    const auto lock = lock_install(install_dir);
+    if (!lock) {
+        log::info("Update: no install lock (another Hailstone is installing or rolling back in this folder, or it "
+                  "cannot be written); old release files are looked at another time");
+        return removed;
+    }
     if (read_state(install_dir).kind == "pending") return removed;
     const fs::path plugins = install_dir / "plugins";
     std::error_code ec;

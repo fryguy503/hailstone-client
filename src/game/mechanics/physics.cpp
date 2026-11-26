@@ -156,7 +156,7 @@ void push_along_heading(PhysicsBody& body, float amount) {
 }
 
 glm::vec3 step(PhysicsBody& body, const Environment& env, float elapsed_ms, const glm::vec2& strafe,
-               float hover_floor) {
+               float hover_floor, std::optional<SwimSteering> swim) {
     float dt = elapsed_ms * kTicksPerMs;
     if (!(dt <= kMaxStepTicks)) dt = kMaxStepTicks;
     if (body.dead) {
@@ -171,14 +171,23 @@ glm::vec3 step(PhysicsBody& body, const Environment& env, float elapsed_ms, cons
     // then ApplyFriction @0x8d2160.
     struct Push : PushQueries {
         const PhysicsBody& body;
-        explicit Push(const PhysicsBody& b) : body(b) {}
+        glm::vec2 strafe;
+        bool vertical_only;
+        Push(const PhysicsBody& b, glm::vec2 s, bool vertical) : body(b), strafe(s), vertical_only(vertical) {}
         double vf0(float value) override { return mechanics::vf0(body, value); }
         void add_push(float p[3]) override {
+            if (vertical_only) {
+                // Swimming at a steep pitch still adds a full forward push. Inside the horizontal
+                // follow band, keep the vertical thrust and let existing momentum slow down normally.
+                p[0] = strafe.x;
+                p[1] = strafe.y;
+            }
             if (is_levitating(body.fly_mode) && body.body_wet == 0 && 0.0f < p[2]) p[2] = 0.0f;
         }
-    } q(body);
+    } q(body, strafe, body.body_wet >= 5 && swim && swim->vertical_only);
     float p[3] = {push.x, push.y, push.z};
-    run_speed_push(body.speed_run, body.heading, body.camera_angle, p, true, c.accel_xy, c.accel_z, q);
+    const float pitch = body.body_wet >= 5 && swim ? swim->pitch : body.camera_angle;
+    run_speed_push(body.speed_run, body.heading, pitch, p, true, c.accel_xy, c.accel_z, q);
     glm::vec3& v = body.velocity;
     float speed[3] = {v.x, v.y, v.z};
     apply_friction(speed, p, c.friction_xy, c.friction_z);

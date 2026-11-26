@@ -163,7 +163,8 @@ void ClientApp::save_iso_settings() {
 }
 
 void ClientApp::update_iso_hover() {
-    if (!iso() || !iso_hover_on_ || !conn_ || ui_.wants_mouse() || mouse_look_.active || conn_->placement().active()) {
+    if (!iso() || !iso_hover_on_ || !conn_ || ui_.wants_mouse() || mouse_look_.active || conn_->placement().active() ||
+        (automation_ && automation_->world_placement_aiming())) {
         iso_hover_ = {};
         return;
     }
@@ -357,6 +358,14 @@ bool ClientApp::iso_click(const glm::vec2& at, const PickTarget& hit, bool right
     return true;
 }
 
+void ClientApp::cancel_iso_clicks() {
+    iso_pending_.reset();
+    iso_walking_ = iso_hold_ = false;
+    iso_marker_ = {};
+    left_click_pending_.reset();
+    left_click_.reset();
+}
+
 void ClientApp::update_iso_clicks(bool player_moved) {
     if (!nav_ || !conn_) return;
     const nav::NavStatus status = nav_->status();
@@ -394,7 +403,7 @@ void ClientApp::update_iso_clicks(bool player_moved) {
         if (glm::length(glm::vec2(p - feet_)) > iso_spawn_arrive(hit.id) + 2.0f) return;
         // Facing it, as a player walking up to it would be.
         yaw_ = game::heading_to_yaw(game::heading_to(feet_, p));
-        if (pending.right) right_click_spawn(hit.id);
+        if (pending.right) right_click_spawn(hit.id, right_click_consider_);
         else left_click_spawn(hit.id);
         return;
     }

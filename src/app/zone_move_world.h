@@ -56,7 +56,8 @@ public:
                 return out;
             }
             if (objects_) {
-                std::vector<WorldObjects::DoorHit> hits;
+                thread_local std::vector<WorldObjects::DoorHit> hits; // (kept: several sweeps a movement step)
+                hits.clear();
                 out.door_hit = objects_->sweep_sphere(s, &hits, pass_doors_.empty() ? nullptr : &pass_doors_);
                 for (const auto& h : hits) out.door_hits.push_back({h.id, h.type});
             }

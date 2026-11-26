@@ -364,8 +364,9 @@ AppPacket encode(const ItemPreviewReply& v); // server direction, for tests
 // u32 count. The client sends count 0 for a whole-item move or swap and a
 // count only for stack merges and splits; to = invalid
 // destroys the item. The server's OP_MoveItem moves or (to invalid) deletes.
-// OP_DeleteItem (DeleteItem_Struct) and OP_DeleteCharge (encoded as
-// OP_MoveItem) share the layout.
+// OP_DeleteItem (DeleteItem_Struct) and OP_DeleteCharge share the layout.
+// EQEmu sends one OP_DeleteCharge {slot, invalid, 0xffffffff} per charge
+// spent on an item that stays in inventory.
 struct MoveItem {
     ItemSlot from;
     ItemSlot to;
@@ -374,7 +375,7 @@ struct MoveItem {
 inline constexpr std::size_t kMoveItemSize = 28;
 AppPacket encode(const MoveItem& v);                        // OP_MoveItem
 AppPacket encode_delete_item(const MoveItem& v);            // OP_DeleteItem
-std::optional<MoveItem> decode_move_item(const AppPacket& p); // either opcode
+std::optional<MoveItem> decode_move_item(const AppPacket& p); // shared wire layout
 
 // OP_MoveMultipleItems (client → zone, Send_OP_MoveMultipleItems @0x56fef0; the recorded vectors
 // Send_OP_MoveMultipleItems.jsonl): u32 count, then count × 0x24-byte MultiMoveEntry {from (12), to (12), u32

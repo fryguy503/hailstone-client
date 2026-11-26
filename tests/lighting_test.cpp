@@ -314,6 +314,25 @@ TEST_CASE("EQG glow: zone.frag adds the glow after the weather") {
     CHECK(weather < gain);
 }
 
+TEST_CASE("additive actors attenuate their texture without adding atmospheric light") {
+    std::ifstream in(HAILSTONE_SOURCE_DIR "/shaders/actor.frag", std::ios::binary);
+    REQUIRE(in);
+    const std::string code{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    // An entirely black additive card (one of the faerie dragon's wing layers) must add zero colour.
+    CHECK(code.find("kAdditive ? vec4(0.0) : lighting.haze_color") != std::string::npos);
+    CHECK(code.find("kAdditive ? vec4(0.0) : lighting.light") != std::string::npos);
+    CHECK(code.find("kAdditive ? vec3(0.0) : pc.fog_color.rgb") != std::string::npos);
+    CHECK(code.find("color = fogged ? actor_haze(shaded) : shaded") != std::string::npos);
+    CHECK(code.find("color = actor_classic_fog(color)") != std::string::npos);
+    CHECK(code.find("if (!kAdditive && lighting.weather.x > 0.0)") != std::string::npos);
+    const auto shafts = code.find("color += underwater_shafts(");
+    REQUIRE(shafts != std::string::npos);
+    constexpr char shaft_guard[] = "if (!kAdditive)";
+    const auto guard = code.rfind(shaft_guard, shafts);
+    REQUIRE(guard != std::string::npos);
+    CHECK(code.find_first_not_of(" \t\r\n", guard + sizeof(shaft_guard) - 1) == shafts);
+}
+
 TEST_CASE("EQG surface flags: the full-bright view draws AddAlpha surfaces without HDR gain") {
     namespace zs = render::zone_surface;
     const std::uint32_t surface = zs::kAdditiveGlow | zs::kNormalMap;

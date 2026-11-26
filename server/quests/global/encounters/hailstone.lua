@@ -1,7 +1,7 @@
 -- Hailstone client support for EQEmu servers: one Lua file, no C++ changes (server/README.md).
 --
--- What Hailstone lets plugins, Lua scripts and Lua socials do on this server is not decided here: the owner writes it
--- in client_files/hailstone.cfg, which the client downloads with the other client files (below; docs/plugins.md),
+-- Hailstone's server policy is in client_files/hailstone.cfg. GMs can also edit it through Server Management.
+-- The client downloads it with the other client files (below; docs/plugins.md),
 -- along with the server's own plugins (client_files/plugins/) and scripts (client_files/scripts/). Without a
 -- hailstone.cfg the client sets no rules.
 --
@@ -17,8 +17,8 @@
 --
 -- And it sends the server's settings for the client: after every zone-in Hailstone sends OP_HailstoneSettingsRequest (raw
 -- 0x1432): {u32 magic 'NMSP'; u16 version 1}, and this answers OP_HailstoneSettings (0x1433): {u32 magic; u16 version 1;
--- u32 flags (none defined now; bit 0 hid the player count, which no Hailstone UI shows any more)}. Clients older
--- than it never ask, so they never get it.
+-- u32 flags; optional u16 account status}. Bit 1 advertises Server Management. Bit 2 means the account status
+-- is present. Older clients ignore the appended field. Replies on the old opcodes keep their original size.
 --
 -- And it sends the server's client files: what the server owner puts in client_files/ (beside eqemu_config.json:
 -- hailstone.cfg, spells_us.txt, eqstr_us.txt ..., and the folders assets/, plugins/ and scripts/). At its first
@@ -68,6 +68,8 @@ local settings = {
 	files_chunks_per_second_zone = 1024, -- the same for all of the zone's clients together; 0: no limit
 	quest_npcs             = 1,  -- tell Hailstone's Find window which of the zone's NPCs have quests (0: say nothing)
 	zone_links             = 1,  -- send the zone connections for the map's zone finder (0: never answered)
+	server_management      = 0,  -- 1 enables the in-game editor for authorized GM accounts
+	server_management_history = 0, -- keep all revisions unless the operator sets a positive retention limit
 }
 
 local OP_SETTINGS_REQUEST = 0x1432
@@ -561,6 +563,8 @@ local FILES_OPEN_MAX   = 8              -- files kept open for the pieces client
 local FILES_WAIT_MAX   = 64             -- piece requests over the limit held per client (twice the client's window)
 local FILES_TIMER      = "hailstone:files"
 local FILES_TIMER_MS   = 100            -- how often held requests are looked at
+local POLICY_FILENAME  = "hailstone.cfg"
+local POLICY_REVISION  = "; hailstone-policy-revision = "
 
 local files       = { list = {}, id = 0, built = nil }
 local open_files  = {} -- path -> { handle, used }: several clients may be fetching different files at once
@@ -635,6 +639,33 @@ local function write_file(path, text)
 	f:write(text)
 	f:close()
 	return true
+end
+
+-- The revision marker is part of the cfg's atomic replacement, so every zone sees the new revision with the
+-- new file. Resolve the name from the server's list to preserve existing case variants on case-sensitive disks.
+local function policy_filename(list)
+	local name
+	for _, entry in ipairs(list) do
+		if entry.path:lower() == POLICY_FILENAME then
+			if name then return nil end -- ambiguous pair of case variants
+			name = entry.path
+		end
+	end
+	return name or POLICY_FILENAME
+end
+
+local function policy_revision(text)
+	if text:sub(1, #POLICY_REVISION) ~= POLICY_REVISION then return nil end
+	return text:sub(#POLICY_REVISION + 1):match("^([%w_-]+)\r?\n")
+end
+
+local function peek_policy_revision(name)
+	if not name then return nil end
+	local file = io.open(FILES_DIR .. "/" .. name, "rb")
+	if not file then return nil end
+	local prefix = file:read(200) or ""
+	file:close()
+	return policy_revision(prefix) or "" -- distinguish a legacy cfg from a missing file
 end
 
 -- EQEmu's Lua has no os.remove or os.rename (SANITIZE_LUA_LIBS), so the shell removes and renames: the
@@ -713,9 +744,10 @@ local function read_hash_cache()
 		return cache
 	end
 	for line in f:lines() do
-		local path, size, mtime, hex = line:match("^(.-)\t(%d+)\t(%S+)\t(%x+)$")
+		local path, size, mtime, hex, extra = line:match("^(.-)\t(%d+)\t(%S+)\t(%x+)(.*)$")
 		if path then
-			cache[path] = { size = tonumber(size), mtime = mtime, sha = hex }
+			cache[path] = { size = tonumber(size), mtime = mtime, sha = hex,
+				policy_revision = extra:match("^\t([%w_-]+)$") or "" }
 		end
 	end
 	f:close()
@@ -877,10 +909,13 @@ end
 -- changes whenever a file does.
 local function build_client_files(force)
 	local keep = math.max(setting("files_rescan") or FILES_RESCAN_MIN, FILES_RESCAN_MIN)
-	if not force and files.built and os.time() - files.built < keep then
+	local policy_changed = peek_policy_revision(policy_filename(files.list)) ~= files.policy_revision
+	if not force and not policy_changed and files.built and os.time() - files.built < keep then
 		return
 	end
 	local list  = list_client_files()
+	local listed_policy = policy_filename(list)
+	local listed_revision = peek_policy_revision(listed_policy)
 	-- A missing folder and one that cannot be listed look the same from here; either way say so, once until files
 	-- are listed again, so that clients sent no hailstone.cfg do not go unnoticed.
 	if #list == 0 then
@@ -897,7 +932,7 @@ local function build_client_files(force)
 		need = {}
 		for _, e in ipairs(list) do
 			local c = cache[e.path]
-			if c and c.size == e.size and c.mtime == e.mtime then
+			if c and c.size == e.size and c.mtime == e.mtime and (e.path ~= listed_policy or c.policy_revision == listed_revision) then
 				e.sha = c.sha
 			elseif not e.sha then
 				need[#need + 1] = e.path
@@ -910,7 +945,7 @@ local function build_client_files(force)
 		if not locked and not force and files.built ~= nil then
 			local _, who = lock_owner()
 			if who ~= nil then
-				files.built = os.time() -- another zone is hashing: keep this list until the next look
+				files.built = os.time() -- the different policy revision will still make the next request look
 				return
 			end
 		end
@@ -922,11 +957,18 @@ local function build_client_files(force)
 			e.sha = e.sha or hashes[e.path]
 		end
 	end
+	-- A save may occur while this zone scans. Leave this list and cache alone if the cfg changed during hashing.
+	if listed_revision ~= peek_policy_revision(listed_policy) then
+		if locked then release_lock() end
+		return
+	end
 	local kept, lines, id = {}, {}, 0
 	for _, e in ipairs(list) do
 		if e.sha and e.size < 2147483648 then
 			kept[#kept + 1]   = e
+			local revision = e.path == listed_policy and listed_revision or ""
 			lines[#lines + 1] = e.path .. "\t" .. e.size .. "\t" .. e.mtime .. "\t" .. e.sha
+				.. (revision ~= "" and "\t" .. revision or "")
 			local s = e.path .. e.sha
 			for i = 1, #s do
 				id = (id * 31 + s:byte(i)) % 2147483629
@@ -951,7 +993,7 @@ local function build_client_files(force)
 	if id ~= files.id then
 		close_open_files()
 	end
-	files = { list = kept, id = id, built = os.time() }
+	files = { list = kept, id = id, built = os.time(), policy_revision = listed_revision }
 end
 
 local function files_header(p, action)
@@ -1005,6 +1047,13 @@ local function send_files_chunk(client, id, index, offset, length)
 		send_files_error(client, id, index, 1) -- the list changed: the client lists again
 		return
 	end
+	local is_policy = e.path:lower() == POLICY_FILENAME
+	-- Ambiguous case variants are ineligible for management, but retain the ordinary file delivery behavior.
+	if is_policy and files.policy_revision ~= nil and peek_policy_revision(e.path) ~= files.policy_revision then
+		build_client_files(false)
+		send_files_error(client, id, index, 1)
+		return
+	end
 	length = clamp(length, 0, FILES_CHUNK_MAX)
 	if offset < 0 or offset >= e.size then
 		length = 0
@@ -1042,6 +1091,7 @@ local function send_files_chunk(client, id, index, offset, length)
 		f:seek("set", offset)
 		data = f:read(length) or ""
 	end
+	if is_policy then close_open_file(e.path) end -- Windows cannot replace a cfg held open by another zone
 	if not f or #data ~= length then
 		close_open_file(e.path)
 		log("client_files: could not read " .. e.path)
@@ -1557,17 +1607,758 @@ end
 
 -- ----------------------------------------------------------------
 
--- The server's settings for the client. No flag is defined now (bit 0, the player count's hiding, is retired: no
--- Hailstone UI shows the count).
+-- Server Management uses a dedicated raw opcode so the stock EQEmu tables need no edits. Keep its private
+-- state in a separate scope because an encounter and its locals share the zone process's Lua chunk.
+local management = (function()
+	local REQUEST, REPLY, MAGIC = 0x143a, 0x143b, 0x4d415348 -- "HSAM"
+	local OPEN, SAVE = 1, 2
+	local OK, DENIED, INVALID, STALE, STORAGE, BUSY = 0, 1, 2, 3, 4, 5
+	local LIMIT, MAX_EDITS, MAX_NAME, MAX_VALUE = 16384, 64, 48, 8192
+	local HISTORY = FILES_DIR .. "/.hailstone-admin-history"
+	local EDIT_LOCK = FILES_DIR .. "/.hailstone-admin-lock"
+	local EDIT_LOCK_OWNER = EDIT_LOCK .. "/owner"
+	local EDIT_LOCK_STALE = 900 -- seconds
+	local REVISION_TIME, REVISION_SEQUENCE = "%d%d%d%d%d%d%d%dT%d%d%d%d%d%dZ", "%d%d%d%d"
+	local REVISION_ID = REVISION_TIME .. "%-" .. REVISION_SEQUENCE
+	local MAX_SNAPSHOTS = 64
+	local snapshots, token, last_use = {}, 0, 0
+	local requests = limiter(10)
+	-- Turning management on for a server without a cfg must preserve the permissions it already has.
+	local NO_POLICY = "[scripts]\nplayer = on\n\n[plugins]\nplayer = on\n\n[socials]\nmode = full\ncaps = all\n"
+	local schema = {
+		client = { deny = "boolean" },
+		scripts = { player = "boolean", player_caps = "caps", run = "scripts" },
+		plugins = { player = "boolean", player_caps = "caps" },
+		assets = { player = "boolean" },
+		socials = { mode = "social_mode", caps = "caps", press_commands = "press_commands", faces = "boolean" },
+		abilities = { autoskill = "boolean" },
+		map = { vanilla = "boolean" },
+		movement = { npc_collision = "boolean", passable_ladders = "boolean", solid_ladders = "boolean" },
+		web = { allow = "hosts" },
+		addons = { enforce = "boolean", default = "mode", suggest = "suggest", required = "required",
+			allow = "repos", block = "repos" },
+		commands = { default = "mode", allow = "commands", block = "commands", gm = "gm_commands", allow_groups = "groups",
+			block_groups = "groups", blocked_message = "message" },
+		management = { min_status = "min_status" },
+	}
+
+	local function trim(s)
+		return (s:gsub("^[ \t\r\n]+", ""):gsub("[ \t\r\n]+$", ""))
+	end
+
+	local function unsigned(text, min, max)
+		local n = text:match("^%d+$") and tonumber(text)
+		return n and n >= min and n <= max
+	end
+
+	local function read(path, limit)
+		local file, _, errno = io.open(path, "rb")
+		if not file then return nil, errno == 2 end -- missing is different from unreadable
+		local data, err = file:read(limit + 1)
+		local closed = file:close()
+		if err or not closed or (data and #data > limit) then return nil, false end
+		return data or "", true
+	end
+
+	local function write(path, data)
+		local file = io.open(path, "wb")
+		if not file then return false end
+		local written = file:write(data)
+		local closed = file:close()
+		return written and closed and read(path, #data) == data
+	end
+
+	local function history_file_exists(path)
+		local file, _, errno = io.open(path, "rb")
+		if file then
+			file:close()
+			return true
+		end
+		if errno == 2 then return false end
+		return nil -- lack of access cannot be treated as an unused name
+	end
+
+	-- The existing write lock serializes revision selection across zones. The public marker contains only a
+	-- timestamp and counter. The scratch process identifier is private to the file-service implementation.
+	local function next_revision(previous)
+		local timestamp = os.date("!%Y%m%dT%H%M%SZ", os.time())
+		local first = 1
+		if previous then
+			local last_time, last_sequence = previous:match("^(" .. REVISION_TIME .. ")%-(" .. REVISION_SEQUENCE .. ")$")
+			-- Retention can free lower sequence numbers. Leave the revision monotonic even if the clock retreats.
+			if last_time and last_time >= timestamp then timestamp, first = last_time, tonumber(last_sequence) + 1 end
+		end
+		for sequence = first, 9999 do
+			local name = string.format("%s-%04d", timestamp, sequence)
+			local backup = HISTORY .. "/" .. name
+			local cfg = history_file_exists(backup .. ".cfg")
+			local metadata = history_file_exists(backup .. ".txt")
+			if cfg == nil or metadata == nil then return nil end
+			if not cfg and not metadata and name ~= previous then return name, backup end
+		end
+		return nil
+	end
+
+	local function section_name(line)
+		if line:sub(1, 1) ~= "[" then return nil end
+		local close = line:find("]", 2, true)
+		return trim(line:sub(2, close and close - 1 or #line)):lower()
+	end
+
+	local function read_control(raw, section, key)
+		local current, value = "", nil
+		for original in raw:gmatch("[^\n]+") do
+			local line = trim(original)
+			local name = section_name(line)
+			if name then current = name end
+			if not name and current == section and not line:match("^[;#]") then
+				local lhs, rhs = line:match("^([^=]+)=(.*)$")
+				if lhs and trim(lhs):lower() == key then value = trim((rhs:gsub("[;#].*$", ""))) end
+			end
+		end
+		return value
+	end
+
+	local function permitted(rank, raw)
+		local minimum = read_control(raw or "", "management", "min_status")
+		if minimum == nil then return rank >= 200 end
+		return unsigned(minimum, 1, 32767) and rank >= tonumber(minimum)
+	end
+
+	local function account_status(client)
+		local rank = client.Admin and client:Admin()
+		if type(rank) ~= "number" or rank % 1 ~= 0 or rank > 32767 then return nil end
+		return math.max(0, rank)
+	end
+
+	local function current_policy_filename()
+		-- Open and Save do not trust the cached file list. A GM may have renamed the cfg or added another case
+		-- variant since that zone scanned, and an editor must not create or choose a competing policy.
+		local result
+		if windows then
+			result = run('if exist "' .. FILES_DIR .. '\\*" (dir /b /a:-d "' .. FILES_DIR .. '\\*" 2>NUL & echo listed)')
+		else
+			result = run("find -H " .. sh_quote(FILES_DIR) .. " -maxdepth 1 -iname hailstone.cfg -printf '%y %f\\n' 2>/dev/null && echo listed")
+		end
+		if not result or not result:match("listed[\r\n]+$") then return nil end
+		local name
+		for line in result:gmatch("[^\r\n]+") do
+			local kind, entry = line:match("^(.) (.+)$")
+			if windows then kind, entry = "f", line end
+			if entry and entry:lower() == POLICY_FILENAME then
+				if name or kind ~= "f" then return nil end
+				name = entry
+			end
+		end
+		return name or POLICY_FILENAME
+	end
+
+	local function load_cfg(fresh)
+		local name
+		if fresh then name = current_policy_filename()
+		else name = policy_filename(files.list) end
+		if not name then return nil, false end
+		local raw, readable = read(FILES_DIR .. "/" .. name, LIMIT)
+		if raw and raw:find("\0", 1, true) then return nil, false end
+		return raw, readable, name
+	end
+
+	local function enabled()
+		return setting("server_management") == 1 and setting("client_files") ~= 0
+	end
+
+	local function advertised(rank)
+		if rank < 1 or not enabled() then return false end
+		local raw, readable = load_cfg()
+		return readable and permitted(rank, raw)
+	end
+
+	local function valid_utf8(text)
+		local pos = 1
+		while pos <= #text do
+			local a, b = text:byte(pos, pos + 1)
+			if a < 32 or a == 127 then return false end
+			if a < 128 then
+				pos = pos + 1
+			else
+				local n = (a >= 194 and a <= 223 and 2) or (a >= 224 and a <= 239 and 3)
+					or (a >= 240 and a <= 244 and 4)
+				if not n or pos + n - 1 > #text then return false end
+				if (a == 224 and b < 160) or (a == 237 and b >= 160)
+					or (a == 240 and b < 144) or (a == 244 and b >= 144) then return false end
+				for i = pos + 1, pos + n - 1 do
+					local continuation = text:byte(i)
+					if continuation < 128 or continuation > 191 then return false end
+				end
+				pos = pos + n
+			end
+		end
+		return true
+	end
+
+	local booleans = { on = true, off = true, yes = true, no = true, ["true"] = true, ["false"] = true,
+		["1"] = true, ["0"] = true }
+	local capabilities = { none = true, all = true, read = true, commands = true, target = true, actions = true,
+		move = true, chat = true, events = true, ui = true, packets = true, extend = true, login = true, net = true,
+		web = true }
+	local groups = { non_rof2 = true, addon_commands = true, movement_automation = true, command_helpers = true }
+
+	local function version_number(s)
+		return unsigned(s, 0, 4294967295) and (#s == 1 or s:sub(1, 1) ~= "0")
+	end
+
+	local function identifiers(s, pre)
+		if s == "" or s:sub(1, 1) == "." or s:sub(-1) == "." or s:find("..", 1, true) then return false end
+		for id in s:gmatch("[^.]+") do
+			if not id:match("^[0-9A-Za-z-]+$") or (pre and id:match("^%d+$") and not version_number(id)) then
+				return false
+			end
+		end
+		return true
+	end
+
+	local function version(s)
+		s = (s:gsub("^[vV]", ""))
+		local core, build = s:match("^(.-)%+(.*)$")
+		if core then
+			if not identifiers(build, false) then return false end
+			s = core
+		end
+		local pre
+		core, pre = s:match("^(.-)%-(.*)$")
+		if core then
+			if not identifiers(pre, true) then return false end
+			s = core
+		end
+		local major, minor, patch = s:match("^(%d+)%.(%d+)%.(%d+)$")
+		return major and version_number(major) and version_number(minor) and version_number(patch)
+	end
+
+	local function valid_ref(ref)
+		if #ref == 0 or #ref > 100 or ref:match("^[-/]") or ref:sub(-1) == "/" or ref:find("//", 1, true) then
+			return false
+		end
+		for part in ref:gmatch("[^/]+") do
+			if part:sub(1, 1) == "." or not part:match("^[0-9A-Za-z_.-]+$") then return false end
+		end
+		return true
+	end
+
+	local function repo_identity(s)
+		if #s > 400 or s:find("[%s\\]") then return nil end
+		local lower = s:lower()
+		local url = lower:match("^https?://") or lower:match("^github%.com/") or lower:match("^www%.github%.com/")
+		local owner, repo
+		if url then
+			local prefix = lower:match("^https?://") or ""
+			local host = lower:sub(#prefix + 1):match("^www%.github%.com/") or lower:sub(#prefix + 1):match("^github%.com/")
+			if not host then return nil end
+			local parts = {}
+			for part in s:sub(#prefix + #host + 1):gsub("[?#].*$", ""):gmatch("[^/]+") do parts[#parts + 1] = part end
+			owner, repo = parts[1], parts[2]
+			local path = parts[3]
+			if path == "tree" and #parts >= 4 then
+				if not valid_ref(table.concat(parts, "/", 4)) then return nil end
+			elseif path == "releases" and parts[4] == "tag" and #parts >= 5 then
+				if not valid_ref(table.concat(parts, "/", 5)) then return nil end
+			elseif path and not (path == "releases" and (#parts == 3 or (#parts == 4 and parts[4] == "latest"))) then
+				return nil
+			end
+		else
+			local pair, ref = s:match("^(.-)@(.*)$")
+			if pair then
+				if not valid_ref(ref) then return nil end
+				s = pair
+			end
+			owner, repo = s:match("^([^/]+)/([^/]+)$")
+		end
+		if not owner or not repo or #owner > 39 or not owner:match("^[0-9A-Za-z-]+$") or owner:match("^-")
+			or owner:match("-$") or owner:find("--", 1, true) then return nil end
+		if #repo > 100 or not repo:match("^[0-9A-Za-z_.-]+$") or repo == "." or repo == ".." then return nil end
+		if #repo > 4 and repo:sub(-4):lower() == ".git" then repo = repo:sub(1, -5) end
+		return (owner .. "/" .. repo):lower()
+	end
+
+	local function repositories(text, minimum)
+		local result = {}
+		if text == "" then return result end
+		for original in (text .. ","):gmatch("(.-),") do
+			local entry = trim(original)
+			local id = repo_identity(entry)
+			if not id and minimum then
+				local source, min_version = entry:match("^(.*):([^:]+)$")
+				if source and version(trim(min_version)) then id = repo_identity(trim(source)) end
+			end
+			if not id then return nil end
+			result[id] = true
+		end
+		return result
+	end
+
+	local function valid_command_word(kind, word)
+		if kind == "groups" then return groups[word:lower()] end
+		if kind == "commands" then return word ~= "/" end
+		local command, status = word:match("^(.+):([0-9]+)$")
+		return command and command ~= "/" and unsigned(status, 1, 32767)
+	end
+
+	local function valid_command_list(kind, value, original)
+		local existing
+		for word in value:gmatch("[^ ,]+") do
+			if not valid_command_word(kind, word) then
+				-- Another row may be edited without rewriting the author's malformed tokens. Only carry exact
+				-- tokens that appeared in this key of the snapshot, without adding copies.
+				if not existing then
+					existing = {}
+					for token in (original or ""):gmatch("[^,%s]+") do existing[token] = (existing[token] or 0) + 1 end
+				end
+				if (existing[word] or 0) == 0 then return false end
+				existing[word] = existing[word] - 1
+			end
+		end
+		return true
+	end
+
+	local function valid_value(kind, value, original)
+		if kind == "message" then return #value <= 240 and valid_utf8(value) end
+		if value:find("[%z\1-\31\127;#]") then return false end
+		local lower = value:lower()
+		if kind == "boolean" then return booleans[lower] end
+		if kind == "mode" then return lower == "allow" or lower == "deny" end
+		if kind == "social_mode" then return lower == "off" or lower == "press" or lower == "full" end
+		if kind == "press_commands" then return unsigned(value, 0, 2147483647) end
+		if kind == "min_status" then return unsigned(value, 1, 32767) end
+		if kind == "repos" or kind == "required" then return repositories(value, kind == "required") ~= nil end
+		if kind == "groups" or kind == "commands" or kind == "gm_commands" then
+			return valid_command_list(kind, value, original)
+		end
+		for word in value:gmatch("[^ ,]+") do
+			local low = word:lower()
+			if kind == "caps" and not capabilities[low] then return false end
+			if kind == "scripts" and (word:sub(1, 1) == "/" or word:find("..", 1, true) or word:find("\\", 1, true)) then
+				return false
+			end
+			if kind == "hosts" and (#word > 253 or (not word:match("^[0-9A-Za-z_.-]+$")
+				and not word:match("^%[[0-9a-fA-F:.]+%]$"))) then return false end
+			if kind == "suggest" and not repo_identity(word) then return false end
+		end
+		return true
+	end
+
+	local function read_edits(packet, size, raw)
+		if size < 18 then return nil end
+		local count, pos = packet:ReadInt16(16), 18
+		if count < 1 or count > MAX_EDITS then return nil end
+		local edits, seen = {}, {}
+		for n = 1, count do
+			if pos + 4 > size then return nil end
+			local a, b, c = packet:ReadInt8(pos), packet:ReadInt8(pos + 1), packet:ReadInt16(pos + 2)
+			pos = pos + 4
+			if a < 1 or a > MAX_NAME or b < 1 or b > MAX_NAME or c < 0 or c > MAX_VALUE or pos + a + b + c > size then
+				return nil
+			end
+			local section = packet:ReadFixedLengthString(pos, a)
+			local key = packet:ReadFixedLengthString(pos + a, b)
+			local value = c > 0 and packet:ReadFixedLengthString(pos + a + b, c) or ""
+			pos = pos + a + b + c
+			if #section ~= a or #key ~= b or #value ~= c then return nil end
+			section, key = section:lower(), key:lower()
+			local kind = schema[section] and schema[section][key]
+			local id = section .. "." .. key
+			local original = section == "commands" and read_control(raw or "", section, key) or nil
+			if not kind or seen[id] or value:find("[%z\1-\31\127]")
+				or not valid_value(kind, kind == "message" and value or trim(value), original) then
+				return nil, "Invalid or duplicate setting: [" .. (schema[section] and section or "unknown") .. "]"
+			end
+			seen[id] = true
+			edits[n] = { section = section, key = key, id = id,
+				value = kind == "message" and ('"' .. value .. '"') or trim(value) }
+		end
+		if pos ~= size then return nil end
+		return edits
+	end
+
+	local function inline_comment(value, quoted)
+		if quoted then
+			local opening, quote = value:match("^([ \t]*)(['\"])")
+			if opening then
+				for pos = #value, #opening + 2, -1 do
+					if value:sub(pos, pos) == quote then
+						local tail = value:sub(pos + 1)
+						if tail:match("^[ \t]*$") or tail:match("^[ \t]*[;#]") then
+							return value:sub(1, pos), tail
+						end
+					end
+				end
+			end
+		end
+		local comment = value:find("[;#]")
+		return comment and value:sub(1, comment - 1) or value, comment and value:sub(comment) or ""
+	end
+
+	local function patch(raw, edits)
+		local lines, indexes, sections = {}, {}, {}
+		local newline = raw:match("(\r?\n)") or "\n"
+		local current, pos = "", 1
+		while pos <= #raw do
+			local nl = raw:find("\n", pos, true)
+			local ending = nl and (raw:sub(nl - 1, nl - 1) == "\r" and "\r\n" or "\n") or ""
+			local line = raw:sub(pos, nl and nl - #ending or #raw)
+			lines[#lines + 1] = { text = line, ending = ending }
+			local name = section_name(trim(line))
+			if name then
+				current = name
+			elseif not trim(line):match("^[;#]") then
+				local key = line:match("^([^=]+)=")
+				if key then indexes[current .. "." .. trim(key):lower()] = #lines end
+			end
+			sections[current] = #lines
+			pos = nl and nl + 1 or #raw + 1
+		end
+		local insertions, new_sections, new_entries = {}, {}, {}
+		for _, edit in ipairs(edits) do
+			local i = indexes[edit.id]
+			if i then
+				local line = lines[i]
+				local prefix, value = line.text:match("^(.-=)(.*)$")
+				local base, suffix = inline_comment(value, edit.id == "commands.blocked_message")
+				if trim(base) ~= edit.value then
+					local leading = base:match("^[ \t]*")
+					local trailing = trim(base) ~= "" and base:match("[ \t]*$") or ""
+					if edit.id == "commands.blocked_message" and trim(suffix) ~= "" then
+						-- A comment may itself end with a quote. Keep it as a comment line to avoid that ambiguity.
+						prefix = leading .. trim(suffix) .. newline .. prefix
+						suffix = ""
+					end
+					line.text = prefix .. leading .. edit.value .. trailing .. suffix
+				end
+			else
+				local formatted = edit.key .. " = " .. edit.value
+				local after = sections[edit.section]
+				if after then
+					local additions = insertions[after] or {}
+					additions[#additions + 1] = formatted
+					insertions[after] = additions
+				else
+					if not new_entries[edit.section] then
+						new_entries[edit.section] = {}
+						new_sections[#new_sections + 1] = edit.section
+					end
+					local additions = new_entries[edit.section]
+					additions[#additions + 1] = formatted
+				end
+			end
+		end
+		local out = {}
+		for i, line in ipairs(lines) do
+			out[#out + 1] = line.text .. line.ending
+			if insertions[i] then
+				if line.ending == "" then out[#out + 1] = newline end
+				out[#out + 1] = table.concat(insertions[i], newline) .. newline
+			end
+		end
+		if #new_sections > 0 then
+			if #out > 0 and out[#out]:sub(-1) ~= "\n" then out[#out + 1] = newline end
+			for _, section in ipairs(new_sections) do
+				if #out > 0 then out[#out + 1] = newline end
+				out[#out + 1] = "[" .. section .. "]" .. newline .. table.concat(new_entries[section], newline) .. newline
+			end
+		end
+		return table.concat(out), newline
+	end
+
+	local function mkdir(path)
+		local result = windows and run('mkdir "' .. path:gsub("/", "\\") .. '" 2>NUL && echo made')
+			or (not windows and run("mkdir -m 700 -- " .. sh_quote(path) .. " 2>/dev/null && echo made"))
+		return type(result) == "string" and trim(result) == "made"
+	end
+
+	local function remove_file(path)
+		if windows then return trim(run('del /Q "' .. path:gsub("/", "\\") .. '" 2>NUL && echo removed') or "") == "removed" end
+		return trim(run("rm -f -- " .. sh_quote(path) .. " 2>/dev/null && echo removed") or "") == "removed"
+	end
+
+	local function remove_edit_lock()
+		remove_file(EDIT_LOCK_OWNER)
+		if windows then run('rmdir "' .. EDIT_LOCK:gsub("/", "\\") .. '" 2>NUL')
+		else run("rmdir " .. sh_quote(EDIT_LOCK)) end
+	end
+
+	local function take_edit_lock()
+		if mkdir(EDIT_LOCK) then
+			local owner = os.time() .. " " .. scratch() .. "\n"
+			if write(EDIT_LOCK_OWNER, owner) then return owner end
+			remove_edit_lock()
+			return nil, STORAGE, "Could not record the server policy lock owner."
+		end
+		local owner = read(EDIT_LOCK_OWNER, 512)
+		local timestamp = owner and tonumber(owner:match("^(%d+) [%w_-]+\n$"))
+		-- A slow or suspended zone may still hold the lock. Only the operator can confirm it is abandoned.
+		if timestamp and os.time() - timestamp >= EDIT_LOCK_STALE then
+			return nil, BUSY, "Server policy lock may be stale. Ask the server operator to check .hailstone-admin-lock."
+		end
+		return nil, BUSY, "The server policy is busy or not writable. Try again."
+	end
+
+	local function unlock(owner)
+		if read(EDIT_LOCK_OWNER, #owner) == owner then remove_edit_lock() end
+	end
+
+	local function owned_backup(base, revision)
+		local audit = read(base .. ".txt", 4096)
+		if not audit then return false end
+		local recorded, prior = audit:match("^revision=(" .. REVISION_ID .. ")\nprevious_revision=(" .. REVISION_ID ..
+			")\nprevious_existed=true\ncharacter_id=%d+\naccount_id=%d+\nedited=[%w_,.]+\n$")
+		if recorded ~= revision then return false end
+		local raw = read(base .. ".cfg", LIMIT)
+		return raw and policy_revision(raw) == prior
+	end
+
+	local function prune_history(newest)
+		local keep = setting("server_management_history")
+		if keep < 1 or keep % 1 ~= 0 then return end
+		local listing
+		if windows then listing = run('dir /b /a:-d-l "' .. HISTORY:gsub("/", "\\") .. '\\*" 2>NUL')
+		else listing = run("find " .. sh_quote(HISTORY) .. " -maxdepth 1 -type f -printf '%f\\n' 2>/dev/null") end
+		if not listing then return end
+		local configs, audits, older = {}, {}, {}
+		for name in listing:gmatch("[^\r\n]+") do
+			local revision, extension = name:match("^(" .. REVISION_ID .. ")%.([a-z]+)$")
+			if extension == "cfg" then configs[revision] = true end
+			if extension == "txt" then audits[revision] = true end
+		end
+		for revision in pairs(configs) do
+			if revision ~= newest and audits[revision] then older[#older + 1] = revision end
+		end
+		table.sort(older, function(a, b) return a > b end)
+		local count = 1 -- Always keep the backup created by this save, even if the clock moved backward.
+		for _, revision in ipairs(older) do
+			local base = HISTORY .. "/" .. revision
+			if owned_backup(base, revision) then
+				count = count + 1
+				if count > keep and (not remove_file(base .. ".txt") or not remove_file(base .. ".cfg")) then
+					log("management: could not prune revision " .. revision)
+				end
+			end
+		end
+	end
+
+	local PS_REPLACE = [[
+param($from, $to)
+$ErrorActionPreference = 'Stop'
+$src = Join-Path (Get-Location) $from
+$dst = Join-Path (Get-Location) $to
+if ([System.IO.File]::Exists($dst)) {
+    [System.IO.File]::Replace($src, $dst, [System.Management.Automation.Language.NullString]::Value)
+} else {
+    [System.IO.File]::Move($src, $dst)
+}
+[Console]::WriteLine('replaced')
+]]
+	local function replace(from, to)
+		if windows then
+			local output = powershell(PS_REPLACE, '"' .. from:gsub("/", "\\") .. '" "' .. to:gsub("/", "\\") .. '"')
+			return output and trim(output) == "replaced"
+		end
+		local output = run("mv -fT -- " .. sh_quote(from) .. " " .. sh_quote(to) .. " && echo replaced")
+		return output and trim(output) == "replaced"
+	end
+
+	local function reply(client, action, request, status, revision, data)
+		local packet = Packet(REPLY, 20 + #data, true)
+		packet:WriteInt32(0, MAGIC)
+		packet:WriteInt16(4, 1)
+		packet:WriteInt16(6, action)
+		packet:WriteInt32(8, request)
+		packet:WriteInt16(12, status)
+		packet:WriteInt32(14, revision)
+		packet:WriteInt16(18, #data)
+		if #data > 0 then packet:WriteFixedLengthString(20, data, #data) end
+		client:QueuePacket(packet, true)
+	end
+
+	local function mark_used(entry)
+		last_use = last_use + 1
+		entry.last_used = last_use
+	end
+
+	local function snapshot(client, id, raw, name)
+		if not snapshots[id] then
+			local count, oldest = 0, nil
+			for char_id, entry in pairs(snapshots) do
+				count = count + 1
+				if not oldest or entry.last_used < snapshots[oldest].last_used then oldest = char_id end
+			end
+			if count >= MAX_SNAPSHOTS then snapshots[oldest] = nil end
+		end
+		token = token % 2147483647 + 1
+		local entry = { token = token, raw = raw, name = name, entity = client:GetID(), account = client:AccountID() }
+		mark_used(entry)
+		snapshots[id] = entry
+		return token
+	end
+
+	local function save_under_lock(client, previous, edits)
+		if not enabled() then return DENIED, "Server Management access denied." end
+		local raw, readable, name = load_cfg(true)
+		if not readable then return STORAGE, "Could not read hailstone.cfg." end
+		if not permitted(account_status(client) or 0, raw) then return DENIED, "Server Management access denied." end
+		if raw ~= previous.raw or name ~= previous.name then
+			return STALE, "The server configuration changed. Reload before saving."
+		end
+		local updated, newline = patch(raw or NO_POLICY, edits)
+		if updated == (raw or NO_POLICY) then return OK, raw or NO_POLICY, raw, name end
+		local addon_policy_changed = false
+		for _, edit in ipairs(edits) do
+			if edit.section == "addons" then addon_policy_changed = true end
+		end
+		if addon_policy_changed then
+			local required = repositories(read_control(updated, "addons", "required") or "", true)
+			local blocked = repositories(read_control(updated, "addons", "block") or "", false)
+			if not required or not blocked then return INVALID, "Review the required and blocked add-on lists." end
+			for id in pairs(required) do
+				if blocked[id] then return INVALID, "An add-on cannot be both required and blocked." end
+			end
+		end
+		local old_revision = policy_revision(updated)
+		if old_revision then updated = updated:sub(updated:find("\n", 1, true) + 1) end
+		mkdir(HISTORY) -- existing is fine; the verified backup write below is authoritative
+		local revision, backup = next_revision(old_revision)
+		if not revision then return STORAGE, "Could not reserve a revision in the policy history." end
+		updated = POLICY_REVISION .. revision .. newline .. updated
+		if #updated > LIMIT then return INVALID, "The resulting hailstone.cfg is larger than 16 KiB." end
+		local keys = {}
+		for _, edit in ipairs(edits) do keys[#keys + 1] = edit.id end
+		local audit = string.format("revision=%s\nprevious_revision=%s\nprevious_existed=%s\ncharacter_id=%d\naccount_id=%d\nedited=%s\n",
+			revision, old_revision or "none", tostring(raw ~= nil), client:CharacterID(), client:AccountID(), table.concat(keys, ","))
+		if not write(backup .. ".cfg", raw or "") or not write(backup .. ".txt", audit) then
+			return STORAGE, "Could not back up hailstone.cfg. Active policy was not changed."
+		end
+		local tmp = FILES_DIR .. "/.hailstone-admin-" .. revision .. ".tmp"
+		local path = FILES_DIR .. "/" .. name
+		if not write(tmp, updated) then return STORAGE, "Could not stage hailstone.cfg." end
+		if raw ~= nil and not windows then
+			local output = run("chmod --reference=" .. sh_quote(path) .. " -- " .. sh_quote(tmp) .. " && echo preserved")
+			if not output or trim(output) ~= "preserved" then return STORAGE, "Could not preserve hailstone.cfg permissions." end
+		end
+		-- Compare again before replacement, including external edits during the backup. Other windows are locked out.
+		local latest, still_readable = read(path, LIMIT)
+		if not still_readable or latest ~= raw then return STALE, "The server configuration changed. Reload before saving." end
+		if not replace(tmp, path) or read(path, LIMIT) ~= updated then return STORAGE, "Could not replace hailstone.cfg." end
+		local pruned, prune_error = pcall(prune_history, revision)
+		if not pruned then log("management: could not prune policy history: " .. tostring(prune_error)) end
+		log(string.format("management: saved revision %s by account %d, character %d (%s)", revision,
+			client:AccountID(), client:CharacterID(), table.concat(keys, ", ")))
+		return OK, updated, updated, name
+	end
+
+	local function on_request(client, packet)
+		local size = packet:GetSize()
+		if setting("enabled") == 0 or size < 12 or size > LIMIT + 18 or packet:ReadInt32(0) ~= MAGIC
+			or packet:ReadInt16(4) ~= 1 then return end
+		local action, request = packet:ReadInt16(6), packet:ReadInt32(8)
+		if request == 0 or (action ~= OPEN and action ~= SAVE) then return end
+		local id = client:CharacterID()
+		if not allow(requests, id, 12) then return end
+		local rank = account_status(client) or 0
+		if rank < 1 or not enabled() then
+			reply(client, action, request, DENIED, 0, "Server Management access denied.")
+			return
+		end
+		-- The existing file listing supplies the name for a direct read. Only admitted requests can cause a
+		-- filesystem scan, which still checks the authoritative name and policy before opening or writing.
+		local raw, readable = load_cfg()
+		if not readable then
+			reply(client, action, request, STORAGE, 0, "Could not read hailstone.cfg.")
+			return
+		end
+		if not permitted(rank, raw) then
+			reply(client, action, request, DENIED, 0, "Server Management access denied.")
+			return
+		end
+		if action == OPEN and size == 12 then
+			local current, current_readable, name = load_cfg(true)
+			if not current_readable then
+				reply(client, action, request, STORAGE, 0, "Could not read hailstone.cfg.")
+				return
+			end
+			if not permitted(account_status(client) or 0, current) then
+				reply(client, action, request, DENIED, 0, "Server Management access denied.")
+				return
+			end
+			reply(client, action, request, OK, snapshot(client, id, current, name), current or NO_POLICY)
+			return
+		end
+		if action == OPEN or size < 18 then
+			reply(client, action, request, INVALID, 0, "Malformed Server Management request.")
+			return
+		end
+		local previous = snapshots[id]
+		if not previous or previous.token ~= packet:ReadInt32(12) or previous.entity ~= client:GetID()
+			or previous.account ~= client:AccountID() then
+			reply(client, action, request, STALE, 0, "The server no longer has this editor snapshot. Reload before saving.")
+			return
+		end
+		local edits, why = read_edits(packet, size, previous.raw)
+		if not edits then
+			reply(client, action, request, INVALID, 0, why or "Malformed Server Management changes.")
+			return
+		end
+		mark_used(previous)
+		local owner, lock_status, lock_message = take_edit_lock()
+		if not owner then
+			reply(client, action, request, lock_status, 0, lock_message)
+			return
+		end
+		local ok, status, data, after, filename = pcall(save_under_lock, client, previous, edits)
+		unlock(owner)
+		if not ok then
+			log("management: save failed: " .. tostring(status))
+			reply(client, action, request, STORAGE, 0, "Could not save hailstone.cfg.")
+			return
+		end
+		local revision = status == OK and snapshot(client, id, after, filename) or 0
+		reply(client, action, request, status, revision, data)
+	end
+
+	local function on_disconnect(e)
+		local client = e.self
+		local id = client:CharacterID()
+		local entry = snapshots[id]
+		if entry and entry.entity == client:GetID() and entry.account == client:AccountID() then
+			snapshots[id] = nil
+		end
+	end
+
+	return {
+		request = REQUEST,
+		advertised = advertised,
+		account_status = account_status,
+		on_request = on_request,
+		on_disconnect = on_disconnect,
+		reset = function()
+			snapshots, last_use, requests = {}, 0, limiter(10)
+		end,
+	}
+end)()
+
+-- The server's settings for the client. Bit 0, the retired player count setting, stays clear.
+-- Bit 1 advertises Server Management to an eligible account. The encounter still authorizes each request.
+-- Bit 2 carries the recipient's account status for command rules. Older replies do not carry the field.
 local function send_settings(client)
 	if setting("enabled") == 0 then
 		return
 	end
-	local flags = 0
-	local p = Packet(reply_op(client, OP_SETTINGS), 10, true)
+	local opcode = reply_op(client, OP_SETTINGS)
+	local rank = management.account_status(client)
+	local flags = management.advertised(rank or 0) and 2 or 0
+	local include_rank = opcode == OP_SETTINGS and rank ~= nil
+	if include_rank then flags = flags + 4 end
+	local p = Packet(opcode, include_rank and 12 or 10, true)
 	p:WriteInt32(0, MAGIC)
 	p:WriteInt16(4, 1)
 	p:WriteInt32(6, flags)
+	if include_rank then p:WriteInt16(10, rank) end
 	client:QueuePacket(p)
 end
 
@@ -1606,6 +2397,10 @@ local function on_unhandled_opcode(e)
 		on_zone_links_request(e.self, packet)
 		return
 	end
+	if op == management.request then
+		if not e.connecting then management.on_request(e.self, packet) end
+		return
+	end
 	if op ~= OP_SETTINGS_REQUEST then
 		return
 	end
@@ -1627,6 +2422,7 @@ end
 function event_encounter_load(e)
 	encounter = e.encounter
 	setting_cache = {} -- #reloadquest: the buckets as they are now
+	management.reset()
 	quest_list, quest_file_flags = nil, {} -- and the quest files as they are now
 	zone_links = nil   -- and the zone links built again when next asked
 	if setting("enabled") ~= 0 and setting("client_files") ~= 0 then
@@ -1634,10 +2430,12 @@ function event_encounter_load(e)
 	end
 	eq.register_player_event("hailstone", Event.unhandled_opcode, on_unhandled_opcode)
 	eq.register_player_event("hailstone", Event.signal, on_signal)
+	if Event.disconnect then eq.register_player_event("hailstone", Event.disconnect, management.on_disconnect) end
 end
 
 function event_encounter_unload(e)
 	waiting, waiting_order, files_timer, served_last = {}, nil, false, nil
 	eq.unregister_player_event("hailstone", Event.unhandled_opcode)
 	eq.unregister_player_event("hailstone", Event.signal)
+	if Event.disconnect then eq.unregister_player_event("hailstone", Event.disconnect) end
 end

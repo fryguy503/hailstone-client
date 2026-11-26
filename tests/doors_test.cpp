@@ -1182,3 +1182,36 @@ TEST_CASE("closed doors fill their doorways (NMS server doors in four zones)") {
         CHECK_FALSE(fills_doorway(*mesh, shape, clockwise));
     }
 }
+
+TEST_CASE("ground objects: a replacement under the same drop id names what changed") {
+    game::GroundObject a;
+    a.drop_id = 9;
+    a.name = "IT63_ACTORDEF";
+    a.position = {1, 2, 3};
+    a.heading = 64;
+    game::GroundObject b = a;
+    auto c = game::ground_object_change(a, b);
+    CHECK_FALSE(c.model);
+    CHECK_FALSE(c.placement);
+    b.type = 1; // not drawn: neither
+    c = game::ground_object_change(a, b);
+    CHECK_FALSE(c.model);
+    CHECK_FALSE(c.placement);
+    b.name = "IT10_ACTORDEF";
+    c = game::ground_object_change(a, b);
+    CHECK(c.model);
+    CHECK_FALSE(c.placement);
+    for (auto change : {+[](game::GroundObject& o) { o.position.x += 1; }, +[](game::GroundObject& o) { o.position.z -= 1; },
+                        +[](game::GroundObject& o) { o.heading = 65; }, +[](game::GroundObject& o) { o.tilt_x = 1; },
+                        +[](game::GroundObject& o) { o.tilt_y = 1; }, +[](game::GroundObject& o) { o.size = 2; }}) {
+        game::GroundObject moved = a;
+        change(moved);
+        c = game::ground_object_change(a, moved);
+        CHECK_FALSE(c.model);
+        CHECK(c.placement);
+        CHECK(game::ground_object_transform(moved) != game::ground_object_transform(a));
+    }
+    // A NaN field compares by its bits: the same record is no change each update.
+    a.size = std::nanf("");
+    CHECK_FALSE(game::ground_object_change(a, a).placement);
+}

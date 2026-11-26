@@ -134,7 +134,8 @@ CollisionMesh CollisionMesh::build_scene(const assets::Zone& zone, bool visual) 
                 if (moving && moving_triangle_node(*moving, ia, ib, ic) != assets::kStillVertex) continue;
                 if (!finite(world[ia]) || !finite(world[ib]) || !finite(world[ic])) continue;
                 if (mesh.front_ccw) std::swap(ib, ic);
-                const auto triangle = CollisionTriangle::make(world[ia], world[ib], world[ic], flags);
+                auto triangle = CollisionTriangle::make(world[ia], world[ib], world[ic], flags);
+                triangle.visual_two_sided = part.material < mesh.materials.size() && mesh.materials[part.material].two_sided;
                 if (visual && !visual_surface(triangle)) continue;
                 m.triangles_.push_back(triangle);
                 m.light_.push_back(terrain ? vertex_alpha_light(mesh.vertices[ia].color, mesh.vertices[ib].color,

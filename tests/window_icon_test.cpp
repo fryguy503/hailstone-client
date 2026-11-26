@@ -1,4 +1,4 @@
-// app/window_icon.h: the window's icon, read from icons/hailstone.png.
+// app/window_icon.h: the window's icon, read from icons/hailstone.png; core/png_write.h's write_png_rgba.
 #include <doctest/doctest.h>
 
 #include <cstddef>
@@ -32,6 +32,17 @@ TEST_CASE("window icon: a PNG reads back as RGBA8 with its pixels") {
     CHECK(img->height == 16);
     CHECK(img->format == hailstone::assets::PixelFormat::RGBA8);
     CHECK(img->mips[0] == px);
+}
+
+TEST_CASE("PNG writing: a write that fails at the last flush is reported") {
+#if defined(__linux__)
+    // /dev/full takes the open and refuses every write: a 2 x 2 image is still in the stream's buffer until it closes.
+    if (std::filesystem::exists("/dev/full")) CHECK_FALSE(hailstone::write_png_rgba("/dev/full", pixels(2, 2), 2, 2));
+#endif
+    // A folder where the file goes: the open fails.
+    hailstone::test::ScratchDir dir("png_write_fail");
+    std::filesystem::create_directories(dir.path() / "taken.png");
+    CHECK_FALSE(hailstone::write_png_rgba(dir.path() / "taken.png", pixels(2, 2), 2, 2));
 }
 
 TEST_CASE("window icon: a missing, broken or oversized file is refused") {

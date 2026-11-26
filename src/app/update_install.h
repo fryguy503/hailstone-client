@@ -13,6 +13,9 @@
 //                           new version reaches the login screen
 //   failed.txt              a release that failed to start twice and was rolled back (not offered again)
 //   note.txt                what a rollback has to tell the version it starts (StartNote::message)
+//   install.lock            held (exclusively) by the one process that installs, rolls back or ends a pending update
+//   running.lock            held (shared) by every Hailstone running from the folder; taken exclusively only to see
+//                           that no other is running (an install, a rollback, a start's count)
 // The install runs when the client quits (nothing else of it is running then): each file is first unpacked into
 // new/, then the old one is moved into previous/ and the new one moved into its place. Both are renames on one
 // volume, which Windows allows for a running program and its loaded libraries, so the quitting client can do it
@@ -22,12 +25,14 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "core/sha256.h"
 #include "core/update_manifest.h"
+#include "platform/shared_file.h"
 
 namespace hailstone::app {
 
@@ -63,20 +68,31 @@ struct InstallResult {
     std::string error;
 };
 // Installs the staged update over the folder; `running` is this build's version. On any failure the folder is put
-// back as it was. `progress` (may be empty) gets 0..1.
+// back as it was. `progress` (may be empty) gets 0..1. Nothing is installed (an error) while another Hailstone runs
+// from the folder (running.lock): the caller lets go of its own claim (claim_running) first.
 InstallResult install_staged_update(const std::filesystem::path& install_dir, const std::string& running,
                                     const std::function<void(float)>& progress = {});
+
+// This process's claim on the folder (a shared lock on update/running.lock), held while it runs from the folder's
+// files: no other Hailstone installs or rolls back an update under it. nullopt when it cannot be had (a folder that
+// cannot be written, or another process installing at this moment).
+std::optional<platform::ScopedFileLock> claim_running(const std::filesystem::path& install_dir);
 
 struct StartNote {
     std::string message; // for the player and the log ("" nothing happened)
     bool restart = false; // the folder now holds another version than this one: start it and quit
+    // This process's claim (claim_running), taken before the install lock is let go so that no other start counts
+    // or rolls back between the two. Kept for as long as the process runs.
+    std::optional<platform::ScopedFileLock> running_claim;
 };
-// First thing at start. A cut-off install is undone; a pending update's start is counted, and a third start of it
-// that never reached the login screen rolls it back (failed.txt); another version than the pending one (the player
-// put one in by hand) ends the pending state.
+// First thing at start. Only while no other Hailstone runs from the folder: a cut-off install is undone; a pending
+// update's start is counted, and a third start of it that never reached the login screen rolls it back (failed.txt).
+// While another one runs, none of that happens (its start was counted, and it runs from these files). Another version
+// than the pending one (the player put one in by hand) ends the pending state.
 StartNote update_at_start(const std::filesystem::path& install_dir, const std::string& running);
-// The login screen is up: a pending update of this version started fine, and previous/ goes.
-void update_started_fine(const std::filesystem::path& install_dir, const std::string& running);
+// The login screen is up: a pending update of this version started fine, and previous/ goes. False (nothing done)
+// while another process holds the install lock: call it again later.
+bool update_started_fine(const std::filesystem::path& install_dir, const std::string& running);
 
 // A file an earlier release shipped that later ones do not: path ('/'-separated, from the folder), size, SHA-256.
 struct RetiredFile {
@@ -90,7 +106,8 @@ struct RetiredFile {
 // changed since stays, and so do the plugin's settings beside them; a plugin folder whose library is another build
 // (the add-on's, or one built from the plugin's repository) keeps every file, its unchanged window files too; folders
 // left empty go. Does nothing while an update is pending (a rollback needs them): call it once the login screen is up,
-// after update_started_fine. Returns the files removed.
+// after update_started_fine. Does nothing either while another process holds the install lock (the next start does
+// it). Returns the files removed.
 const std::vector<RetiredFile>& retired_release_files();
 std::vector<std::string> retire_old_release_files(const std::filesystem::path& install_dir);
 std::vector<std::string> retire_old_release_files(const std::filesystem::path& install_dir,

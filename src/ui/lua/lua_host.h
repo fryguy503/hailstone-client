@@ -233,6 +233,8 @@ public:
     // The layout copy: the character's layout becomes the window keys of `from` (another character's file), or the
     // shared layout when `from` is empty; the character's other keys of its own (its item marks) stay. Saved at once.
     void copy_character_layout(const std::filesystem::path& from);
+    std::string capture_layout_profile_settings() const;
+    bool apply_layout_profile_settings(std::string_view snapshot);
     // Whether a settings key is the character's rather than shared (the palette, the spell book's sort and filters,
     // ...): its window layout (layout_setting), and the item marks ("items." keys: locks, junk, bag filters). The
     // character's file is per server, so a same-named character elsewhere has marks of its own.

@@ -1,10 +1,12 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "app/login_launch.h"
+#include "platform/shared_file.h"
 
 namespace hailstone::app {
 
@@ -69,7 +71,8 @@ struct ClientOptions {
 };
 
 // The playable client: login, server and character select, then the zone. options.auto_password is wiped once the
-// client has taken it (core/wipe.h).
-int run_client(ClientOptions& options);
+// client has taken it (core/wipe.h). `running_claim` is this process's claim on the Hailstone folder
+// (app/update_install.h claim_running), let go once the client is gone and before a downloaded update installs.
+int run_client(ClientOptions& options, std::optional<platform::ScopedFileLock> running_claim = std::nullopt);
 
 } // namespace hailstone::app

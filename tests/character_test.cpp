@@ -483,6 +483,8 @@ TEST_CASE("a bone named with another model's code still takes the donor's track"
           doctest::skip(!hailstone::test::game_dir())) {
     // South Karana's Halas female (HLF) names her left upper arm HUFBI_L_TRACK. Matched by her own code alone, it
     // took no ELF track: in every clip her left arm stood out at its rest angle, the hand at shoulder height.
+    // Her model is the one in southkarana_chr.s3d; a live install has none, and its HLF (hlf_chr.s3d) is another.
+    if (!hailstone::test::game_file("southkarana_chr.s3d")) return;
     auto lib = CharacterLibrary::load(*hailstone::test::game_dir(), "southkarana", true);
     auto m = lib.model("HLF");
     if (!m) return; // an asset folder without the zone's model
@@ -1032,8 +1034,12 @@ TEST_CASE("real IVM from the game folder loads with no body mesh and dresses IT1
     REQUIRE(model);
     // Its 0x2d mesh references name 0x2c fragments (IVM_DMSPRITEDEF, IVMHE00_DMSPRITEDEF) that in RoF2's
     // global_chr have no polygons and skin pieces that count 0: they are left out, and the body is empty. (A live folder's ivm_chr.s3d has a 0x36 IVM with a body; this test is for RoF2's.)
-    CHECK(model->vertices.empty());
-    CHECK(model->indices.empty());
+    if (hailstone::test::game_dir()->exists("ivm_chr.s3d")) {
+        MESSAGE("ivm_chr.s3d (a live folder's IVM) is present: the empty body was not checked");
+    } else {
+        CHECK(model->vertices.empty());
+        CHECK(model->indices.empty());
+    }
     // chrdump IVM: the right hand point's chain up to the root.
     const std::array<std::string_view, 8> kHandChain{"IVMR_POINT_TRACK", "IVMFI_R2_TRACK", "IVMFI_R_TRACK",
                                                       "IVMFO_R_TRACK",    "IVMBI_R_TRACK",  "IVMCH_TRACK",

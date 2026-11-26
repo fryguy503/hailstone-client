@@ -34,8 +34,10 @@ public:
     // Where an opened archive's bytes live. Heap: read into a private buffer once, as from_memory holds them. Mapped:
     // a read-only mapping of the file (platform::MappedFile), so only the index below is private memory and the bytes
     // stay in the system's file cache. A mapped file must not be replaced or rewritten while the archive lives:
-    // Windows refuses to rename over a file with a mapped view, and a file truncated in place faults the reader
-    // (docs/hardening.md). So only a file Hailstone never writes is mapped: storage_for() decides.
+    // Windows refuses to rename over a file with a mapped view. So only a file Hailstone never writes is mapped:
+    // storage_for() decides. A mapped file another program truncates in place is caught: its bytes are copied out
+    // through platform::MappedFile::read, and a read past its new end throws as a malformed archive does
+    // (docs/hardening.md "Mapped game archives").
     enum class Storage : std::uint8_t { Heap, Mapped };
 
     // Throws std::runtime_error on a malformed archive. Mapped falls back to Heap when the file cannot be mapped. A
@@ -94,6 +96,10 @@ private:
     void parse_index();
     std::vector<std::byte> inflate_entry(const Entry& e) const;
     std::span<const std::byte> bytes() const { return storage_ ? storage_->view() : std::span<const std::byte>{}; }
+    // `size` bytes of the archive from `offset`: a view of a buffer in memory, or for a mapped file a guarded copy into
+    // `scratch` (a file truncated under the mapping throws there instead of faulting in a parser). Throws
+    // std::out_of_range past the end, as ByteReader does.
+    std::span<const std::byte> span_at(std::uint64_t offset, std::uint64_t size, std::vector<std::byte>& scratch) const;
 
     std::string label_;
     std::shared_ptr<const Bytes> storage_;

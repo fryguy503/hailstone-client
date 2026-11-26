@@ -125,7 +125,7 @@ std::string cleanup_name(std::string_view name, bool keep_hash) {
 }
 
 // GetSpawnType, with corpses first (the game::Spawn version knows only players and NPCs).
-game::eSpawnType spawn_type(const game::Spawn& s) {
+game::eSpawnType spawn_type_impl(const game::Spawn& s) {
     if (s.is_corpse) return game::eSpawnType::CORPSE;
     return game::Spawn::GetSpawnType(&s);
 }
@@ -190,20 +190,22 @@ bool in_fellowship(const game::Spawn& s, const net::FellowshipState* fellowship,
 
 // The players MQ's IsPCNear looks at: not NPCs or corpses, and not in the group. Without a group the player counts
 // too, as IsInGroup is false for everyone then. Found once per search (search_spawns), not once per spawn.
-std::vector<const game::Spawn*> near_candidates(const game::WorldState& world, const game::GroupState* group) {
-    std::vector<const game::Spawn*> out;
+std::vector<std::uint32_t> near_candidates(const game::WorldState& world, const game::GroupState* group) {
+    std::vector<std::uint32_t> out;
     for (const auto& [id, o] : world.spawns) {
         if (o.is_npc || o.is_corpse) continue;
         if (in_group(o, world, group, false)) continue;
-        out.push_back(&o);
+        out.push_back(id);
     }
     return out;
 }
 
 // MQ's IsPCNear: another of those players within `radius` (3D) of the spawn.
-bool pc_near(const game::Spawn& s, const std::vector<const game::Spawn*>& players, float radius) {
-    for (const game::Spawn* o : players)
-        if (o->id != s.id && distance3d(*o, s) < radius) return true;
+bool pc_near(const game::Spawn& s, const game::WorldState& world, const std::vector<std::uint32_t>& players, float radius) {
+    for (std::uint32_t id : players) {
+        const auto found = world.spawns.find(id);
+        if (found != world.spawns.end() && id != s.id && distance3d(found->second, s) < radius) return true;
+    }
     return false;
 }
 
@@ -218,9 +220,9 @@ bool xtarget_hater(const game::Spawn& s, const game::XTargetState* xt) {
 bool class_in(std::uint8_t c, std::initializer_list<std::uint8_t> set) { return std::find(set.begin(), set.end(), c) != set.end(); }
 
 // SpawnMatchesSearch, in its order.
-bool matches(const SpawnSearch& q, const game::Spawn& s, const game::Spawn* me, const game::WorldState& world,
-             const SearchSources& src, const std::vector<const game::Spawn*>& near_players) {
-    const game::eSpawnType raw = spawn_type(s);
+bool matches_impl(const SpawnSearch& q, const game::Spawn& s, const game::Spawn* me, const game::WorldState& world,
+                  const SearchSources& src, const std::vector<std::uint32_t>& near_players) {
+    const game::eSpawnType raw = spawn_type_impl(s);
     K type = kind_of(raw);
     if (raw == game::eSpawnType::ITEM) return false;
 
@@ -293,7 +295,7 @@ bool matches(const SpawnSearch& q, const game::Spawn& s, const game::Spawn* me, 
     } else if (q.radius < 10000.0 && me && distance3d(*me, s) > q.radius) {
         return false;
     }
-    if (q.nopcnear > 0.0f && pc_near(s, near_players, q.nopcnear)) return false;
+    if (q.nopcnear > 0.0f && pc_near(s, world, near_players, q.nopcnear)) return false;
     if (q.zradius < 10000.0 && (p.z > z_from + q.zradius || p.z < z_from - q.zradius)) return false;
     if (q.light) {
         const std::string_view l = light_of(s);
@@ -329,6 +331,18 @@ bool matches(const SpawnSearch& q, const game::Spawn& s, const game::Spawn* me, 
 }
 
 } // namespace
+
+game::eSpawnType spawn_type(const game::Spawn& spawn) { return spawn_type_impl(spawn); }
+
+SpawnSearchMatcher::SpawnSearchMatcher(const SpawnSearch& search, const game::WorldState& world,
+                                       const SearchSources& sources)
+    : search_(search), world_(world), sources_(sources) {
+    if (search.nopcnear > 0.0f) near_players_ = near_candidates(world, sources.group);
+}
+
+bool SpawnSearchMatcher::matches(const game::Spawn& spawn) const {
+    return matches_impl(search_, spawn, world_.player(), world_, sources_, near_players_);
+}
 
 SearchSources sources_of(const net::GameConnection& conn) {
     SearchSources s;
@@ -514,7 +528,7 @@ SpawnSearch parse_spawn_search(std::string_view text, const game::GuildState* gu
 }
 
 bool is_named(const game::Spawn& s) {
-    if (spawn_type(s) != game::eSpawnType::NPC || !game::is_targetable(s)) return false;
+    if (spawn_type_impl(s) != game::eSpawnType::NPC || !game::is_targetable(s)) return false;
     if (s.class_id >= 20 && s.class_id <= 35) return false; // GM trainers
     switch (s.class_id) {
     // The service classes MQ's IsNamed passes by: banker, merchant, point merchants, adventure, object, tribute
@@ -557,10 +571,10 @@ std::vector<const game::Spawn*> search_spawns(const SpawnSearch& q, const game::
                                               const SearchSources& sources) {
     const game::Spawn* me = world.player();
     std::vector<std::pair<float, const game::Spawn*>> found;
-    const std::vector<const game::Spawn*> near_players =
-        q.nopcnear > 0.0f ? near_candidates(world, sources.group) : std::vector<const game::Spawn*>{};
+    const SpawnSearchMatcher matcher(q, world, sources);
     for (const auto& [id, s] : world.spawns) {
-        if (!matches(q, s, me, world, sources, near_players)) continue;
+        (void)id;
+        if (!matcher.matches(s)) continue;
         found.emplace_back(me ? distance3d(*me, s) : 0.0f, &s);
     }
     std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) {

@@ -2,10 +2,14 @@
 
 #include <algorithm>
 #include <fstream>
+#include <string_view>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 #include "app/addon_install.h"
 #include "app/update_install.h"
+#include "core/atomic_file.h"
 #include "core/config.h"
 #include "core/log.h"
 #include "core/version.h"
@@ -37,6 +41,31 @@ bool newer(const std::string& release, const std::string& running) {
     return a && b && compare_versions(*a, *b) > 0;
 }
 
+constexpr std::size_t kMaxSeenFeeds = 16;
+
+fs::path seen_file(const fs::path& data_dir) { return data_dir / "update" / "feed-seen.txt"; }
+
+// feed-seen.txt's lines, "<version> <feed address>", one a feed (the newest first).
+std::vector<std::pair<std::string, std::string>> read_seen(const fs::path& data_dir) {
+    std::vector<std::pair<std::string, std::string>> out;
+    auto text = read_text_file(seen_file(data_dir));
+    if (!text) return out;
+    std::size_t at = 0;
+    while (at < text->size() && out.size() < kMaxSeenFeeds) {
+        std::size_t nl = text->find('\n', at);
+        if (nl == std::string::npos) nl = text->size();
+        std::string_view line(text->data() + at, nl - at);
+        at = nl + 1;
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+        const std::size_t space = line.find(' ');
+        if (space == std::string_view::npos || space + 1 >= line.size()) continue;
+        const std::string_view version = line.substr(0, space);
+        if (!parse_version(version)) continue; // (a damaged line counts as never seen)
+        out.emplace_back(std::string(version), std::string(line.substr(space + 1)));
+    }
+    return out;
+}
+
 bool package_file_ok(const fs::path& path, const UpdatePackage& p) { return package_file_matches(path, p.size, p.sha256); }
 
 } // namespace
@@ -60,6 +89,27 @@ std::optional<Ed25519PublicKey> update_release_key() { return hex_decode<32>(HAI
 std::string default_addon_index() { return HAILSTONE_ADDON_INDEX; }
 
 std::string default_project_page() { return HAILSTONE_PROJECT_PAGE; }
+
+std::string newest_seen_release(const fs::path& data_dir, const std::string& feed) {
+    if (data_dir.empty()) return {};
+    for (const auto& [version, address] : read_seen(data_dir))
+        if (address == feed) return version;
+    return {};
+}
+
+bool remember_seen_release(const fs::path& data_dir, const std::string& feed, const std::string& version) {
+    if (data_dir.empty() || feed.empty() || feed.find_first_of(" \r\n") != std::string::npos || !parse_version(version))
+        return false;
+    auto seen = read_seen(data_dir);
+    for (const auto& [v, address] : seen)
+        if (address == feed && !newer(version, v)) return true; // as new, or newer, is kept already
+    std::erase_if(seen, [&](const auto& e) { return e.second == feed; });
+    seen.insert(seen.begin(), {version, feed});
+    if (seen.size() > kMaxSeenFeeds) seen.resize(kMaxSeenFeeds);
+    std::string text;
+    for (const auto& [v, address] : seen) text += v + " " + address + "\n";
+    return write_file_atomic(seen_file(data_dir), text);
+}
 
 std::string updates_off_reason(const fs::path& install_dir) {
     std::error_code ec;
@@ -147,6 +197,19 @@ void Updater::run_check() {
         set(s);
         return;
     }
+    // A feed that went back: a signed manifest older than one it showed before (an old release's manifest served
+    // again). newer() would refuse it anyway; what this adds is that the corner does not say "Up to date".
+    if (const std::string seen = newest_seen_release(env_.data_dir, env_.feed); newer(seen, m->version_text)) {
+        log::warn("Update check: the feed went back to {}, older than {} which it showed before; nothing is offered "
+                  "(delete {} if that release was withdrawn on purpose)",
+                  m->version_text, seen, seen_file(env_.data_dir).string());
+        s.state = UpdateState::FeedBehind;
+        s.version = m->version_text;
+        s.seen = seen;
+        set(s);
+        return;
+    }
+    remember_seen_release(env_.data_dir, env_.feed, m->version_text);
     if (!newer(m->version_text, env_.version)) {
         log::info("Update check: {} is the newest release", env_.version);
         s.state = UpdateState::UpToDate;

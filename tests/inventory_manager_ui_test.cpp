@@ -572,6 +572,161 @@ TEST_CASE("Advanced Inventory bulk destroy: what is chosen and carried, one item
     CHECK(conn.start_bulk_job(M::Destroy, {at(26)}) == "Put down what you are holding first.");
 }
 
+// hs.BulkItems("destroy") from code other than a shipped pack's own (which asks in its own look first): the client
+// asks, with the count and the No Trade warning, and only its Yes starts the job, and only if nothing moved; Options
+// Destroy (FastItemDestroy) skips the question.
+TEST_CASE("Advanced Inventory bulk destroy: the client asks first unless the shipped pack did or Fast Item Destroy is on") {
+    ScratchDir scratch("inventory_bulk_destroy_confirm_test");
+    MockConfig config = MockConfig::standard();
+    auto& inv = config.characters[0].inventory;
+    inv.push_back(make_item(2001, "Rusty Dagger", 24));
+    net::Item bound = make_item(2006, "Bound Ring", 26);
+    bound.no_drop = 0; // No Trade
+    inv.push_back(bound);
+    inv.push_back(make_item(2007, "Old Boot", 27));
+    inv.push_back(make_item(2008, "Bent Nail", 29));
+    inv.push_back(make_item(2009, "Chipped Cup", 30));
+    net::ConnectionOptions options = quick_options();
+    options.servers_dir = scratch.path();
+    Rig rig(std::move(config), options);
+    REQUIRE(rig.to_zone());
+    auto& conn = rig.conn;
+    put_coin_away(conn);
+    app::UiHost host;
+    host.in_game = true;
+    host.conn = &conn;
+    app::UiApi api(host);
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+    lua_newtable(L);
+    api.register_functions(L);
+    lua_setglobal(L, "hs");
+    auto bulk = [&](const char* places) {
+        lua_settop(L, 0);
+        const std::string code = std::string("return hs.BulkItems('destroy', ") + places + ")";
+        REQUIRE(luaL_dostring(L, code.c_str()) == LUA_OK);
+    };
+    auto answer = [&](bool yes) {
+        REQUIRE(host.client_confirm);
+        CHECK_FALSE(host.confirm); // never the pack's ConfirmationDialogBox, whose Yes a script could press
+        app::answer_client_confirm(host, yes);
+    };
+
+    bulk("{ 'i:24', 'i:26' }");
+    CHECK(lua_tointeger(L, 1) == 2);
+    CHECK(lua_isnil(L, 2));
+    CHECK(lua_toboolean(L, 3)); // asked
+    CHECK_FALSE(conn.item_job());
+    REQUIRE(host.client_confirm);
+    CHECK(host.client_confirm->text == "Destroy 2 items? 1 of them is No Trade or attuned and cannot be had back. "
+                                "This cannot be undone.");
+    bulk("{ 'i:27' }");
+    CHECK(std::string(lua_tostring(L, 2)) == "Answer the open question first.");
+    answer(false);
+    CHECK_FALSE(conn.item_job());
+    CHECK(id_at(conn, 24) == 2001u);
+
+    // the items moved before the Yes: nothing is destroyed
+    bulk("{ 'i:24' }");
+    conn.click_slot(at(24), true, false);
+    REQUIRE(conn.inventory().cursor());
+    conn.click_slot(at(28), true, false);
+    REQUIRE_FALSE(conn.inventory().cursor());
+    answer(true);
+    CHECK_FALSE(conn.item_job());
+    CHECK(id_at(conn, 28) == 2001u);
+
+    // Yes with the same items in place: the job runs
+    bulk("{ 'i:27' }");
+    answer(true);
+    REQUIRE(conn.item_job());
+    REQUIRE(rig.until([&] { return !conn.item_job(); }));
+    CHECK(id_at(conn, 27) == 0u);
+
+    // Under an interface Hailstone does not ship, too, the question is the client's own window
+    // (UiHost::client_confirm), which that interface may never draw nor answer: only its Yes starts the job
+    host.trusted_ui = false;
+    bulk("{ 'i:29' }");
+    CHECK(lua_toboolean(L, 3)); // asked
+    CHECK_FALSE(host.confirm);
+    REQUIRE(host.client_confirm);
+    CHECK(host.client_confirm->text == "Destroy 1 item? This cannot be undone.");
+    bulk("{ 'i:29' }");
+    CHECK(std::string(lua_tostring(L, 2)) == "Answer the open question first.");
+    app::answer_client_confirm(host, false);
+    CHECK_FALSE(host.client_confirm);
+    CHECK_FALSE(conn.item_job());
+    CHECK(id_at(conn, 29) == 2008u);
+    bulk("{ 'i:29' }");
+    CHECK_FALSE(conn.item_job());
+    app::answer_client_confirm(host, true);
+    REQUIRE(conn.item_job());
+    REQUIRE(rig.until([&] { return !conn.item_job(); }));
+    CHECK(id_at(conn, 29) == 0u);
+    host.trusted_ui = true;
+
+    // Fast Item Destroy: no question
+    conn.change_client_option(game::ClientOption::FastItemDestroy, 1);
+    bulk("{ 'i:28' }");
+    CHECK(lua_isnone(L, 3));
+    CHECK_FALSE(host.confirm);
+    REQUIRE(conn.item_job());
+    REQUIRE(rig.until([&] { return !conn.item_job(); }));
+    CHECK(id_at(conn, 28) == 0u);
+    conn.change_client_option(game::ClientOption::FastItemDestroy, 0);
+
+    // The single item's destroy question (ConfirmationDialogBox, kConfirmDestroy): code other than the pack's own
+    // cannot press its Yes through the stock-window calls; its No still works, as do the pack's own clicks
+    // (hs.ClickChild notes the item rectangle of the click: it needs an ImGui context)
+    std::unique_ptr<ImGuiContext, void (*)(ImGuiContext*)> imgui{ImGui::CreateContext(), ImGui::DestroyContext};
+    auto click = [&](lua_State* S, const char* code) {
+        lua_settop(S, 0);
+        REQUIRE(luaL_dostring(S, code) == LUA_OK);
+        const bool ok = lua_toboolean(S, -1) != 0;
+        lua_settop(S, 0);
+        return ok;
+    };
+    conn.click_slot(at(30), true, false);
+    REQUIRE(conn.inventory().cursor());
+    conn.destroy_held();
+    REQUIRE(conn.confirmation());
+    REQUIRE(conn.confirmation()->id == net::kConfirmDestroy);
+    CHECK(app::destructive_confirmation_up(host));
+    CHECK_FALSE(click(L, "return hs.ClickChild('ConfirmationDialogBox', 'Yes_Button')"));
+    CHECK_FALSE(click(L, "return hs.WindowButton('ConfirmationDialogBox', 'Yes_Button')"));
+    CHECK_FALSE(click(L, "return hs.ClickChildAt('ConfirmationDialogBox', 'Yes_Button', 1, 1)"));
+    REQUIRE(conn.confirmation());
+    REQUIRE(conn.inventory().cursor());
+    CHECK(click(L, "return hs.ClickChild('ConfirmationDialogBox', 'No_Button')"));
+    CHECK_FALSE(conn.confirmation());
+    REQUIRE(conn.inventory().cursor()); // still held: nothing destroyed
+    conn.destroy_held();
+    REQUIRE(conn.confirmation());
+
+    lua_close(L);
+
+    // the shipped pack's own code (the interface's state, ui::lua::pack_code) has asked already: no second question
+    fs::create_directories(scratch.path() / "pack");
+    ui::lua::LuaUi lua(scratch.path() / "pack", scratch.path() / "pack.txt");
+    lua.add_ui_api([&](lua_State* S) { api.register_functions(S); });
+    lua_State* P = lua.state();
+    // the pack draws the destroy question and passes on the player's click: its Yes destroys the held item
+    REQUIRE(conn.confirmation());
+    CHECK(click(P, "return hs.ClickChild('ConfirmationDialogBox', 'Yes_Button')"));
+    CHECK_FALSE(conn.confirmation());
+    REQUIRE(rig.until([&] { return !conn.inventory().cursor(); }));
+    CHECK_FALSE(app::destructive_confirmation_up(host));
+    lua_settop(P, 0);
+    REQUIRE(luaL_dostring(P, "return hs.BulkItems('destroy', { 'i:26' })") == LUA_OK);
+    CHECK(lua_tointeger(P, 1) == 1);
+    CHECK(lua_isnone(P, 3));
+    lua_settop(P, 0);
+    CHECK_FALSE(host.confirm);
+    REQUIRE(conn.item_job());
+    REQUIRE(rig.until([&] { return !conn.item_job(); }));
+    CHECK(id_at(conn, 26) == 0u);
+}
+
 TEST_CASE("Advanced Inventory bulk sell: the chosen carried items the open merchant buys, one sale at a time") {
     MockConfig config = MockConfig::standard();
     auto& inv = config.characters[0].inventory;

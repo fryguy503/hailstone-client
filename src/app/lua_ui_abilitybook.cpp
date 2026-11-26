@@ -46,6 +46,7 @@
 #include "game/mechanics/abilities.h"
 #include "game/mechanics/character.h"
 #include "net/game_connection.h"
+#include "plugin/lua_keep.h"
 
 namespace hailstone::app {
 
@@ -474,14 +475,20 @@ void push_entry(lua_State* L, const Entry& e) {
 
 int AbilityBook(lua_State* L) {
     auto& h = host(L);
-    sync(h);
-    const auto list = all_entries(h);
+    // The entries in a box the state owns, made inside cxx_guard: a push below that raises would skip a destructor in
+    // this frame (plugin/lua_keep.h).
+    auto& list = plugin::lua_keep<std::vector<Entry>>(L);
+    plugin::cxx_guard(L, [&] {
+        sync(h);
+        list = all_entries(h);
+    });
     lua_createtable(L, static_cast<int>(list.size()), 0);
     int n = 0;
     for (const auto& e : list) {
         push_entry(L, e);
         lua_rawseti(L, -2, ++n);
     }
+    list = {};
     return 1;
 }
 

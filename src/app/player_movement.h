@@ -50,6 +50,7 @@ struct MovementKeys {
     // (game/cameras.h camera_active).
     game::mechanics::ControlCamera camera;
     bool camera_active = false;
+    std::optional<game::mechanics::SwimSteering> follow_swim;
 };
 
 // The zone's collision as the original's DoCollisionMovement asks it
@@ -194,6 +195,13 @@ public:
     // A movement key command pressed or released (MovementController::command).
     bool command(int command, bool down, bool accept, std::uint8_t autorun_bits = 0) {
         return ctl_.command(command, down, accept, autorun_bits);
+    }
+    // Only the movement keys' releases among a frame's key commands ({command, down}), the presses dropped: while
+    // the game waits on the server (SendTeleportIndexRequestAndWait) the player neither acts nor moves, but a key let
+    // go then must not stay held once the wait ends.
+    template <typename Events> void apply_releases(const Events& events) {
+        for (const auto& e : events)
+            if (!e.down && game::mechanics::is_movement_command(e.command)) ctl_.command(e.command, false, true);
     }
     // Forward, back or a strafe key held, or forward/back autorun on.
     bool moving_keys() const {

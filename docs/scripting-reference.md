@@ -87,15 +87,22 @@ manifest's `caps` (docs/addons.md).
 | TLO | Index | Gives | What |
 |---|---|---|---|
 | `Me` | | `character` | the player; NULL before the player is in a zone |
-| `Target` | | `spawn` | the current target |
+| `Target` | | `target` | the current target |
 | `Spawn` | id, or a [search](#spawn-searches) | `spawn` | the spawn with that id, or the nearest that matches |
 | `SpawnCount` | a search | int | how many spawns match (0 when not connected) |
 | `NearestSpawn` | `n`, `n,search` or `search` | `spawn` | the nth nearest that matches (1 the nearest) |
-| `Pet` | | `spawn` | the player's pet: the one the pet window shows, else the first pet the player owns |
+| `Pet` | | `pet` | the player's pet: the one the pet window shows, else the first pet the player owns |
+| `Debuff` | none, or `pet` | `debuff` | the disease, poison, curse and corruption counters on the player, or on the player's pet (NULL without one); below |
 | `Group` | | `group` | the player's group; NULL when not grouped |
+| `Raid` | | `raid` | the player's raid (always there: `Members` is 0 outside a raid; its plain value is NULL) |
+| `Merchant` | | `merchant` | the merchant open (always there: `Open` says whether one is) |
+| `DoorTarget` | | `switch` | the door `/doortarget` picked; NULL for none (the zone's doors going clear it) |
+| `Mercenary` | | `mercenary` | the player's mercenary (always there: its plain value is its state, `NONE` without one) |
+| `Corpse` | | `corpse` | the corpse the loot window has open (always there: `Open` says whether one is) |
 | `Zone` | | `zone` | the current zone |
 | `Spell` | id or exact name | `spell` | a spell from the spell file |
 | `Cursor` | | `item` | the item on the cursor |
+| `InvSlot` | MQ's slot number or name | `invslot` | a slot: 0..33 the player's (`pack1`..`pack10`, `cursor` and the worn slots' names), 262.. the slots in the packs (ten a pack), 2000.. the bank (`bank1`..), 2032.. the slots in its bags, 2500.. the shared bank (`sharedbank1`..), 2532.. the slots in its bags; an unknown name is 0 |
 | `FindItem` | name, or `=exact name` | `item` | the first carried item whose name contains the text (worn, general slots, bags, cursor) |
 | `FindItemCount` | name, or `=exact name` | int | how many such items are carried, stacks counted |
 | `Window` | window name | `window` | a window, to ask whether it is open |
@@ -107,6 +114,8 @@ manifest's `caps` (docs/addons.md).
 | `LineOfSight` | `y,x,z:y,x,z` | bool | line of sight between two points through the zone's collision (below) |
 | `Navigation` | | `navigation` | the client's navigation (docs/navigation.md) |
 | `Stick` | | `stick` | `/stick`'s state (docs/navigation.md) |
+| `MoveTo` | | `moveto` | `/moveto`'s state (docs/navigation.md) |
+| `AdvPath` | | `advpath` | `/afollow`'s state (docs/navigation.md) |
 | `Int` | number | int | the number cut toward zero; NULL for NaN, infinity or a number beyond 64 bits |
 | `Float` | number | float | the number |
 | `Bool` | text | bool | false for empty, `false`, `null` or `0`; true otherwise |
@@ -119,8 +128,9 @@ manifest's `caps` (docs/addons.md).
 `LineOfSight` is NULL before the zone's collision is loaded, and for a coordinate that is not a finite number below
 1 000 000 in size.
 
-A compiled plugin can add TLOs (`AddTopLevelObject`). It cannot replace one that exists. MQ TLOs that are missing:
-`Raid`, `Mercenary`, `Corpse`, `Merchant`, `Ground`, `Macro`, and other MQ plugins' TLOs (`Navigation` and
+A compiled plugin can add TLOs (`AddTopLevelObject`). It cannot replace one that exists. `Spell.StacksWithDiscs` is
+not given (docs/unknowns.md). MQ TLOs that are missing:
+`Ground`, `Macro`, and other MQ plugins' TLOs (`Navigation` and
 `Stick` are built in).
 
 ## Data types
@@ -174,13 +184,18 @@ the clean name.
 | `Buff[n\|name]` | `buff` | the nth buff, or one by name (exact first, else a part of it; `=name` exact only). With no index, the count |
 | `MyBuff[n\|name]` | `buff` | the same, counting only buffs the player cast |
 | `BuffDuration[n\|name]`, `MyBuffDuration[n\|name]` | `timestamp` | time left on that buff |
-| `Mezzed`, `Charmed`, `Feared`, `Rooted`, `Snared`, `Slowed`, `Poisoned`, `Diseased`, `Cursed`, `Corrupted` | `buff` | the buff that puts it in that state; NULL when none does (below) |
+| `Mezzed`, `Charmed`, `Feared`, `Rooted`, `Snared`, `Slowed`, `Silenced`, `Poisoned`, `Diseased`, `Cursed`, `Corrupted` | `buff` | the buff that puts it in that state; NULL when none does (below) |
+| `Aggressive` | bool | its PlayerState has 4 or 8, as MQ tests it |
+| `Primary`, `Secondary` | int | the model number of what it holds in the primary and secondary hand |
+| `Body` | `body` | its body type, by name (`Humanoid`, `Undead`, ...) |
+| `Mount` | `spawn` | the mount it rides; NULL when none |
 
 A spawn's buffs are the player's own, or the target's as OP_TargetBuffs gave them. Stock EQEmu sends those only to
 GMs, players with the Inspect Buffs AA or leadership, or when its `AlwaysSendTargetsBuffs` rule is on. Check
 `BuffsPopulated` first. The states use the buff's spell effects (EQEmu's spdat.h): `Mezzed` SPA 31, `Charmed` 22,
-`Feared` 23, `Rooted` 99, `Snared` SPA 3 with a negative value, `Slowed` SPA 11 below 100%. `Poisoned`, `Diseased`,
-`Cursed` and `Corrupted` are a buff with poison (SPA 36), disease (35), curse (116) or corruption (369) counters.
+`Feared` 23, `Rooted` 99, `Snared` SPA 3 with a negative value, `Slowed` SPA 11 below 100%, `Silenced` 96. `Poisoned`,
+`Diseased`, `Cursed` and `Corrupted` are a buff with poison (SPA 36), disease (35), curse (116) or corruption (369)
+counters.
 
 ### character
 
@@ -193,22 +208,40 @@ character's name.
 | `PctHPs`, `CurrentHPs`, `MaxHPs` | int | real values, the items' HP included (as the windows show them) |
 | `PctMana`, `CurrentMana`, `MaxMana` | int | |
 | `PctEndurance`, `CurrentEndurance`, `MaxEndurance` | int | |
+| `Endurance` | int | MQ's old name for `CurrentEndurance` |
 | `Exp`, `AAExp` | int | the raw values (0..330) |
 | `PctExp`, `PctAAExp` | float | percent of the level or AA point |
 | `AAPoints`, `AAPointsSpent` | int | |
+| `AAPointsTotal` | int | the two summed |
+| `AAPointsAssigned` | int | the first of the profile's assigned AA points |
+| `AltAbility[name\|group]` | `altability` | an AA the player owns, by its name or its ability (group) id |
+| `PctAggro`, `SecondaryPctAggro` | int | the aggro meter's percentages for the player and for the secondary (below) |
+| `TargetOfTarget` | `spawn` | the target's target; NULL for none |
+| `Instance` | int | the zone instance the player is in (0 for none) |
+| `Invulnerable` | `buff` | the buff that makes the player invulnerable (SPA 40); NULL when none does |
+| `CurrentFavor`, `CareerFavor` | int | tribute favour |
+| `TributeActive` | bool | the player's tribute is on |
+| `SpellShieldBonus`, `SpellDamageBonus` | int | the items' spell shielding and spell damage. Spell shielding is the whole total, past RoF2's cap of 35 (which MQ applies, and the stats window shows), since a server may allow more |
+| `PetBuff[n]` | `spell` | the spell in the pet's buff slot n |
+| `PetBuff[name]` | int | the pet buff slot that holds that spell |
 | `Buff[n\|name]` | `buff` | the nth long buff, or one by name; with no index, the count |
 | `Song[n\|name]` | `buff` | the same for short buffs (songs) |
 | `CountBuffs`, `CountSongs` | int | |
-| `MaxBuffSlots` | int | 42 |
-| `FreeBuffSlots` | int | 42 minus the long buffs |
+| `MaxBuffSlots` | int | the buff window's slots: RoF2's 42, whatever the character's level or AAs |
+| `MaxSongSlots` | int | the song (short buff) window's slots: RoF2's 20 |
+| `FreeBuffSlots` | int | `MaxBuffSlots` minus the long buffs |
 | `Gem[n]` | `spell` | the spell in gem n |
 | `Gem[name]` | int | the gem that holds that spell |
 | `NumGems` | int | how many gems the player can use |
 | `Book[n]` | `spell` | the spell in book slot n |
 | `Book[name]` | int | the book slot that holds that spell |
 | `SpellReady[n\|name]` | bool | the gem has a spell, it is ready and the player is not casting |
+| `GemTimer[n\|name]` | `timestamp` | time left before the gem's spell may be cast: the longer of the gem's recast and the spell's linked timer; NULL for an empty gem |
 | `Casting` | `spell` | the spell being cast |
+| `CastTimeLeft` | `timestamp` | time left on the cast bar; 0 when not casting |
 | `Combat` | bool | auto attack is on |
+| `AutoFire` | bool | ranged auto attack is on |
+| `ActiveDisc` | `spell` | the discipline running (the discipline buff slot); NULL when none |
 | `CombatState` | string | `COMBAT`, `RESTING` or `ACTIVE` |
 | `Sitting`, `Standing`, `Ducking`, `Feigning`, `Dead`, `Moving` | bool | |
 | `Stunned`, `Invis`, `Sneaking` | bool | |
@@ -217,19 +250,31 @@ character's name.
 | `Cash` | int | all carried coin, in copper |
 | `Grouped` | bool | |
 | `GroupSize` | int | the player included |
-| `XTarget[n]` | `spawn` | the spawn in extended target slot n; with no index, how many slots hold a spawn |
+| `XTarget[n]` | `xtarget` | the spawn in extended target slot n; with no index, how many slots hold a spawn |
+| `XTargetSlots` | int | the extended target list's slots |
+| `ItemReady[name\|id]` | bool | a carried item (by id, `=exact name` or part of it) has a click effect that is ready |
 | `Inventory[slot]` | `item` | the item in a slot, by [name or number](#inventory-slots) |
+| `Bank[n]` | `item` | the item in bank slot n (1-based) within the slots the account has; 25 and 26 the shared bank's. The bank need not be open |
+| `SharedBank[n]` | `item` | the item in shared bank slot n (1 or 2) |
+| `PlatinumBank`, `GoldBank`, `SilverBank`, `CopperBank` | int | the bank's coin |
+| `PlatinumShared` | int | the shared bank's platinum |
+| `CashBank` | int | the bank's coin, in copper |
 | `FreeInventory` | int | empty general slots plus empty bag slots |
-| `Pet` | `spawn` | as the `Pet` TLO |
+| `Pet` | `pet` | as the `Pet` TLO |
+| `Bandolier[name\|n]` | `bandolier` | a bandolier set by its name (any case) or number (1..20, clamped); NULL for a name no set has |
 | `AbilityReady[name\|number]` | bool | a skill's reuse timer has run out |
 | `CombatAbilityReady[name]` | bool | the same for a combat ability (a discipline); the name works without its "Rk. II" |
 | `AltAbilityReady[name\|group]` | bool | the same for an activated AA |
+| `Ability[name\|number]` | bool | the player has that skill (one the Ability Book lists) |
+| `CombatAbility[n]` | `spell` | the player's nth combat ability |
+| `CombatAbility[name]` | int | that combat ability's number |
 | `AbilityTimer`, `CombatAbilityTimer`, `AltAbilityTimer` | `timestamp` | time left before it is ready |
 
 "Ready" means only that the reuse timer has run out. Checking endurance and mana is up to the script. Ability names
 are matched as the Ability Book shows them.
 
-Not yet: the `AltAbility` type (`Me.AltAbility[...]`).
+The aggro meter's percentages (`PctAggro` here and on `target`, `xtarget` and `groupmember`) are the server's
+(EQEmu's `Character:EnableAggroMeter` rule): 0 until it sends them.
 
 ### buff
 
@@ -259,7 +304,21 @@ The value of `Spell[...]`, `Me.Gem[n]`, `Me.Casting` and the like. Its plain val
 | `Range`, `AERange` | float | |
 | `CastTime`, `RecastTime`, `RecoveryTime` | float | seconds |
 | `MyCastTime` | `timestamp` | the cast time (not adjusted for focus) |
-| `Duration` | `timestamp` | the spell file's duration cap, in ticks of 6 s |
+| `Duration` | `ticks` | the duration at the player's level, in ticks of 6 s |
+| `DurationWindow` | int | 1 for a short buff (song window), else 0 |
+| `MyRange` | float | the range with the player's range focus |
+| `EnduranceCost` | int | |
+| `Base[n]` | int | effect n's base value (1..12) |
+| `Dispellable` | bool | |
+| `Description` | string | the spell's description (dbstr type 6); NULL for none |
+| `Subcategory` | string | its subcategory's name (dbstr type 5), `Unknown` for none; `SubcategoryID` the number |
+| `SlowPct` | int | how much its first attack-speed effect below 100% slows, at the player's level; 0 for none |
+| `WillLand` | int | the buff slot + 1 the client's own stacking rules (FindAffectSlot) give it cast on the player; 0 when it would not land |
+| `StacksWith[name]` | bool | it would land over a buff of that spell alone (MQ's WillStackWith) |
+| `StacksTarget` | bool | it is not too powerful for the target and stacks with each buff the target is known to have |
+| `WillLandPet` | int | 0 when one of the pet's buffs would block it, else the first empty pet buff slot + 1 |
+| `CounterType` | string | `Disease`, `Poison`, `Curse` or `Corruption`: the last counter effect it has; `None` |
+| `CounterNumber` | int | the first counter effect's base (the counters it starts with); 0 for none |
 | `TargetType` | string | `Single`, `Self`, `Group v1`, `PB AE`, `Targeted AE`, `Line of Sight`, ... |
 | `SpellType` | string | `Beneficial` or `Detrimental` |
 | `Beneficial` | bool | |
@@ -288,6 +347,18 @@ An item in a slot. Its plain value is the item's name.
 | `Item[n]` | `item` | the item in bag slot n (1-based); only for a bag in a top-level slot |
 | `ItemSlot` | int | the [slot](#inventory-slots) it is in |
 | `ItemSlot2` | int | its place in the bag (0-based); -1 when it is not in a bag |
+| `NoTrade` | bool | |
+| `Tradeskills` | bool | |
+| `Clicky` | `spell` | its click effect's spell; NULL without one |
+| `EffectType` | string | `Spell Scroll`, `Click Worn`, `Click Inventory`, `Click Unknown`, `Worn` or `Combat` (the first it has) |
+| `Timer` | `ticks` | ticks left on its click effect's reuse (rounded up), 0 when ready; NULL without a click effect |
+| `StackCount` | int | how many of this item the general slots and their bags hold; 0 for an item that does not stack |
+| `FreeStack` | int | how many more the stacks of this item there could hold |
+| `WornSlot[n]` | int | the nth slot it may be worn in |
+| `WornSlot[name]` | bool | it may be worn in that slot |
+| `ItemLink` | string | its item link's text; `ItemLink[CLICKABLE]` with the link marks, for a chat line |
+| `Augs` | int | its visible augment sockets |
+| `AugSlot[n]` | `augtype` | augment socket n (1..6) of a common item |
 
 ### group and groupmember
 
@@ -313,6 +384,87 @@ name.
 | `Leader`, `MainTank`, `MainAssist`, `Puller` | bool | |
 | `Mercenary`, `Offline` | bool | |
 | `OtherZone` | bool | online but not in this zone |
+| `PctAggro` | int | its aggro meter percentage |
+
+| More `group` members | Gives | What |
+|---|---|---|
+| `Present` | int | the members besides the player whose spawn is in this zone |
+| `Injured[pct]` | int | the members in the zone (the player too) with health above 0 and below the percent |
+| `LowMana[pct]` | int | the same for mana (the others' as the group's mana updates give it) |
+
+### pet
+
+The player's pet (`Pet`, `Me.Pet`): a `spawn` whose buffs are the pet window's (OP_PetBuffWindow), whether or not it
+is targeted. Its other members are the spawn's; its `BuffCount`, `Mezzed` and the like also use the pet window's buffs
+while the server has not sent the pet's buffs as a target's.
+
+| Member | Gives | What |
+|---|---|---|
+| `Buff[n]` | `buff` | the buff in pet window slot n (1-based); NULL for an empty slot |
+| `Buff[name]` | int | the slot of the first buff whose name starts with the text |
+| `BuffDuration[n\|name]` | `timestamp` | time left on that buff; NULL for none or a permanent one |
+
+### raid and raidmember
+
+`Raid` is always there; outside a raid `Members` is 0 and the rest NULL.
+
+| `raid` member | Gives | What |
+|---|---|---|
+| `Members` | int | members, the player included |
+| `Member[n]` | `raidmember` | the nth member, in the raid list's order |
+| `Member[name]` | `raidmember` | that member |
+| `Leader`, `Target` | `raidmember` | the leader; the member the raid window has selected |
+| `Locked` | bool | |
+| `LootType` | int | 1 leader, 2 group leaders, 3 looters, 4 everyone |
+| `TotalLevels`, `AverageLevel` | int, float | |
+
+A `raidmember` has every `spawn` member (of its spawn when it is in the zone), and these. Its plain value is the
+name.
+
+| `raidmember` member | Gives | What |
+|---|---|---|
+| `Name`, `Level` | | |
+| `Class` | `class` | |
+| `Group` | int | its raid group, 1..12; 0 ungrouped |
+| `GroupLeader`, `RaidLeader` | bool | |
+| `Looter` | bool | it may loot: the leader, the group leaders with loot type 2, the looters with type 3 |
+| `Spawn` | `spawn` | NULL when it is not in this zone |
+
+### corpse
+
+`Corpse` is the corpse the loot window has open. It has every `spawn` member (the corpse's). Its plain value is
+`TRUE` while one is open, else `FALSE`.
+
+| Member | Gives | What |
+|---|---|---|
+| `Open` | bool | a corpse is open |
+| `Items` | int | the items in the window |
+| `Item[n]` | `item` | the item in loot window slot n (1-based) |
+| `Item[name]` | `item` | the first whose name contains the text; `=name` exact |
+
+### target and xtarget
+
+`Target` is a `target` and `Me.XTarget[n]` an `xtarget`: each has every `spawn` member and the same plain value.
+
+| Member | Gives | What |
+|---|---|---|
+| `target.PctAggro`, `target.SecondaryPctAggro` | int | the aggro meter's percentages for the player and for the secondary |
+| `target.SecondaryAggroPlayer` | `spawn` | the secondary: the next on the hate list when the player has aggro, else the one that has it |
+| `xtarget.PctAggro` | int | the player's aggro percentage on that slot's spawn |
+
+### altability
+
+An AA the player owns. Its plain value is its ability (group) id.
+
+| Member | Gives | What |
+|---|---|---|
+| `ID`, `GroupID` | int | the ability's id, all its ranks share it |
+| `Name`, `Description` | string | dbstr types 1 and 4 |
+| `Rank`, `MaxRank` | int | the rank owned, and the last |
+| `ReuseTime` | int | seconds, before reductions |
+| `Cost`, `MinLevel`, `Type` | int | |
+| `Passive` | bool | it casts no spell |
+| `Spell` | `spell` | the spell it casts |
 
 ### Small types
 
@@ -321,16 +473,36 @@ name.
 | `class` | its name | `ID`, `Name`, `ShortName` (`WAR`, `CLR`, ...) |
 | `race` | its name | `ID`, `Name` |
 | `heading` | the compass point (`N`, `NNE`, ...) | `Degrees` (clockwise from north), `DegreesCCW`, `ShortName`, `Name` (`north by northeast`), `Clock` (1..12) |
+| `merchant` | `TRUE` while one is open, else `FALSE` | `Open`, `ItemsReceived` (open and its stock has come), `Items`, `Item[n\|name]` (`item`; n in the list's order, `=name` exact), `Markup` (its sell rate); every `spawn` member of the merchant |
+| `switch` | its id | `ID`, `Name`, `X`, `Y`, `Z`, `DefaultX`, `DefaultY`, `DefaultZ` (the server's coordinates), `Heading` and `HeadingTo` (`heading`), `Open`, `State`, `IsTargeted`, `Distance` (on the flat, less half its size), `Distance3D` |
+| `mercenary` | its state: `NONE`, `ACTIVE`, `SUSPENDED` or `DEAD` | `State`, `StateID`, `Index` (1-based), `Name` (its spawn's name, else the state); every `spawn` member of its spawn |
+| `invslot` | its number | `ID`, `Item` (`item`, NULL for an empty slot), `Pack` (the `invslot` of the bag it is in; 0 for none), `Slot` (its place in that bag, 0-based), `Name` (`chest`, `pack1`, `bank3` ...; NULL for a slot in a bag) |
+| `ticks` | ticks (6 s) | a `timestamp` on the same time: every `timestamp` member |
+| `body` | its name | `ID`, `Name` |
+| `augtype` | the augment's name; NULL for an empty socket | `Name`, `Item` (`item`), `Empty`, `Slot`, `Type` (the socket's type), `Visible` |
 | `timestamp` | milliseconds | `Raw` (ms), `TotalSeconds`, `TotalMinutes`, `Hours`, `Minutes` (0..59), `Seconds` (0..59), `Ticks` (6 s, rounded up), `TimeHMS` (`h:mm:ss`), `Time` (`m:ss`) |
 | `zone` | its long name | `ID`, `Name`, `ShortName` |
-| `everquest` | `EverQuest` | `GameState` (`INGAME`, `CHARSELECT` or `PRECHARSELECT`), `Server` (the server's name), `UIScale` (always 1.0) |
+| `everquest` | `EverQuest` | `GameState` (`INGAME`, `CHARSELECT` or `PRECHARSELECT`), `Server` (the server's name), `UIScale` (always 1.0), `Ping` (the connection's average round trip, ms, as `/netstats` shows it), `Foreground` (the game's window has the focus) |
 | `window` | `TRUE` or `FALSE` | `Open`, `Name` |
 | `plugin` | its name when loaded, else NULL | `IsLoaded`, `Name` |
+| `debuff` | `Count` | `Count` (all four), `Poisoned`, `Diseased`, `Cursed`, `Corrupted`: counters, summed over every buff; `Silenced`: bool, a buff silences (SPA 96) |
 | `time` | `hh:mm:ss` | `Hour`, `Minute`, `Second`, `Day`, `Month`, `Year`, `DayOfWeek` (1 Sunday), `Date` (`MM/DD/YYYY`), `Time24`, `SecondsSinceMidnight`, `Night` (before 6:00 or from 19:00) |
 | `gametime` | `hh:mm` | `Hour`, `Minute`, `Day`, `Month`, `Year`, `Night`, `Time24` |
-| `navigation` | `Active` | `Active`, `Paused`, `MeshLoaded`, `MeshComplete`, `TilesBuilt`, `TilesTotal`, `Destination`, `Remaining`, `PathExists[dest]`, `PathLength[dest]` (-1 for no path); docs/navigation.md "The Navigation TLO" |
-| `stick` | `ON` or `OFF` | `Active`, `Status` (`ON`, `PAUSED` or `OFF`), `Distance`, `StickTarget` (spawn id, 0 none), `StickTargetName` |
+| `navigation` | `Active` | `Active`, `Paused`, `MeshLoaded`, `MeshComplete`, `TilesBuilt`, `TilesTotal`, `Destination`, `Remaining`, `PathExists[dest]`, `PathLength[dest]` (-1 for no path), `Velocity` (the player's speed, units a second); docs/navigation.md "The Navigation TLO" |
+| `stick` | `ON` or `OFF` | `Active`, `Status` (`ON`, `PAUSED` or `OFF`), `Distance`, `StickTarget` (spawn id, 0 none), `StickTargetName`, `Stopped` (within the stick's distance), `Behind` (and at the spawn's back); docs/navigation.md |
+| `bandolier` | its name | `Active` (each of its four items is the one worn in its slot, an empty one an empty slot), `Index` (1..20), `Name`, `Item[1..4]` (primary, secondary, range, ammo; clamped). A set without a name is NULL to every member. To switch sets: `/bandolier activate <name>` |
+| `bandolieritem` | its name | `ID`, `IconID`, `Name` |
+| `advpath` | `TRUE` | `Active`, `State` (1 following, 0 not), `Status` (0 off, 1 on, 2 paused), `Following`, `Paused`, `WaitingWarp`, `Waypoints`, `Length`, `Monitor` (spawn), `Playing` and `Recording` (FALSE); docs/navigation.md |
+| `moveto` | `ON`, `PAUSED` or `OFF` | `Moving`, `Stopped` (the last `/moveto` arrived), `ArrivalDist`, `Broken` (always FALSE); docs/navigation.md |
 | `math` | NULL | `Calc[expr]`, `Sqrt`, `Abs`, `Sin`, `Cos`, `Tan`, `Asin`, `Acos`, `Atan` (degrees), `Rand[max]` or `Rand[min,max]`, `Not`, `Hex`, `Dec[hex]`, `Clamp[n,min,max]`, `Distance[y,x,z:y,x,z]` (a missing point or coordinate is the player's) |
+
+`Debuff` is the MQ2Debuffs plugin's TLO, which E3 reads. Only detrimental spells count: some beneficial buffs carry
+a counter effect too. Each counter effect (SPA 35 disease, 36 poison, 116 curse,
+369 corruption) with a positive base adds the counters left once the client knows them (as the buff window's
+counter numbers), else the counters the spell starts with; a cure's own effect (a negative base) adds none. The
+pet's buffs come from the pet window's list, which carries no counters left, so `Debuff[pet]` always counts the
+starting counters. `Silenced` is TRUE while any of the buffs has SPA 96 (as `Me.Silenced`, which gives the buff).
+Only these members are here; MQ2Debuffs' others are missing.
 
 `Window[name]` asks the UI whether a window of that name is open. The names are the game's own window names, which
 the UI packs use too (`InventoryWindow`, `LootWnd`, `BankWnd`, `GroupWindow`, ...).
@@ -405,11 +577,12 @@ them. These commands come from MacroQuest rather than the game:
 |---|---|
 | `/echo text` | a line in the chat window |
 | `/target id N` \| `clear` \| `mycorpse` \| `myself` \| a search | targets (nothing, or `myself`: you) |
-| `/face` [target] \| `id N` \| `heading H` \| `loc y,x` \| a search [`fast`] | turns to face |
+| `/face` [target] \| `id N` \| `heading H` \| `loc y,x` \| a search [`fast`] | turns to face (a heading is taken modulo 360; a heading or loc that is not a finite number turns nothing) |
 | `/keypress <command> [hold\|release]` | presses a key command by the game's name: `forward`, `jump`, `hot1_1`, ... |
 | `/squelch <cmd>` | runs the command without its chat output |
 | `/docommand <cmd>` | runs the command (useful after `${...}` builds it) |
 | `/noparse <cmd>` | runs the command without expanding `${...}` |
+| `/timed <deciseconds> <cmd>` | runs the command that many tenths of a second later, `${...}` expanded then, with the sender's permissions |
 | `/lua run <name> [args]` \| `stop [name]` \| `pause [name]` \| `list` | scripts |
 | `/plugin list` \| `/plugin <name> [load\|unload]` | compiled plugins |
 | `/nav`, `/moveto`, `/stick` | navigation (docs/navigation.md "Commands") |
@@ -447,7 +620,7 @@ The global `mq` (also `require('mq')`) in every script, Lua social and Lua plugi
 | `mq.web.*` | `web` | the script's own browser tabs (below) |
 | `mq.luaDir` | | the script folder the script was found in |
 | `mq.configDir` | | the folder `mq.pickle` writes to: `scripts/config/`, or `scripts/config/<script>/` for a script without every capability |
-| `print(...)`, `printf(fmt, ...)` | | a line in the chat window |
+| `print(...)`, `printf(fmt, ...)` | | a line in the chat window; MacroQuest's colour codes (`\ag`, `\ax` ...) colour it (docs/plugins.md "Colour codes") |
 | `require(name)` | | `mq`, `ImGui`, `hailstone`, or a module file next to the script or in the script folders |
 
 **Event patterns** (`mq/event_pattern.h`): the pattern must match the whole line. `#*#` matches any text, as much as
@@ -687,7 +860,7 @@ rectangle (`u0, v0, u1, v1`).
 | Checkbox | (label, value) → value, changed | |
 | SliderFloat | (label, value [, min=0, max=1]) → value, changed | |
 | SliderInt | (label, value [, min=0, max=100 [, text]]) → value, changed | text replaces the shown number |
-| InputText | (label [, text [, cap=256 [, flags [, {history, tab, moveToEnd}]]]]) → text, changed | history(older)→text, tab(text, shift)→text |
+| InputText | (label [, text [, cap=256 [, flags [, {history, tab, moveToEnd, colorSpans}]]]]) → text, changed | history(older)→text, tab(text, shift)→text, colorSpans(text)→{{first, last, {r, g, b, a}}, ...} (hidden-label single-line fields; [dev-ui.md](dev-ui.md)) |
 | InputTextWithHint | (label, hint [, text [, cap [, flags]]]) → text, changed | |
 | InputTextMultiline | (label [, text [, cap=4096 [, w, h [, flags]]]]) → text, changed | flags limited to ReadOnly and AutoSelectAll |
 | CodeEditor | (id [, text [, w, h [, {error_line, read_only, complete}]]]) → text, changed, cursor, active | Lua editor with colours. complete(before) → start, {names} |
@@ -884,7 +1057,7 @@ plus `cooldown` (0..1 of the recast left) on the slot readers while a recast run
 | OptionChoices | (name) → {string} | Choices the client lists for an option (e.g. "resolution") | — |
 | PlaySoundTest | (name) → bool | Plays one of the Individual Sounds options (`own_footsteps`, `pet_footsteps`, `other_footsteps`, `open_bag`, `open_bank`, `money`, `thunder`, `equip`, `creature_ambient`) once at its volume; false for another name | — |
 | UiIni | (section, key) → string\|nil | Character UI ini value (over defaults.ini) | — |
-| SetUiIni | (section, key, value) → — | Write and save a UI ini value | commands |
+| SetUiIni | (section, key, value) → — | Write a UI ini value (saved with the window places, and on a quit or camp) | commands |
 | CoolDownColor | () → r, g, b, a | Colour of cool-down rectangles (user colour 0x15f, alpha 0x40) | — |
 | DebugScreens | () → {{name, shown, replaced}} | Every stock window model | — |
 | DebugTree | () → {} | Stub: always an empty table | — |
@@ -1057,7 +1230,7 @@ send a request. `OpenTask` changes the journal selection and visibility, not tas
 | SetItemKept | (id, name, on) → — | Mark or unmark every copy as Keep | actions |
 | SetItemsKept | ({{id, name}…}, on) → — | SetItemKept for many items at once, with one write (up to 4096) | actions |
 | ItemStats | () → {{key, label}} (array pairs) | Stats the window filters and sorts by | — |
-| BulkItems | (mode, {place…} [, dry]) → count, err\|nil | Bulk "sell", "destroy", "tribute" or "withdraw" (bank to your packs, never equipped) of the chosen items; Keep-marked items are refused | actions |
+| BulkItems | (mode, {place…} [, dry]) → count, err\|nil [, asked] | Bulk "sell", "destroy", "tribute" or "withdraw" (bank to your packs, never equipped) of the chosen items; Keep-marked items are refused. A destroy asks the client's confirmation first (count, nil, true) unless Fast Item Destroy is on, in a window of the client's own that no script can answer | actions |
 | TakeItemSearch | () → text\|nil | /finditem's search, once | — |
 
 #### Abilities (lua_ui_abilities.cpp)
@@ -1308,7 +1481,7 @@ AddonPolicy and AddonPolicyAction are refused to plugin code (nil / false).
 | PluginMenu | () → {{plugin, owner, label, command}} | Plugin menu entries (a plugin's own alone) | self |
 | PluginMenuClick | (i) → — | Run entry i of PluginMenu's list as its owner | self |
 | PluginConsent | () → {server, serial, warning, plugins={{name, file, size, sha256, short}}} \| nil | Pending consent question for the server's compiled plugins | self |
-| AnswerPluginConsent | (true\|false\|nil, serial) → ok | Answer the question with that serial (nil = ask later); false when it is not the one pending | self |
+| AnswerPluginConsent | (true\|false\|nil, serial) → ok | Answer the question with that serial (nil = ask later); false when it is not the one pending, or the caller is not the shipped interface's own code | self |
 | AddonPolicy | () → {serial, message, can_retry} \| nil | A server's required add-on that failed in the world; the same table until the failure changes. nil to plugin code and to an interface Hailstone does not ship | self |
 | AddonPolicyAction | ("retry", serial) → ok | The player's Retry: the failed required add-ons are tried again once. False when stale or not retriable; the client's own interface's file only | pack |
 
@@ -1359,7 +1532,7 @@ return `true` while nothing changed. Reading a view draws that screen in the cli
 | ServerSelect | ([revision]) → {revision, busy, status, server, servers={{name, status, canJoin, favorite}}, selected, last, addonHint}\|true\|nil | Server select view | self |
 | ServerSelectDo | (action [, i]) → ok | "select", "play", "favorite" or "back" | self |
 | CharacterSelect | ([revision]) → {revision, busy, status, world, server, scene, selected, characters={{name, level, race, raceName, classes, className, classShort, zone, canGoHome, homeQuestion}}}\|true\|nil | Character select view | self |
-| CharacterSelectDo | (action [, arg]) → ok | "select", "enter", "create", "delete", "home", "back" or "logout" | self |
+| CharacterSelectDo | (action [, arg]) → ok | "select", "enter", "create", "delete", "home", "back" or "logout". "delete" from code other than a shipped pack's asks the client's confirmation first, in a window of the client's own that no script can answer | self |
 | CharacterCreate | () → view\|nil | Creation view: name, gender, race/class/deity/city (+Name, +Index, lists), stats, pointsLeft, ready… | self |
 | CharacterCreateHelp | (kind, id) → text, title | Description of a race, class, deity, city or stat | self |
 | CharacterCreateDo | (action [, value]) → ok | "name", "randomName", "race", "class", "gender", "deity", "city", "statUp/Down/Max", "resetStats", "appearance", "create" or "cancel" | self |
@@ -1369,6 +1542,8 @@ return `true` while nothing changed. Reading a view draws that screen in the cli
 A plugin is a `.dll`, `.so` or `.dylib` built against `sdk/hailstone_plugin.h` (plain C, MIT licensed). docs/plugins.md
 "Compiled plugins" has a full example and the build commands, and `plugins/example/MQ2Example.c` uses every part.
 `sdk/hailstone_byte_io.h` (C++20, header only) gives the `ByteReader` and `ByteWriter` the client uses for packets.
+`sdk/hailstone_plugin.hpp` (C++20, header only) takes capturing lambdas as commands and TLOs and fills the readers'
+sizes (docs/plugins.md "C++ plugins: the wrapper").
 
 ```c
 #include "hailstone_plugin.h"
@@ -1429,6 +1604,7 @@ or -1 and say so in the chat window. Only call these on the client's thread, fro
 | `write_chat_color(text, color)` | | a chat line in one of the game's chat colours |
 | `do_command(line)` | per command | |
 | `add_command`, `remove_command` | `commands` | |
+| `command_exists(name)` | | whether a typed `/name` would run a command, in the order the line would: `HAILSTONE_COMMAND_ADDED` (1) when a plugin, a script or the client added it, else `HAILSTONE_COMMAND_GAME` (2) for the game's own (any prefix of its names; GM commands only for a GM), else 0. The `/` is optional; a name with a space is 0. Added later in ABI 3: test `HAILSTONE_HOST_HAS(host, command_exists)` |
 | `parse(text, out, size)` | `read` | |
 | `add_tlo`, `remove_tlo` | | |
 | `send_packet(stream, opcode, data, size)` | `packets` | to the server, through the other plugins' outgoing hooks |

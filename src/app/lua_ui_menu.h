@@ -62,6 +62,8 @@ inline constexpr int kMenuWebBrowser = 0x10001;
 // Hailstone's "Lua Scripts" row (the Scripts window, ScriptsWnd: run, stop and autorun the MacroQuest Lua scripts;
 // docs/plugins.md "The Scripts window"), before Web Browser.
 inline constexpr int kMenuScripts = 0x10002;
+// Opens the current interface's Layout Profiles presenter, when the interface draws it.
+inline constexpr int kMenuLayoutProfiles = 0x10003;
 // Hailstone: the plugins' menu entries (plugin/ui_bridge.h) in a "Plugins" submenu; entry i's row returns
 // kMenuPluginFirst + i.
 inline constexpr int kMenuPluginFirst = 0x20000;
@@ -74,13 +76,13 @@ public:
     // (menu_command_offered; every row when it is empty); a command name the key map does not know (a later
     // client's) drops its row. A submenu left empty goes, and so do the separators that no longer part two rows.
     // Hailstone adds "Lua Scripts", "Web Browser" and "Report a Bug" (kMenuScripts, kMenuWebBrowser, kMenuReportBug)
-    // to the top menu before Help, else before Camp & Quit.
+    // to the top menu before Help, else before Camp & Quit. Layout Profiles is also offered when supported.
     //
     // Hailstone: the rows come from hailstone_layout(), the same whatever game folder the player uses (a live
     // client's CascadeMenu.txt differs from RoF2's), unless the server's files bring a CascadeMenu.txt: that one
     // lays the menu out instead. The game folder's own file is not read.
     void load(const GameDir& game, std::uint32_t expansions, std::int32_t pvp_rules,
-              const std::function<bool(int)>& offered = {});
+              const std::function<bool(int)>& offered = {}, bool layout_profiles = false);
     // Hailstone's own layout, in CascadeMenu.txt's format (flag^kind^icon^text^command; the icon a cell of the
     // player's menuicons01.tga, the command a key map name).
     // Loaded, it is put in alphabetical order: the submenus first, then the other rows, then Help, Report a Bug and
@@ -88,7 +90,7 @@ public:
     static std::string_view hailstone_layout();
     // load() from CascadeMenu.txt's text (the tests).
     void load_text(std::string_view text, std::uint32_t expansions, std::int32_t pvp_rules,
-                   const std::function<bool(int)>& offered = {});
+                   const std::function<bool(int)>& offered = {}, bool layout_profiles = false);
     // The rows of menu `menu` (0 the top one): their texts, a submenu's with " >", a separator "-".
     std::vector<std::string> row_texts(int menu) const;
     int menu_count() const { return static_cast<int>(menus_.size()); }
@@ -132,6 +134,7 @@ private:
     std::vector<Menu> menus_; // menus_[0] is the top menu
     std::vector<Open> open_;  // the top menu, then each submenu
     bool loaded_ = false;
+    bool layout_profiles_ = false;
     std::vector<std::string> plugin_labels_;
     int plugin_menu_ = -1; // its index in menus_ (the last), -1 none
     void apply_plugin_entries();

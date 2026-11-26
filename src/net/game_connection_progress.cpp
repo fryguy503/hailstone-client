@@ -239,6 +239,7 @@ void GameConnection::handle_progress(Op op, const AppPacket& p) {
             tasks_.shared_leader.clear();
             tasks_.shared_member_templates.clear();
             for (auto& m : *v) {
+                if (tasks_.shared_members.size() >= game::kSharedTaskMembersKept) break;
                 if (m.leader) tasks_.shared_leader = m.name;
                 if (m.template_id != 0) tasks_.shared_member_templates.insert_or_assign(m.name, m.template_id);
                 tasks_.shared_members.push_back(std::move(m.name));
@@ -255,7 +256,7 @@ void GameConnection::handle_progress(Op op, const AppPacket& p) {
         if (auto v = decode_shared_task_member_change(p)) {
             auto& m = tasks_.shared_members;
             if (v->added) {
-                m.push_back(v->name);
+                if (m.size() < game::kSharedTaskMembersKept) m.push_back(v->name);
             } else if (!m.empty()) {
                 tasks_.shared_member_templates.erase(v->name);
                 if (m.front() == v->name) {

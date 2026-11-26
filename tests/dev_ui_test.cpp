@@ -826,7 +826,7 @@ TEST_CASE("Login: the client's own screen draws the corner, What's new's button 
     v.update.current = "0.4.0-alpha";
     v.release_notes = {"One thing", "Another"};
     v.project_page = "https://example.invalid/hailstone";
-    for (const char* check : {"off", "checking", "uptodate", "unknown", "newer"}) {
+    for (const char* check : {"off", "checking", "uptodate", "unknown", "newer", "behind"}) {
         v.update.check = check;
         frame(v);
         CHECK(ImGui::FindWindowByName("##hailstone_about") != nullptr);

@@ -338,6 +338,8 @@ local function generalTab()
     check("context_menus", "Allow Context Menus", "Right-clicking a window opens its menu.")
     check("player_menu", "Player Right-Click Menu",
       "Hailstone: right-clicking another player opens a menu (Send Tell, Invite to Group, Invite to Raid, Trade, Inspect) instead of inspecting them. Needs context menus allowed.")
+    check("right_click_consider", "Right-Click to Consider",
+      "Right-click an NPC to consider it, as the original client always does. Hailstone: turn it off to make the right click do nothing. NPCs with their own right-click interaction, such as merchants, keep that action.")
     -- menus.lua's menus.scale (this pack's look: the size its context menus draw at; Ctrl+wheel over a menu too)
     row("Menu Size", "The size of right-click menus and their text. Ctrl+mouse wheel over a menu changes it too.", function()
       local v = math.floor((tonumber(ui.GetSetting("menus.scale")) or 1.25) * 100 + 0.5)
@@ -457,6 +459,11 @@ local function displayTab()
     check("iso_hover", "Highlight Under Cursor", "A ring under the character, door or item the mouse is over.")
   end)
   section("Interface", function()
+    if API.layoutProfiles and API.layoutProfiles.List then
+      row("Layout Profiles", "Save and switch between named window layouts and chat settings.", function()
+        if ui.Button("Manage Profiles", -1, 0) then API.windows.Show("LayoutProfilesWindow", true) end
+      end)
+    end
     local uiName = API.settings.Option("ui_name")
     if uiName ~= nil then
       local names, info = API.settings.OptionChoices("ui_name"), API.settings.OptionChoices("ui_name_info")

@@ -5,6 +5,7 @@
 // walk through a fake login -> server -> character -> loading -> zone flow.
 
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -16,9 +17,10 @@
 
 namespace hailstone::app {
 
-enum class DemoScreen { Login, Servers, Characters, NoCharacters, Loading, InGame, Items };
+enum class DemoScreen { Login, Servers, Characters, NoCharacters, Loading, InGame, Items,
+                        ClientChat, ClientChatExpanded };
 
-// Parses "login", "servers", "chars", "nochars", "loading", "game" or "items".
+// Parses the --ui-demo screen names.
 bool parse_demo_screen(std::string_view name, DemoScreen& out);
 
 struct DemoFrameInput {
@@ -42,6 +44,7 @@ public:
     void set_item_icons(ui::ItemIconCache* icons) { item_icons_ = icons; }
 
 private:
+    struct ModernChat;
     void show(DemoScreen s);
     void favorite_world(int row); // marks or unmarks a row and sorts the list again (not kept: a demo)
 
@@ -59,6 +62,7 @@ private:
     float timer_ = 0.0f; // fake request / loading time
     bool loading_running_ = false;
     bool quit_ = false;
+    std::unique_ptr<ModernChat> modern_chat_;
     // Items screen: a fake inventory and corpse.
     void init_items();
     game::Inventory items_inv_;

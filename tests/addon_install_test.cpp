@@ -9,6 +9,7 @@
 #include "addon_test_util.h"
 #include "app/addon_install.h"
 #include "app/update_install.h"
+#include "platform/shared_file.h"
 #include "plugin/policy.h"
 #include "scratch_dir.h"
 
@@ -458,6 +459,62 @@ TEST_CASE("addon_install: an install cut off is undone at the next start") {
     addons_at_start(dir.path());
     CHECK(fs::exists(folder / "init.lua"));
     CHECK_FALSE(fs::exists(dir.path().parent_path() / "outside"));
+}
+
+TEST_CASE("addon_install: nothing is unpacked, installed, removed or recorded while another process installs") {
+    test::ScratchDir dir("addon_install_lock");
+    const fs::path folder = addon_folder(dir.path(), AddonKind::Script, "autoloot");
+    install_script(dir.path(), "autoloot", "1.0.0", {{"init.lua", "-- v1\n"}});
+    const fs::path addons = addons_dir(dir.path());
+    const std::string registry = read_file(addons / "installed.txt");
+    const fs::path lock_file = addons / "install.lock";
+    {
+        // Another Hailstone, in the middle of an install: its journal is under way and new/ holds its package.
+        auto other = platform::ScopedFileLock::try_acquire(lock_file, platform::FileLockMode::Exclusive,
+                                                           platform::LockFolder::Ordinary);
+        REQUIRE(other);
+        put_file(addons / "new" / "other" / "init.lua", "-- theirs\n");
+        put_file(addons / "journal.txt", "move\taddons/new/other/init.lua\tscripts/other/init.lua\n");
+        addons_at_start(dir.path());
+        CHECK(fs::exists(addons / "journal.txt"));
+        CHECK(read_file(addons / "new" / "other" / "init.lua") == "-- theirs\n");
+
+        std::string why;
+        CHECK_FALSE(unpack(dir.path(), manifest("autoloot", AddonKind::Script, "2.0.0"), {{"init.lua", "-- v2\n"}},
+                           &why));
+        CHECK(why.find("another Hailstone") != std::string::npos);
+        CHECK_FALSE(remove_addon(dir.path(), "autoloot", &why));
+        CHECK(why.find("another Hailstone") != std::string::npos);
+        CHECK(read_file(folder / "init.lua") == "-- v1\n");
+        // installed.txt as the other process left it: no line of it is lost to a write from an older read.
+        CHECK_FALSE(write_installed_addons(dir.path(), {}));
+        CHECK_FALSE(set_addon_auto_update(dir.path(), "autoloot", true));
+        CHECK(read_file(addons / "installed.txt") == registry);
+        CHECK_FALSE(lock_addons(dir.path()));
+    }
+    fs::remove_all(addons / "new");
+    fs::remove(addons / "journal.txt");
+
+    // Within one process the hold is shared and nests: the manager's thread may unpack while another add-on installs.
+    {
+        auto held = lock_addons(dir.path());
+        REQUIRE(held);
+        auto again = lock_addons(dir.path());
+        REQUIRE(again);
+        install_script(dir.path(), "autoloot", "2.0.0", {{"init.lua", "-- v2\n"}});
+        CHECK(read_file(folder / "init.lua") == "-- v2\n");
+        // Another process still finds it held until the last hold goes.
+        held.reset();
+        CHECK_FALSE(platform::ScopedFileLock::try_acquire(lock_file, platform::FileLockMode::Exclusive,
+                                                          platform::LockFolder::Ordinary));
+    }
+    CHECK(platform::ScopedFileLock::try_acquire(lock_file, platform::FileLockMode::Exclusive,
+                                                platform::LockFolder::Ordinary));
+    CHECK(set_addon_auto_update(dir.path(), "AUTOLOOT", true));
+    const auto all = read_installed_addons(dir.path());
+    REQUIRE(all.size() == 1);
+    CHECK(all[0].auto_update);
+    CHECK(all[0].version == "2.0.0");
 }
 
 // The journal names a batch of moves in one synced write before any of them is made (the old files out, then the new

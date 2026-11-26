@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <array>
+#include <cmath>
 #include <limits>
 
 #include "game/coords.h"
@@ -89,11 +90,11 @@ TEST_CASE("follow profile: remote swimmers keep their depth over a submerged flo
         return p.x < 60.0f && p.z < 21.0f ? 5 : 0;
     };
     constexpr float dt = 1.0f / 60;
-    auto follow = [&] {
+    auto follow = [&](float follower_z) {
         const glm::vec3 to = world_to_server(target.position);
         auto in = ahead(to.y);
         in.target_x = to.x;
-        in.z = 20.0f;
+        in.z = follower_z;
         in.target_z = to.z;
         return profiled_follow_step(in, direct_profile(), true, 0.0f, dt);
     };
@@ -102,24 +103,35 @@ TEST_CASE("follow profile: remote swimmers keep their depth over a submerged flo
     CHECK(target.position.x > 40.0f);
     CHECK(target.position.z == 20.0f);
     CHECK(target.body_wet == 5);
-    const auto level = follow();
+    const auto level = follow(20.0f);
     REQUIRE(level.move);
     CHECK(level.pitch == 0.0f);
+
+    target.position.z = 23.0f; // At the surface, the body sample is dry but the feet sample is wet.
+    world.smooth(dt, 1.0 + dt, floor, region);
+    CHECK(target.position.z == 23.0f);
+    CHECK(target.body_wet == 0);
+    CHECK(target.feet_wet == 5);
+    CHECK(follow(23.0f).pitch == 0.0f);
+
+    const WorldState::FloorFn bank = [](const glm::vec3&) { return 17.0f; };
+    world.smooth(dt, 1.0 + 2 * dt, bank, region);
+    CHECK(target.position.z == 22.0f); // On a shallow bank only the feet are wet.
 
     target.position.z = 8.0f; // The next position update puts the leader deeper, then it stops.
     target.speed_run = 0.0f;
     target.velocity = glm::vec3(0.0f);
-    world.smooth(dt, 1.0 + dt, floor, region);
+    world.smooth(dt, 1.0 + 3 * dt, floor, region);
     CHECK(target.position.z == 8.0f);
-    CHECK(follow().pitch < 0.0f);
+    CHECK(follow(20.0f).pitch < 0.0f);
 
     target.position.z = 4.0f;
-    world.smooth(dt, 1.0 + 2 * dt, floor, region);
+    world.smooth(dt, 1.0 + 4 * dt, floor, region);
     CHECK(target.position.z == 5.0f); // Feet below the floor are still raised out of it.
 
     target.position = {70.0f, 0.0f, 25.0f};
     target.speed_run = 1.0f;
-    world.smooth(dt, 1.0 + 3 * dt, floor, region);
+    world.smooth(dt, 1.0 + 5 * dt, floor, region);
     CHECK(target.position.z == 5.0f); // A moving player on dry land still finds the floor.
     CHECK(target.body_wet == 0);
 }
@@ -132,6 +144,138 @@ TEST_CASE("follow profile: absent extension leaves original distance walk run an
     in.distance = 50; CHECK(follow_step(in).run);
     in.distance = 201; CHECK(follow_step(in).stop_message == kStrFollowTooFar);
     in.target_animation = kFollowDeadAnimation; CHECK(follow_step(in).stop_message == kStrFollowDead);
+}
+
+namespace {
+
+struct SwimmingFollower {
+    static constexpr float kHeight = 6.0f;
+    static constexpr float kStepMs = 16.0f;
+    static constexpr float kFloor = 0.0f;
+
+    mechanics::MovementController movement;
+    mechanics::CharacterInput character;
+    bool profiled = false;
+    bool moving_forward = false;
+    bool swim_jumped = false;
+    std::uint32_t now = 1000;
+
+    explicit SwimmingFollower(bool enhanced) : profiled(enhanced) {
+        movement.reset({0.0f, 0.0f, 20.0f - kHeight}, 0.0f);
+        movement.body.floor_height = kFloor;
+        movement.body.body_wet = 5;
+        movement.body.camera_angle = -64.0f;
+        character.swimming_skill = 100;
+    }
+
+    float depth() const { return movement.body.feet.z + kHeight; }
+
+    FollowSwimStep tick(float target_y, float target_z) {
+        const glm::vec3& feet = movement.body.feet;
+        auto in = ahead(target_y);
+        const glm::vec3 from = world_to_server(feet);
+        in.x = from.x;
+        in.y = from.y;
+        in.z = depth();
+        in.height = kHeight;
+        in.heading = movement.body.heading;
+        in.speed = movement.body.speed_run;
+        in.target_z = target_z;
+        in.target_height = 3.0f;
+        in.distance = std::hypot(in.target_x - in.x, in.target_y - in.y);
+        if (profiled) {
+            const auto step = profiled_follow_step(in, direct_profile(), moving_forward, movement.body.camera_angle,
+                                                   kStepMs / 1000.0f);
+            moving_forward = step.move;
+            movement.body.heading = step.heading;
+        } else {
+            const auto step = follow_step(in);
+            moving_forward = step.move;
+            movement.body.heading = step.heading;
+            if (step.move) character.run_walk = step.run ? 1 : 0;
+        }
+        const auto swim = follow_swim_step(in, moving_forward);
+        movement.set_autorun(moving_forward ? 1 : 0);
+        now += 16;
+        mechanics::ControlInput input;
+        input.follow_swim = mechanics::SwimSteering{swim.pitch, swim.vertical_only};
+        swim_jumped = movement.controls(input, character, now).swim_jumped;
+        movement.step({}, kStepMs, character, kFloor, input.follow_swim);
+        return swim;
+    }
+};
+
+} // namespace
+
+TEST_CASE("follow swimming: stock and enhanced match the leader's depth while moving forward") {
+    for (const bool profiled : {false, true}) {
+        CAPTURE(profiled);
+        SwimmingFollower swimmer(profiled);
+        // The leader has a different avatar height. The follower started by looking down.
+        const auto level = swimmer.tick(80.0f, 20.0f);
+        REQUIRE(swimmer.moving_forward);
+        CHECK_FALSE(level.vertical_only);
+        CHECK(level.pitch == 0.0f);
+        for (int frame = 0; frame < 90; ++frame) swimmer.tick(80.0f, 20.0f);
+        CHECK(swimmer.movement.body.feet.x > 1.0f);
+        CHECK(swimmer.depth() == 20.0f);
+        CHECK(swimmer.movement.body.camera_angle == -64.0f);
+
+        CHECK(swimmer.tick(80.0f, 8.0f).pitch < 0.0f);
+        for (int frame = 0; frame < 120; ++frame) swimmer.tick(80.0f, 8.0f);
+        const float after_dive = swimmer.depth();
+        CHECK(after_dive < 19.5f);
+        CHECK(after_dive > 8.0f);
+
+        CHECK(swimmer.tick(80.0f, 24.0f).pitch > 0.0f);
+        for (int frame = 0; frame < 120; ++frame) swimmer.tick(80.0f, 24.0f);
+        CHECK(swimmer.depth() > after_dive + 0.5f);
+        CHECK(swimmer.depth() < 24.0f);
+    }
+}
+
+TEST_CASE("follow swimming: stock and enhanced correct depth inside the horizontal stop distance") {
+    for (const bool profiled : {false, true}) {
+        CAPTURE(profiled);
+        SwimmingFollower swimmer(profiled);
+        swimmer.tick(8.0f, 20.0f);
+        CHECK_FALSE(swimmer.moving_forward);
+        for (const float leader_depth : {28.0f, 12.0f}) {
+            CAPTURE(leader_depth);
+            const auto correction = swimmer.tick(8.0f, leader_depth);
+            REQUIRE(correction.vertical_only);
+            CHECK(swimmer.movement.autorun() == 0);
+            for (int frame = 0; frame < 320; ++frame) swimmer.tick(8.0f, leader_depth);
+            CHECK_FALSE(swimmer.tick(8.0f, leader_depth).vertical_only);
+            CHECK_FALSE(swimmer.moving_forward);
+            CHECK(std::abs(swimmer.depth() - leader_depth) <= 1.0f);
+            CHECK(swimmer.movement.body.feet.x == 0.0f);
+            CHECK(swimmer.movement.body.feet.y == 0.0f);
+        }
+    }
+}
+
+TEST_CASE("follow swimming: surface jumps use follow steering and preserve in-place correction") {
+    for (const bool profiled : {false, true}) {
+        CAPTURE(profiled);
+        SwimmingFollower swimmer(profiled);
+        swimmer.movement.body.camera_angle = 64.0f;
+        swimmer.movement.swim_surface_clear = true;
+        swimmer.tick(80.0f, 20.0f);
+        CHECK_FALSE(swimmer.swim_jumped);
+        CHECK(swimmer.depth() == 20.0f);
+
+        SwimmingFollower vertical(profiled);
+        vertical.movement.body.camera_angle = 64.0f;
+        vertical.movement.swim_surface_clear = true;
+        CHECK(vertical.tick(8.0f, 28.0f).vertical_only);
+        CHECK_FALSE(vertical.swim_jumped);
+        CHECK(vertical.movement.body.feet.x == 0.0f);
+
+        swimmer.movement.body.camera_angle = -64.0f;
+        swimmer.tick(80.0f, 30.0f);
+        CHECK(swimmer.swim_jumped);
+    }
 }
 
 TEST_CASE("mount profile: instant acceleration preserves ordinary target speeds and stops") {

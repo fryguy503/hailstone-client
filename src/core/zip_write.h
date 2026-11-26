@@ -43,6 +43,7 @@ private:
     };
     std::vector<std::byte> out_;
     std::vector<Entry> entries_;
+    std::size_t directory_size_ = 0; // the central directory finish() will write, kept as entries are added
     bool finished_ = false;
 };
 

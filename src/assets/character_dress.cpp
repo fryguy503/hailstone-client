@@ -272,7 +272,7 @@ std::shared_ptr<const CharacterMesh> CharacterLibrary::dress(const CharacterMode
         if (auto it = shared_->dresses.find({&model, key}); it != shared_->dresses.end() && unaffected(it->second.lookups)) {
             it->second.used = shared_->generation();
             CharacterLookups::note(it->second.lookups);
-            dress_cache_.emplace(key, Cached<std::shared_ptr<const CharacterMesh>>{it->second.value, it->second.lookups});
+            remember_dress(key, Cached<std::shared_ptr<const CharacterMesh>>{it->second.value, it->second.lookups});
             return it->second.value;
         }
     std::optional<CharacterLookups> rec;
@@ -306,8 +306,19 @@ std::shared_ptr<const CharacterMesh> CharacterLibrary::dress(const CharacterMode
                                                              result, names, shared_->generation()});
         if (result) shared_->owners[result.get()] = {names, &model};
     }
-    dress_cache_.emplace(std::move(key), Cached<std::shared_ptr<const CharacterMesh>>{result, std::move(names)});
+    remember_dress(std::move(key), Cached<std::shared_ptr<const CharacterMesh>>{result, std::move(names)});
     return result;
+}
+
+void CharacterLibrary::remember_dress(std::string key, Cached<std::shared_ptr<const CharacterMesh>> entry) const {
+    // (with the mutex held)
+    if (dress_cache_.size() >= dress_sweep_at_) {
+        // A mesh nobody else holds is made again if a look asks for it later; one an actor wears stays, so the same
+        // look still hands out the same mesh while it is shown.
+        std::erase_if(dress_cache_, [](const auto& kv) { return kv.second.value.use_count() <= 1; });
+        dress_sweep_at_ = std::max(kDressSweep, 2 * dress_cache_.size());
+    }
+    dress_cache_.emplace(std::move(key), std::move(entry));
 }
 
 namespace {

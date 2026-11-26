@@ -31,6 +31,7 @@
 #include "game/sound_rules.h"
 #include "game/spawn_heights.h"
 #include "game/coords.h"
+#include "game/mq_colors.h"
 #include "game/zone_names.h"
 #include "game/mechanics/tables.h"
 #include "game/mechanics/vehicle.h"
@@ -76,6 +77,19 @@ constexpr auto kLogoutDropWait = std::chrono::seconds(3);
 // that sits, loots or lies down.
 bool stops_motion(std::uint8_t state) {
     return state == kStandSitting || state == kStandLooting || state == kStandLying;
+}
+
+bool valid_chat_group_text(std::string_view text, std::size_t max_bytes) {
+    if (text.empty() || text.size() > max_bytes) return false;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const auto byte = static_cast<unsigned char>(text[i]);
+        if ((byte < 0x20 && byte != '\t') || byte == 0x7f) return false;
+        if (byte == 0xc2 && i + 1 < text.size()) {
+            const auto next = static_cast<unsigned char>(text[i + 1]);
+            if (next >= 0x80 && next <= 0x9f) return false; // UTF-8 U+0080 through U+009F
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -173,6 +187,7 @@ void GameConnection::select_zone_spell_limit() {
 }
 
 void GameConnection::fail(std::string message) {
+    close_server_management();
     close_evolving_transfer();
     reset_fellowship();
     reset_achievements();
@@ -199,25 +214,102 @@ void GameConnection::fail(std::string message) {
     if (world_session_) world_session_->disconnect();
 }
 
-void GameConnection::chat(ChatEvent::Kind kind, std::string text, std::uint32_t rgb, std::uint32_t color,
-                          std::string peer, std::optional<std::string> display_text) {
-    if (options_.hooks) { // OnIncomingChat, OnFilterChat (a server's client may drop lines in dsp_chat)
+bool GameConnection::prepare_chat(ChatEvent& event, std::optional<std::string> display_text, bool filter,
+                                  bool group_member) {
+    // MacroQuest's colour codes (game/mq_colors.h) are for the plugins' and scripts' own lines: from anyone else (a
+    // server's message, a player's tell) a BEL is taken out, so their text cannot colour the chat. A hook below may
+    // still put codes into a line it rewrites, as the plugin's own.
+    if (plugin::caller_name().empty()) {
+        std::erase(event.text, game::kMqColorCode);
+        if (display_text) std::erase(*display_text, game::kMqColorCode);
+    }
+    if (filter && options_.hooks) { // OnIncomingChat, OnFilterChat (a server's client may drop lines in dsp_chat)
         // A deliberate difference from MQ, whose hook hangs off dsp_chat and sees a hit line as displayed: hooks get
         // the full sentence whatever the hit mode (docs/plugins.md), so a parser matches one form.
-        plugin::ChatLine line{text, rgb, static_cast<int>(kind)};
+        plugin::ChatLine line{event.text, event.rgb, static_cast<int>(event.kind)};
         line.from_code = !plugin::caller_name().empty();
         line.origin_caps = plugin::caller_caps();
-        if (options_.hooks->chat(line) == plugin::Flow::Drop) return;
+        if (options_.hooks->chat(line) == plugin::Flow::Drop) return false;
         // A hook's replacement is authoritative; a precomputed abbreviation no longer describes it.
-        if (line.text != text) display_text.reset();
-        text = std::move(line.text);
-        rgb = line.color;
+        if (line.text != event.text) display_text.reset();
+        event.text = std::move(line.text);
+        event.rgb = line.color;
     }
+    if (group_member && !valid_chat_group_text(event.text, kChatGroupMaxRowBytes)) return false;
     // Hit modes change presentation only: logs and incoming-chat parsers retain the complete sentence.
-    log::info("chat: {}", text);
-    if (chat_logging()) write_chat_log(text); // dsp_chat's OutputTextToLog (Log on)
-    chat_.push_back({kind, display_text ? std::move(*display_text) : std::move(text), rgb, color, std::move(peer)});
+    if (event.text.find(game::kMqColorCode) == std::string::npos) {
+        log::info("chat: {}", event.text);
+        if (chat_logging()) write_chat_log(event.text); // dsp_chat's OutputTextToLog (Log on)
+    } else {
+        const std::string plain = game::strip_mq_colors(event.text); // the logs are plain text
+        log::info("chat: {}", plain);
+        if (chat_logging()) write_chat_log(plain);
+    }
+    if (display_text) event.text = std::move(*display_text);
+    return true;
+}
+
+void GameConnection::enqueue_chat(ChatEvent event) {
+    chat_.push_back(std::move(event));
     if (chat_.size() > 500) chat_.pop_front();
+}
+
+void GameConnection::chat(ChatEvent::Kind kind, std::string text, std::uint32_t rgb, std::uint32_t color,
+                          std::string peer, std::optional<std::string> display_text, bool filter) {
+    ChatEvent event{kind, std::move(text), rgb, color, std::move(peer), {}};
+    if (!prepare_chat(event, std::move(display_text), filter)) return;
+    enqueue_chat(std::move(event));
+}
+
+bool GameConnection::write_chat_group(std::string title, std::vector<std::string> messages) {
+    if (!valid_chat_group_text(title, kChatGroupMaxTitleBytes) || messages.empty() || messages.size() > kChatGroupMaxRows)
+        return false;
+    if (std::any_of(messages.begin(), messages.end(), [](const auto& message) {
+            return !valid_chat_group_text(message, kChatGroupMaxRowBytes);
+        })) return false;
+
+    ChatEvent group;
+    group.text = std::move(title);
+    group.group.reserve(messages.size());
+    std::vector<ChatEvent> colored;
+    for (auto& message : messages) {
+        ChatEvent row;
+        row.text = std::move(message);
+        if (!prepare_chat(row, std::nullopt, true, true)) continue;
+        if (row.rgb) colored.push_back(std::move(row));
+        else group.group.push_back(std::move(row.text));
+    }
+    // As with zoning notices, keep the hook's color on its own visible line.
+    for (auto& row : colored) enqueue_chat(std::move(row));
+    if (!group.group.empty()) enqueue_chat(std::move(group));
+    return true;
+}
+
+void GameConnection::zone_client_message(std::string text, std::string subject, bool stop) {
+    ChatEvent event{ChatEvent::Kind::System, std::move(text), 0, 0, {}, {}};
+    if (!prepare_chat(event, std::nullopt, true)) return;
+    // Preserve a chat hook's explicit colour on the individual line.
+    if (zone_client_messages_ && event.rgb == 0) {
+        zone_client_messages_->push_back({std::move(event.text), std::move(subject), stop});
+        return;
+    }
+    enqueue_chat(std::move(event));
+}
+
+std::vector<GameConnection::ZoneClientMessage> GameConnection::take_zone_client_messages() {
+    if (!zone_client_messages_) return {};
+    auto notices = std::move(*zone_client_messages_);
+    zone_client_messages_.reset();
+    // A stop a later start of the same script or plugin cancels is routine churn. One with no start after it lasts.
+    std::vector<ZoneClientMessage> messages;
+    messages.reserve(notices.size());
+    for (std::size_t i = 0; i < notices.size(); ++i) {
+        bool lasting = notices[i].stop && !notices[i].subject.empty();
+        for (std::size_t j = i + 1; lasting && j < notices.size(); ++j)
+            if (!notices[j].stop && notices[j].subject == notices[i].subject) lasting = false;
+        messages.push_back({std::move(notices[i].text), lasting});
+    }
+    return messages;
 }
 
 void GameConnection::start(const WorldTicket& ticket) {
@@ -233,6 +325,7 @@ void GameConnection::start(const WorldTicket& ticket) {
     ticket_ = ticket;
     camped_out_.reset();
     link_death_.reset();
+    zone_client_messages_.reset();
     zoning_ = false;
     connect_world(false);
 }
@@ -469,6 +562,8 @@ void GameConnection::update() {
         server_rules_.reset();
         ++server_rules_serial_;
     }
+    update_command_account_status();
+    update_server_management();
     // The original reapplies the new-armor filter to a member who joins or leaves the group or raid
     // (PlayerClient_ApplyNewArmorFilterGroupMember / RaidMember); a new spawn has it made in apply_spawn.
     if (new_armor_membership_changed())
@@ -691,6 +786,14 @@ void GameConnection::handle_world(const AppPacket& p) {
         }
         break;
     case Op::ZoneServerInfo: {
+        // The original reads the address only while it waits for it after OP_EnterWorld (StartNetworkGame, GameState
+        // 3), from the character select or after world's OP_EnterWorld while zoning; stock EQEmu sends it only in
+        // answer to the client's OP_EnterWorld (world Client::EnterWorld → Clearance). Anywhere else it would end the
+        // world and zone state and connect a zone with no character, so it is dropped.
+        if (state_ != ConnectionState::EnteringWorld && state_ != ConnectionState::Zoning) {
+            log::warn("world: OP_ZoneServerInfo while {}, ignored", to_string(state_));
+            break;
+        }
         auto info = decode_zone_server_info(p);
         if (!info) { fail("could not read the zone server address"); return; }
         zone_host_ = info->host.empty() ? ticket_.world_host : info->host;
@@ -700,6 +803,11 @@ void GameConnection::handle_world(const AppPacket& p) {
         // closes it on OP_WorldComplete). The fresh zone connection replaces any old one.
         zone_session_.reset();
         invalidate_interaction_context();
+        server_management_offered_ = false;
+        command_account_status_.reset();
+        settings_requested_at_ = {};
+        command_account_status_received_at_ = {};
+        if (!server_management_waiting_for_zone_) close_server_management();
         send_world(make_empty(Op::WorldComplete));
         world_drop_pending_ = true;
         world_drop_deadline_ = Clock::now() + kWorldDropWait;
@@ -766,12 +874,23 @@ void GameConnection::handle_world(const AppPacket& p) {
         spells_.others.clear();
         cast_stage_shown_.clear();
         effect_packets_.clear();
+        // Cues not yet taken name the old zone's spawn ids, which the new zone reuses for others.
+        effect_cues_.clear();
+        level_effect_cues_.clear();
+        // The same for the sound cues tied to a spawn or a place in the old zone (a hit, a cast, a door). A 2D
+        // wave, the level-up sound and the new-mail sound name neither and would have played already in the
+        // original, which plays a sound as its packet arrives: they stay.
+        std::erase_if(sound_cues_, [](const SoundCue& c) {
+            return c.kind != SoundCue::Kind::Wave && c.kind != SoundCue::Kind::LevelUp &&
+                   c.kind != SoundCue::Kind::NewMail;
+        });
         blood_spurts_.clear();
         spells_.target_buffs.clear();
         spells_.target_buffs_entity = 0;
         loot_.reset();
         loot_popup_pending_ = false; // the corpse's question goes with reset_player_for_zone below
         doors_.clear();
+        door_target_.reset();
         ground_objects_.clear();
         world_container_.reset();
         world_container_requested_.reset();
@@ -799,6 +918,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         npc_find_identity_.reset();
         quiet_path_.reset();
         shown_find_lease_ = {};
+        shown_find_silent_ = false;
         ++shown_find_generation_;
         retire_tracking();
         tracking_request_.reset(); tracking_data_.reset(); tracking_actors_.clear();
@@ -989,6 +1109,7 @@ void GameConnection::apply_spawn(const Spawn& s) {
     group_.mana_percent.erase(s.spawn_id);
     group_.endurance_percent.erase(s.spawn_id);
     spells_.others.erase(s.spawn_id);
+    cast_stage_shown_.erase(s.spawn_id);
     if (spells_.target_buffs_entity == s.spawn_id) {
         spells_.target_buffs_entity = 0;
         spells_.target_buffs.clear();
@@ -1099,7 +1220,7 @@ void GameConnection::finish_server_files() {
     maybe_request_client_spawn();
 }
 
-// A transient login reads only the access setting. A saved profile uses the full policy and keeps its folder for
+// A transient login reads access and command policy. A saved profile uses the full policy and keeps its folder for
 // plugin settings (server_config_dir), including on a server without the Hailstone script.
 bool GameConnection::update_server_rules() {
     plugin::Rules rules;
@@ -1118,10 +1239,12 @@ bool GameConnection::update_server_rules() {
         // A failed sync can leave an earlier login's rules on disk. Only this login's policy decides access.
         if (synced) allow_client = !received.deny_client;
         if (!options_.server_files_dir.empty()) rules = std::move(received);
+        else if (synced) rules.commands = std::move(received.commands);
     }
     log::info("server rules: {}", rules.configured ? std::format("{} ({} scripts and plugins of its own)", plugin::kServerCfgName,
                                                                  rules.server_files.size())
-                                                   : std::string("none (no hailstone.cfg): plugins and scripts run freely"));
+                                                   : std::string(rules.commands.enabled ? "command policy (transient login)"
+                                                                                        : "none: plugins and scripts run freely"));
     server_rules_ = std::move(rules);
     ++server_rules_serial_;
     return allow_client;
@@ -1265,7 +1388,7 @@ void GameConnection::finish_zone_in() {
     guild_world_invites_ = false;
     if (entered) send_zone(encode_hailstone_guild({}));
     // And the server's settings for the client; a server without Hailstone's script does not answer.
-    if (entered) send_zone(encode_hailstone_settings_request());
+    if (entered) request_hailstone_settings();
     // The camera effect's reset @0x4939b0 runs on the zone-in: a new zone starts unshaken.
     camera_shake_.reset();
     // DoMainLoop after ReadyEnterWorld: the task window rebuilt and the task compass mark looked for (0x76ff50).
@@ -1282,6 +1405,20 @@ void GameConnection::request_quest_npcs() {
     send_zone(encode_quest_npcs_request());
 }
 
+void GameConnection::request_hailstone_settings() {
+    settings_requested_at_ = options_.session.clock ? options_.session.clock() : Clock::now();
+    send_zone(encode_hailstone_settings_request());
+}
+
+void GameConnection::update_command_account_status() {
+    if (state_ != ConnectionState::InZone || zone_change_pending_ || !server_rules_ || server_rules_->provisional ||
+        server_rules_->commands.gm.empty()) return;
+    const auto now = options_.session.clock ? options_.session.clock() : Clock::now();
+    // Ask the encounter again while this policy needs an account rank. An absent or expired rank denies GM rules.
+    if (now - command_account_status_received_at_ >= std::chrono::seconds(60)) command_account_status_.reset();
+    if (now - settings_requested_at_ >= std::chrono::seconds(30)) request_hailstone_settings();
+}
+
 std::optional<TimeOfDay> GameConnection::current_time_of_day() const {
     if (!time_) return std::nullopt;
     const auto now = options_.session.clock ? options_.session.clock() : Clock::now();
@@ -1296,6 +1433,10 @@ std::optional<TimeOfDay> GameConnection::current_time_of_day() const {
 
 void GameConnection::handle_zone(const AppPacket& p) {
     if (options_.zone_packet_tap) options_.zone_packet_tap(p);
+    if (p.opcode == kOpServerManagementReply) {
+        handle_server_management(p);
+        return;
+    }
     if (p.opcode == kOpHsFiles) {
         if (auto reply = decode_server_files(p); reply && server_files_ && !server_files_->finished()) {
             server_files_->handle(*reply, ServerFileSync::Clock::now());
@@ -1345,8 +1486,14 @@ void GameConnection::handle_zone(const AppPacket& p) {
     }
     if (p.opcode == kOpHailstoneSettings) {
         if (auto v = decode_hailstone_settings(p)) {
-            log::info("server settings: flags {:#x}", v->flags); // none defined now (net/settings_packets.h)
+            log::info("server settings: flags {:#x}", v->flags);
             hailstone_script_ = true;
+            command_account_status_ = v->account_status;
+            command_account_status_received_at_ = options_.session.clock ? options_.session.clock() : Clock::now();
+            if (state_ == ConnectionState::InZone) {
+                server_management_offered_ = (v->flags & kServerManagementOffered) != 0;
+                if (!server_management_offered_) close_server_management();
+            }
         } else {
             log::warn("server settings: a bad OP_HailstoneSettings ({} bytes) ignored", p.data.size());
         }
@@ -1628,6 +1775,7 @@ void GameConnection::handle_zone(const AppPacket& p) {
             group_.mana_percent.erase(*id);
             group_.endurance_percent.erase(*id);
             spells_.others.erase(*id);
+            cast_stage_shown_.erase(*id);
             if (spells_.target_buffs_entity == *id) {
                 spells_.target_buffs_entity = 0;
                 spells_.target_buffs.clear();
@@ -2272,7 +2420,9 @@ void GameConnection::handle_zone(const AppPacket& p) {
                 camp_token_ = 0;
                 camp_disconnect_expected_ = false;
                 large_dialog_.reset();
+                pause_server_management_for_zone();
                 state_ = ConnectionState::Zoning;
+                if (!zone_client_messages_) zone_client_messages_.emplace();
                 reset_fellowship(true);
                 reset_guild_banner();
                 reset_achievements();
@@ -2652,6 +2802,7 @@ void GameConnection::simulate_link_loss() {
 }
 
 void GameConnection::disconnect() {
+    close_server_management();
     close_evolving_transfer();
     reset_fellowship();
     capture_bank();
@@ -2792,6 +2943,9 @@ bool GameConnection::allowed_to_attack(std::uint32_t target, std::int32_t spell)
     in.my_level = static_cast<std::uint8_t>(pstatus_.level);
     in.zone = static_cast<std::uint32_t>(zone_id()) | (static_cast<std::uint32_t>(zone_instance()) << 16);
     in.rules.pvp_rules = pvp_rules_;
+    // The duel globals AllowedToAttack reads: 0xddf7ec (the fight is on) and 0xddf7e4 (the opponent).
+    in.rules.dueling = duel_.active;
+    in.rules.duel_target_id = duel_.challenged;
     in.self_or_group_member = [this](const std::string& name) { return group_.has_member(name); };
     return game::allowed_to_attack(in);
 }
@@ -2837,8 +2991,12 @@ void GameConnection::attack_command(const std::string& args) {
 }
 
 void GameConnection::consider() {
+    consider(world_.target_id);
+}
+
+void GameConnection::consider(std::uint32_t spawn_id) {
     if (state_ != ConnectionState::InZone) return;
-    auto it = world_.spawns.find(world_.target_id);
+    auto it = world_.spawns.find(spawn_id);
     // Cmd_consider @0x4df830 prints its lines with dsp_chat_2 (colour 0x111, the default). With no target it is
     // 13063 "Consider whom?"; 12240 "Consider who?" is the reply handler's (CEverQuest::Consider @0x5239a0).
     if (it == world_.spawns.end()) {
@@ -2854,7 +3012,7 @@ void GameConnection::consider() {
     }
     Consider c;
     c.player_id = world_.player_id;
-    c.target_id = world_.target_id;
+    c.target_id = spawn_id;
     // Cmd_consider @0x4df830: spawn type 2 and up (a corpse) sends OP_ConsiderCorpse with the same 20 bytes and no
     // consider tip; the server answers in chat (decay, and a player corpse's resurrection time).
     const auto op = it->second.is_corpse ? Op::ConsiderCorpse : Op::Consider;

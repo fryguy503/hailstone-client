@@ -209,6 +209,11 @@ bool ClientApp::client_command(std::string_view h, const std::string& args) {
         else c.show_chat("Usage: /import", 15);
         return true;
     }
+    if (h == "Hailstone_layoutprofiles") {
+        if (args.empty() && ui_api_) ui_api_->show("LayoutProfilesWindow", true);
+        else if (!args.empty()) c.show_chat("Usage: /layoutprofiles", 15);
+        return true;
+    }
     if (h == "Hailstone_abilitybook") {
         // The Ability Book (game/ability_book.h): no argument shows or hides it; "auto" toggles autoskill, "auto on"
         // / "auto off" set it.

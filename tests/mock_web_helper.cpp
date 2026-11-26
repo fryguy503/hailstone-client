@@ -1,14 +1,18 @@
 // A stand-in for the browser helper (docs/browser.md) for tests/browser_host_test.cpp: it speaks the protocol over
-// its standard input and output, and draws no web page. Each tab's image is a test pattern (blue = x, green = y,
+// the pipes it was started with, taken off its standard input and output as the real helper does
+// (platform::take_protocol_stdio), and draws no web page. Each tab's image is a test pattern (blue = x, green = y,
 // red = the tab id); a left click paints its pixel white. What it does for the tests:
 //   Open, Navigate   the address back, a title "Mock <address>", loading done; an address with "redirect=" in it
 //                    lands on what follows (a redirect off the site)
 //   Resize           the whole image again
 //   Post             the message back, as the page's, with "echo:" in front
 //   Eval             "crash": exit 3; "garbage": bytes that are no message; "console": a console line; "close":
-//                    Closed (failed)
+//                    Closed (failed); "child": runs itself with --print, which writes bytes that are no message to
+//                    its standard output, then a console line "child done"; "streams": a console line saying
+//                    whether a process it starts would inherit its pipes ("in:0 out:0" when not)
 //   Shutdown, end of input: exit 0
-// "--version N" answers Hello with that version; "--stall 1" never reads its input (a helper that is stuck).
+// "--version N" answers Hello with that version; "--stall 1" never reads its input (a helper that is stuck);
+// "--print" writes junk to standard output and exits (the child above).
 
 #include <chrono>
 #include <cstdio>
@@ -25,13 +29,25 @@ using namespace hailstone::web;
 
 namespace {
 
+hailstone::platform::ProtocolStreams g_client;
+
 void out(const Message& m) {
     std::vector<std::byte> b = encode_message(m);
-    std::fwrite(b.data(), 1, b.size(), stdout);
-    std::fflush(stdout);
+    std::fwrite(b.data(), 1, b.size(), g_client.out);
+    std::fflush(g_client.out);
 }
 
-bool read_exact(void* p, std::size_t n) { return std::fread(p, 1, n, stdin) == n; }
+bool read_exact(void* p, std::size_t n) { return std::fread(p, 1, n, g_client.in) == n; }
+
+// What a page's process inheriting the pipe could do: bytes that are no message, on its standard output.
+void run_child(const char* self) {
+    std::string command = std::string("\"") + self + "\" --print";
+#if defined(_WIN32)
+    command = "\"" + command + "\""; // cmd /c strips the outer pair
+#endif
+    std::fflush(nullptr);
+    [[maybe_unused]] const int code = std::system(command.c_str());
+}
 
 Frame pattern(std::uint32_t tab, std::uint16_t w, std::uint16_t h) {
     Frame f;
@@ -64,7 +80,13 @@ void loaded(std::uint32_t tab, std::string url) {
 } // namespace
 
 int main(int argc, char** argv) {
-    hailstone::platform::binary_stdio();
+    for (int i = 1; i < argc; ++i)
+        if (std::strcmp(argv[i], "--print") == 0) {
+            std::fputs("\xff\xff\xff\x7fnot a message", stdout);
+            std::fflush(stdout);
+            return 0;
+        }
+    if (!hailstone::platform::take_protocol_stdio(g_client)) return 4;
     std::uint32_t version = kProtocolVersion;
     for (int i = 1; i + 1 < argc; ++i)
         if (std::strcmp(argv[i], "--version") == 0) version = static_cast<std::uint32_t>(std::atoi(argv[i + 1]));
@@ -122,12 +144,19 @@ int main(int argc, char** argv) {
             if (e->script == "crash") return 3;
             if (e->script == "garbage") {
                 const unsigned char junk[] = {5, 0, 0, 0, 0xee, 1, 2, 3, 4};
-                std::fwrite(junk, 1, sizeof junk, stdout);
-                std::fflush(stdout);
+                std::fwrite(junk, 1, sizeof junk, g_client.out);
+                std::fflush(g_client.out);
             } else if (e->script == "console") {
                 out(Console{e->tab, 2, "a warning"});
             } else if (e->script == "close") {
                 out(Closed{e->tab, CloseReason::Failed, "the page failed"});
+            } else if (e->script == "child") {
+                run_child(argv[0]);
+                out(Console{e->tab, 1, "child done"});
+            } else if (e->script == "streams") {
+                const bool in = hailstone::platform::stream_inherited_by_children(g_client.in);
+                const bool out_inherited = hailstone::platform::stream_inherited_by_children(g_client.out);
+                out(Console{e->tab, 1, std::string("in:") + (in ? "1" : "0") + " out:" + (out_inherited ? "1" : "0")});
             }
         } else if (std::get_if<Shutdown>(&*m)) {
             return 0;

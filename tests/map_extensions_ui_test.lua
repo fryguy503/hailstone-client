@@ -41,6 +41,7 @@ local function rig(pack)
   ShowZone=function(short)s.shownZone=short or s.zone;s.own=short==nil or short==s.zone;return mapAction("ShowZone",short)end,
   AutoZ=function(value)if value~=nil then s.autoZ=value;mapAction("AutoZ",value)end;return s.autoZ end,
   FindPathShown=function()return s.pathShown end,
+  Vanilla=function()return false end,
   DrawZone=function(x0,y0,x1,y1,zoom,cx,cy,labels)
    draw();s.geometry[#s.geometry+1]={zone=s.shownZone,zoom=zoom,cx=cx,cy=cy,labels=labels,x0=x0,y0=y0,x1=x1,y1=y1}
    if s.noMap then return nil end

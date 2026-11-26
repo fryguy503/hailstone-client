@@ -187,7 +187,13 @@ std::optional<game::TaskOffers> decode_task_select(const AppPacket& p) {
             o.title = r.cstring();
             o.description = r.cstring();
             o.reward_preview = r.le<std::uint8_t>() != 0;
+            // CTaskSelectWnd_ReadTaskSelectPacket @0x76bda0 reads as many elements as the count says and files each
+            // at its activity id in the offer's 20 element slots, with neither checked. Hailstone's limit: a count past
+            // kMaxOfferElements refuses the packet, so a short run of bytes cannot become many large elements. No
+            // RoF2 server sends more than 20 (EQEmu's MAXACTIVITIESPERTASK); the margin is for repeated ids.
+            constexpr std::uint32_t kMaxOfferElements = 256;
             auto elements = r.le<std::uint32_t>();
+            if (elements > kMaxOfferElements) throw std::out_of_range("too many task offer elements");
             for (std::uint32_t k = 0; k < elements; ++k) {
                 game::TaskElement e;
                 e.hidden = false;
@@ -234,12 +240,15 @@ AppPacket encode_task_select(const game::TaskOffers& v, Op op) {
 std::optional<game::TaskHistory> decode_task_history(const AppPacket& p) {
     return detail::decode_with(p, [](ByteReader& r) {
         game::TaskHistory v;
+        // CTaskManager_HandleTaskHistoryReply @0x480ac0: an index past the 50 history entries is ignored, and the
+        // entry takes the first 20 elements of a signed count; the rest of the packet is not read.
         v.index = r.le<std::uint32_t>();
-        auto n = r.le<std::uint32_t>();
-        for (std::uint32_t i = 0; i < n; ++i) {
+        if (v.index >= 50) throw std::out_of_range("task history index");
+        auto n = r.le<std::int32_t>();
+        for (std::int32_t i = 0; i < n && i < 20; ++i) {
             game::TaskElement e;
             e.hidden = false;
-            e.activity_id = i;
+            e.activity_id = static_cast<std::uint32_t>(i);
             e.type = r.le<std::int32_t>();
             e.target_name = r.cstring();
             e.item_list = counted(r);

@@ -14,7 +14,8 @@ enum HailstoneWorldCapability {
     HAILSTONE_WORLD_TERRAIN = 2u,
     HAILSTONE_WORLD_DRAWN_ANCHORS = 4u,
     HAILSTONE_WORLD_PRESENT_RECEIPTS = 8u,
-    HAILSTONE_WORLD_SURFACE_PATCH = 16u
+    HAILSTONE_WORLD_SURFACE_PATCH = 16u,
+    HAILSTONE_WORLD_PLACEMENT = 32u /* world_placement_* supported; reported in the zone without a render frame */
 };
 enum HailstoneWorldQueryResult {
     HAILSTONE_WORLD_DEFERRED = 0,  /* unavailable scene geometry, stale frame, or exhausted query budget */
@@ -25,6 +26,21 @@ enum HailstoneWorldPrimitive {
     HAILSTONE_WORLD_TRIANGLES = 0, /* vertex count is a multiple of three */
     HAILSTONE_WORLD_LINES = 1      /* vertex count is a multiple of two; one pixel wide */
 };
+enum HailstoneWorldPlacementStatus {
+    HAILSTONE_WORLD_PLACEMENT_INACTIVE = 0,
+    HAILSTONE_WORLD_PLACEMENT_AIMING_INVALID = 1,
+    HAILSTONE_WORLD_PLACEMENT_AIMING_VALID = 2,
+    HAILSTONE_WORLD_PLACEMENT_CONFIRMED = 3,
+    HAILSTONE_WORLD_PLACEMENT_CANCELLED = 4
+};
+
+typedef struct HailstoneWorldPlacement {
+    uint32_t size;
+    uint32_t status;          /* HailstoneWorldPlacementStatus */
+    uint32_t zone_id;
+    uint32_t instance_id;
+    float position[3];        /* zone-file axes, valid for AIMING_VALID and CONFIRMED */
+} HailstoneWorldPlacement;
 enum HailstoneWorldAnchorFlag {
     HAILSTONE_WORLD_DRAWN_POSE = 1u,
     HAILSTONE_WORLD_CACHED_FLOOR = 2u

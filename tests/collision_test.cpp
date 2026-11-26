@@ -129,6 +129,57 @@ TEST_CASE("Warsliks Woods: pine branches near Field of Bone are passable" * doct
     CHECK_FALSE(mesh.line_of_sight(trunk_start, trunk_end));
 }
 
+TEST_CASE("Classic jungle plants let players through leaves and still collide with stems" *
+          doctest::skip(!hailstone::test::game_dir())) {
+    using namespace hailstone;
+    auto check_plant = [](const char* zone_name, const glm::vec3& leaves_start, const glm::vec3& leaves_end,
+                          const glm::vec3& stem_start, const glm::vec3& stem_end) {
+        CAPTURE(zone_name);
+        const auto zone = assets::load_classic_zone(*test::game_dir(), zone_name);
+        const auto collision = game::CollisionMesh::build(zone);
+        auto animated = game::AnimatedObjects::build(zone);
+        app::ZoneMoveWorld world(&collision, nullptr, &zone.regions);
+        world.set_animated(&animated);
+        constexpr float dwarf_radius = 1.1875f;
+        CHECK_FALSE(world.sweep(leaves_start, leaves_end, dwarf_radius).collided);
+        CHECK_FALSE(world.sweep(leaves_end, leaves_start, dwarf_radius).collided);
+        CHECK(world.sweep(stem_start, stem_end, dwarf_radius).collided);
+        CHECK(world.sweep(stem_end, stem_start, dwarf_radius).collided);
+
+        const auto check_leaf_mesh = [&](const char* actor_name, std::string_view leaf_material) {
+            CAPTURE(actor_name);
+            const auto object = zone.objects.find(actor_name);
+            REQUIRE(object != zone.objects.end());
+            std::uint32_t visible_leaf_triangles = 0;
+            for (const auto& part : object->second.parts) {
+                const auto& material = object->second.materials[part.material];
+                if (material.name != leaf_material) continue;
+                CHECK_FALSE(part.solid);
+                CHECK(material.blend == assets::BlendMode::Masked);
+                visible_leaf_triangles += part.index_count / 3;
+            }
+            CHECK(visible_leaf_triangles == 40);
+        };
+        check_leaf_mesh("CMPLANT105B_ACTORDEF", "CMPLANT105_MDF");
+        if (zone.name == "emeraldjungle") {
+            // A slope runs under the reachable JNTREE102 canopy, which uses a different leaf material.
+            const glm::vec3 tree_start(1051.712f, -819.293f, -314.496f);
+            const glm::vec3 tree_end(1046.879f, -820.574f, -314.496f);
+            CHECK_FALSE(world.sweep(tree_start, tree_end, dwarf_radius).collided);
+            CHECK_FALSE(world.sweep(tree_end, tree_start, dwarf_radius).collided);
+            check_leaf_mesh("JNTREE101_ACTORDEF", "CMPLANT105_MDF");
+            check_leaf_mesh("JNTREE102_ACTORDEF", "JNTR2LEAF_MDF");
+        }
+    };
+
+    // Zone-file coordinates. The first paths pass through leaves and clear the terrain and stems.
+    // The second paths go directly through the stem of the same plant.
+    check_plant("trakanon", {-2352.646f, -2669.144f, -364.148f}, {-2356.547f, -2666.016f, -364.148f},
+                {-2350.5f, -2668.0f, -365.75f}, {-2343.5f, -2668.0f, -365.75f});
+    check_plant("emeraldjungle", {-49.954f, 238.420f, -257.888f}, {-52.423f, 234.072f, -257.888f},
+                {-55.5f, 244.0f, -256.5f}, {-48.5f, 244.0f, -256.5f});
+}
+
 TEST_CASE("Veksar: a player can walk over the ramp and the open doorway threshold" *
           doctest::skip(!hailstone::test::game_dir())) {
     using namespace hailstone;

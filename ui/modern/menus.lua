@@ -149,6 +149,12 @@ ui.window("EQ Menu", function()
     end
     return
   end
+  local management = API.serverManagement
+  if management and management.Available() then
+    local items = menus[1].items
+    items[#items + 1] = { kind = "separator" }
+    items[#items + 1] = { kind = "management", text = "Server Management" }
+  end
   local now = ui.GetTime()
   openedAt = openedAt or now
   local fade = math.min(1, (now - openedAt) / 0.12)
@@ -244,12 +250,17 @@ ui.window("EQ Menu", function()
             chevron(rx1 - 12 * s, (ry0 + ry1) / 2, 4 * s, lit and C.accent or C.faint, (enabled and 1 or 0.4) * fade)
           end
           -- hovering a row tells the game: a submenu row opens its submenu, another row closes this menu's
-          if hov and enabled and cascadeHovered[m] ~= i then
+          if hov and enabled and item.kind ~= "management" and cascadeHovered[m] ~= i then
             cascadeHovered[m] = i
             for k = m + 1, #menus do cascadeHovered[k] = nil end
             API.menus.CascadeHover(m, i)
           end
-          if clicked and enabled then API.menus.CascadeClick(m, i) end
+          if clicked and enabled then
+            if item.kind == "management" then
+              management.Open()
+              API.menus.CascadeClose()
+            else API.menus.CascadeClick(m, i) end
+          end
           y = y + ROW
         end
       end

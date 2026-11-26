@@ -6,6 +6,7 @@
 #include <cctype>
 #include <format>
 
+#include "game/spawn_name_lookup.h"
 #include "game/appearance.h"
 #include "game/eq_names.h"
 #include "game/item_moves.h"
@@ -56,12 +57,11 @@ LabelValue int_value(std::int64_t value, std::int64_t base = 0, bool compare = f
     return v;
 }
 
-// The group gauges look members up every frame: compare in place rather than lower-casing each spawn's name.
+// The group gauges look members up every frame: through an index kept while the spawn set holds
+// (game::SpawnNameLookup), the exact name and a player first, then a display name.
 const game::Spawn* spawn_by_name(const game::WorldState& world, const std::string& name) {
-    if (name.empty()) return nullptr;
-    for (const auto& [id, s] : world.spawns)
-        if (iequals(s.name, name) || game::display_name_iequals(s.name, name)) return &s;
-    return nullptr;
+    static game::SpawnNameLookup lookup; // (the UI runs on the main thread alone)
+    return lookup.find(world, name, true);
 }
 
 const game::Spawn* spawn(const game::WorldState& world, std::uint32_t id) {
@@ -511,11 +511,14 @@ LabelValue stock_label(const UiHost& host, int type) {
     }
     case 215: case 216: case 217: case 218: case 219: case 220: case 221: case 222: case 223: case 224:
     case 225: case 226: case 227: { // cases 0x4d..0x59: the item bonuses (CharacterZoneClient *Bonus2 fields)
+        // The *Bonus2 copies are the sums before the caps (a server may allow more); the heal amount, spell damage and
+        // clairvoyance have no cap. The caps themselves: item_bonus_cap.
         if (!ch) return int_value(0);
         const auto& d = ch->stats();
-        const std::int32_t v[] = {d.spell_shield, d.combat_effects, d.shielding, d.damage_shield, d.dot_shielding,
-                                  d.ds_mitigation, d.avoidance, d.accuracy, d.stun_resist, d.strike_through,
-                                  d.heal_amount, d.spell_damage, d.clairvoyance};
+        const std::int32_t v[] = {d.spell_shield_uncapped, d.combat_effects_uncapped, d.shielding_uncapped,
+                                  d.damage_shield_uncapped, d.dot_shielding_uncapped, d.ds_mitigation_uncapped,
+                                  d.avoidance_uncapped, d.accuracy_uncapped, d.stun_resist_uncapped,
+                                  d.strike_through_uncapped, d.heal_amount, d.spell_damage, d.clairvoyance};
         return int_value(v[type - 215], 0, true);
     }
     case 237: { // case 99: "weight/limit"

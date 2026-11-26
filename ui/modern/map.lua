@@ -562,8 +562,10 @@ local function body(x, y, w, h, s)
     local cx, cy = M.cx or midx, M.cy or midy
     local function toScreen(mx, my) return ccx + (mx - cx) * k, ccy + (my - cy) * k end
     local function toMap(sx, sy) return cx + (sx - ccx) / k, cy + (sy - ccy) / k end
-    -- markers
-    if showMarks then
+    -- markers, Find's NPCs and the exits; vanilla maps leave them out (the bars, buttons and text stay)
+    local vanillaQuery = API.map.Vanilla -- (API 1.11)
+    local vanilla = type(vanillaQuery) == "function" and vanillaQuery() == true
+    if showMarks and not vanilla then
       for i, m in ipairs(list) do
         local sx, sy = toScreen(m.x, m.y)
         local col = COLORS[m.color] or COLORS[1]
@@ -573,9 +575,9 @@ local function body(x, y, w, h, s)
         T.Text(sx + 9 * s, sy - 8 * s, m.name, TEXT_COLORS[m.color] or TEXT_COLORS[1], T.font.small)
       end
     end
-    drawNpcMarks(npcs, toScreen, s, showNpcs)
+    if not vanilla then drawNpcMarks(npcs, toScreen, s, showNpcs) end
     -- the exits (your own zone's)
-    if own and ui.GetSetting("map.exits") ~= "0" then atlas.DrawExits(toScreen, s) end
+    if own and not vanilla and ui.GetSetting("map.exits") ~= "0" then atlas.DrawExits(toScreen, s) end
     if hovered then cursorX, cursorY = toMap(mouseX, mouseY) end
     -- panning
     local io = ui.GetIO()

@@ -1,14 +1,16 @@
 // hailstone-web: the in-game browser's helper (docs/browser.md). CEF's off-screen browser behind the messages of
 // src/web/browser_protocol.h: the client's on standard input, ours on standard output. The same program is CEF's
-// browser process (started by the client) and its other processes (renderers, GPU, utility: started by CEF).
+// browser process (started by the client) and its other processes (renderers, GPU, utility: started by CEF). The
+// browser process takes the two pipes off standard input and output before CEF starts (platform::take_protocol_stdio),
+// so the other processes, which inherit those, get the null device instead of the client's stream.
 //
 //   hailstone-web --data=<folder>   cookies and caches go under it (each tab's profile is a folder in it); CEF's log
 //                                   is <folder>/cef.log
 //                 [--sandbox=auto|on|off]   Chromium's sandbox for the pages' processes (auto, the default: on Linux
 //                                   where unprivileged user namespaces work; off elsewhere for now)
 //
-// Threads: a reader thread blocks on standard input and posts each message to CEF's UI thread, where everything else
-// runs (CEF calls the off-screen handlers there), so only the UI thread writes standard output. Built with CEF's
+// Threads: a reader thread blocks on the client's pipe and posts each message to CEF's UI thread, where everything
+// else runs (CEF calls the off-screen handlers there), so only the UI thread writes to the client. Built with CEF's
 // flags: no exceptions, no RTTI (the protocol's own code is the client's, in hailstone_web_protocol).
 
 #include <algorithm>
@@ -27,6 +29,7 @@
 #include <utility>
 #include <vector>
 
+#include "include/base/cef_compiler_specific.h"
 #include "include/cef_app.h"
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
@@ -52,12 +55,15 @@ namespace {
 
 constexpr char kPostMessage[] = "hailstone.post";
 
+// The client's pipes, private to the browser process (set before CefInitialize, never changed after).
+hailstone::platform::ProtocolStreams g_client;
+
 // ---- output: the UI thread only ----
 
 void send(const web::Message& m) {
     std::vector<std::byte> b = web::encode_message(m);
-    std::fwrite(b.data(), 1, b.size(), stdout);
-    std::fflush(stdout);
+    std::fwrite(b.data(), 1, b.size(), g_client.out);
+    std::fflush(g_client.out);
 }
 
 // A console line for the client, cut to what it takes (web::kMaxConsoleText).
@@ -206,7 +212,15 @@ public:
     void resize(std::uint16_t w, std::uint16_t h) {
         width_ = w;
         height_ = h;
+        popup_ = inside_view(popup_cef_);
+        if (popup_shown_) OnPopupShow(browser_, true); // its place in the new size
         if (browser_) browser_->GetHost()->WasResized();
+    }
+    // A point in the client's view to CEF's: over the popup, back to where CEF has it (inside_view may move it).
+    void to_cef(int& x, int& y) const {
+        if (!popup_shown_ || !popup_.Contains(x, y)) return;
+        x += popup_cef_.x - popup_.x;
+        y += popup_cef_.y - popup_.y;
     }
     // What the client sends before CEF has made the browser waits for it.
     void when_created(std::function<void(CefBrowser&)> f) {
@@ -232,6 +246,13 @@ public:
     }
     void OnPaint(CefRefPtr<CefBrowser>, PaintElementType type, const RectList& dirty, const void* buffer, int width,
                  int height) override {
+        if (width <= 0 || height <= 0) return;
+        const std::size_t stride = static_cast<std::size_t>(width) * 4;
+        // A popup is cut to its place inside the view (inside_view): the client takes no popup larger than the view.
+        if (type == PET_POPUP) {
+            width = std::min(width, popup_.width);
+            height = std::min(height, popup_.height);
+        }
         if (width <= 0 || height <= 0 || width > 0xffff || height > 0xffff) return;
         web::Frame f;
         f.tab = tab_;
@@ -239,7 +260,6 @@ public:
         f.width = static_cast<std::uint16_t>(width);
         f.height = static_cast<std::uint16_t>(height);
         const auto* px = static_cast<const std::byte*>(buffer);
-        const std::size_t stride = static_cast<std::size_t>(width) * 4;
         for (const CefRect& r : dirty) {
             const int x0 = std::max(0, r.x), y0 = std::max(0, r.y);
             const int x1 = std::min(width, r.x + r.width), y1 = std::min(height, r.y + r.height);
@@ -265,7 +285,8 @@ public:
                         static_cast<std::uint16_t>(std::max(0, popup_.height))});
     }
     void OnPopupSize(CefRefPtr<CefBrowser> b, const CefRect& rect) override {
-        popup_ = rect;
+        popup_cef_ = rect;
+        popup_ = inside_view(rect);
         if (popup_shown_) OnPopupShow(b, true);
     }
 
@@ -366,8 +387,19 @@ private:
     std::vector<std::string> allow_;
     CefRefPtr<CefBrowser> browser_;
     std::vector<std::function<void(CefBrowser&)>> waiting_;
-    CefRect popup_;
+    // A popup (a <select>'s list) where CEF has it, which may reach past the view, and where the client is told it
+    // is: no larger than the view and inside it, as CEF's own off-screen example draws it.
+    CefRect popup_cef_, popup_;
     bool popup_shown_ = false;
+
+    CefRect inside_view(CefRect r) const {
+        const int w = width_ ? width_ : 1, h = height_ ? height_ : 1;
+        r.width = std::clamp(r.width, 0, w);
+        r.height = std::clamp(r.height, 0, h);
+        r.x = std::clamp(r.x, 0, w - r.width);
+        r.y = std::clamp(r.y, 0, h - r.height);
+        return r;
+    }
 
     IMPLEMENT_REFCOUNTING(TabClient);
 };
@@ -392,6 +424,7 @@ public:
             CefMouseEvent ev;
             ev.x = w->x;
             ev.y = w->y;
+            if (auto* t = find(w->tab)) t->to_cef(ev.x, ev.y);
             ev.modifiers = event_flags(w->mods);
             const int dx = w->dx, dy = w->dy;
             with(w->tab, [ev, dx, dy](CefBrowser& b) { b.GetHost()->SendMouseWheelEvent(ev, dx, dy); });
@@ -481,9 +514,12 @@ private:
     // A profile's request context: its own cookies and cache, in a folder under --data (CEF requires that). The
     // client gives each script and plugin a profile of its own, and the server links one (app/web_service.h); a
     // context made for such a tab holds the requests that come from no tab (service workers) to that tab's rules.
+    // Null for such a tab whose profile is not under --data: it is not opened rather than given the player's cookies
+    // (the global context). The player's own tab without one takes the global context.
     CefRefPtr<CefRequestContext> context(const web::Open& o) {
         const std::string& profile = o.profile;
-        if (profile.empty() || profile.rfind(data_, 0) != 0) return CefRequestContext::GetGlobalContext();
+        if (profile.empty() || !web::profile_within(profile, data_))
+            return o.rules == web::TabRules::Player ? CefRequestContext::GetGlobalContext() : nullptr;
         auto it = contexts_.find(profile);
         if (it != contexts_.end()) {
             if (it->second.rules && o.rules == web::TabRules::Sites) it->second.rules->set_allow(o.allow);
@@ -505,12 +541,17 @@ private:
             send(web::Closed{o.tab, web::CloseReason::Refused, o.url + " is not a page this tab may show"});
             return;
         }
+        CefRefPtr<CefRequestContext> request_context = context(o);
+        if (!request_context) {
+            send(web::Closed{o.tab, web::CloseReason::Failed, "its profile folder is not in the browser's data folder"});
+            return;
+        }
         CefWindowInfo info;
         info.SetAsWindowless(0);
         CefBrowserSettings settings;
         settings.windowless_frame_rate = 30;
         tabs_.emplace(o.tab, client);
-        if (!CefBrowserHost::CreateBrowser(info, client, o.url, settings, nullptr, context(o))) {
+        if (!CefBrowserHost::CreateBrowser(info, client, o.url, settings, nullptr, request_context)) {
             tabs_.erase(o.tab);
             send(web::Closed{o.tab, web::CloseReason::Failed, "CEF could not make the browser"});
         }
@@ -520,6 +561,7 @@ private:
         CefMouseEvent ev;
         ev.x = m.x;
         ev.y = m.y;
+        if (auto* t = find(m.tab)) t->to_cef(ev.x, ev.y);
         ev.modifiers = event_flags(m.mods);
         const cef_mouse_button_type_t button = m.button == web::MouseButton::Middle  ? MBT_MIDDLE
                                                : m.button == web::MouseButton::Right ? MBT_RIGHT
@@ -654,13 +696,14 @@ bool sandbox_possible() {
 // False once the message loop has ended: the reader posts nothing to a CEF that is shutting down.
 std::atomic<bool> g_running{true};
 
-int run(const CefMainArgs& main_args, const std::vector<std::string>& args) {
-    CefRefPtr<App> app = new App;
-    // CEF's other processes are this program too: they run here and end.
-    const int code = CefExecuteProcess(main_args, app, nullptr);
-    if (code >= 0) return code;
-
-    hailstone::platform::binary_stdio();
+// The browser process, once CefExecuteProcess (in main) has said this is it.
+int run_browser(const CefMainArgs& main_args, CefRefPtr<App> app, const std::vector<std::string>& args) {
+    // Only here, in the browser process: CEF's other processes returned from CefExecuteProcess, and those it starts
+    // from now on inherit standard input and output.
+    if (!hailstone::platform::take_protocol_stdio(g_client)) {
+        std::fprintf(stderr, "hailstone-web: could not take the client's pipes off standard input and output\n");
+        return 2;
+    }
     std::string data = arg_value(args, "--data");
     if (data.empty()) {
         std::fprintf(stderr, "hailstone-web: --data=<folder> is required\n");
@@ -684,16 +727,17 @@ int run(const CefMainArgs& main_args, const std::vector<std::string>& args) {
     if (!CefInitialize(main_args, settings, app, nullptr)) return CefGetExitCode();
 
     Helper helper(data);
-    // The reader: whole messages to the UI thread; the end of input (the client gone) shuts the helper down.
+    // The reader: whole messages to the UI thread; the end of the client's pipe (the client gone) shuts the helper
+    // down.
     std::thread reader([&helper] {
         for (;;) {
             unsigned char len_bytes[4];
-            if (std::fread(len_bytes, 1, 4, stdin) != 4) break;
+            if (std::fread(len_bytes, 1, 4, g_client.in) != 4) break;
             const std::uint32_t len = std::uint32_t{len_bytes[0]} | std::uint32_t{len_bytes[1]} << 8 |
                                       std::uint32_t{len_bytes[2]} << 16 | std::uint32_t{len_bytes[3]} << 24;
             if (len == 0 || len > web::kMaxMessage) break;
             std::vector<std::byte> body(len);
-            if (std::fread(body.data(), 1, len, stdin) != len) break;
+            if (std::fread(body.data(), 1, len, g_client.in) != len) break;
             auto m = web::decode_message(body);
             if (!m) break;
             if (!g_running) return;
@@ -701,7 +745,7 @@ int run(const CefMainArgs& main_args, const std::vector<std::string>& args) {
         }
         if (g_running) on_ui([&helper] { helper.shutdown(); });
     });
-    reader.detach(); // it may still be blocked on standard input when CEF has shut down
+    reader.detach(); // it may still be blocked on the client's pipe when CEF has shut down
 
     CefRunMessageLoop();
     g_running = false;
@@ -712,12 +756,28 @@ int run(const CefMainArgs& main_args, const std::vector<std::string>& args) {
 
 } // namespace
 
+// CEF's other processes are this program too: CefExecuteProcess runs one and returns its exit code. Chromium may give
+// such a process a new stack canary while it runs (--change-stack-guard-on-fork, on Linux), so no function on the
+// stack around that call may check its canary on return: main is NO_STACK_PROTECTOR and calls CefExecuteProcess
+// itself (CEF's wrapper is marked so too), with nothing of ours in between. A frame with a canary there would end
+// every such process that returns (a utility process at the end of its job, say) in glibc's "*** stack smashing
+// detected ***" abort. The browser process's code runs in a function of its own, called only after it returned.
 #if defined(_WIN32)
-int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
+NO_STACK_PROTECTOR int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
+    const CefMainArgs main_args(instance);
+    CefRefPtr<App> app = new App;
+    const int code = CefExecuteProcess(main_args, app, nullptr);
+    if (code >= 0) return code;
     std::vector<std::string> args;
     for (int i = 0; i < __argc; ++i) args.push_back(CefString(__wargv[i]).ToString()); // UTF-16 to UTF-8
-    return run(CefMainArgs(instance), args);
+    return run_browser(main_args, app, args);
 }
 #else
-int main(int argc, char** argv) { return run(CefMainArgs(argc, argv), std::vector<std::string>(argv, argv + argc)); }
+NO_STACK_PROTECTOR int main(int argc, char** argv) {
+    const CefMainArgs main_args(argc, argv);
+    CefRefPtr<App> app = new App;
+    const int code = CefExecuteProcess(main_args, app, nullptr);
+    if (code >= 0) return code;
+    return run_browser(main_args, app, std::vector<std::string>(argv, argv + argc));
+}
 #endif

@@ -2,7 +2,8 @@
 // The client's ImGui textures (ImTextureIDs: descriptor sets for the Vulkan backend's pipeline), keeping the list of
 // live texture IDs (ui/texture_ids.h) that the Lua bindings check.
 //
-// The sets come from descriptor pools of the client's own, another made whenever those are full, with a set layout
+// The sets come from descriptor pools of the client's own (ui/descriptor_pool_book.h: another made whenever those are
+// full, and one left empty destroyed unless it is the newest), with a set layout
 // defined as the backend's (one sampled image at binding 0, fragment stage; its sampler is the backend's own, linear and
 // clamped, which these textures are drawn with), so they bind with its pipeline
 // layout. Not ImGui_ImplVulkan_AddTexture: that allocated from one fixed pool and, once it was full, only logged the

@@ -438,6 +438,9 @@ The readback is 4 bytes a pixel, so a screenshot is also refused unless the swap
 format, maybe FP16 or 10-bit HDR; one reporting no format fails the swapchain's creation.
 
 The swapchain is remade when the window's framebuffer size changes from the size it was made for.
+Before the old one is let go, the surface is asked for its size: while it has a zero side (Windows reports 0x0 for a
+minimised window, sometimes before SDL's window state says so) the frame is skipped, nothing is destroyed, and the
+swapchain is made on a later frame once the surface has a size (`render::surface_extent_empty`).
 
 #### Uploads: no waiting for the GPU
 
@@ -460,7 +463,8 @@ A recreated swapchain is made with `oldSwapchain`; the old one and its present s
 as `vkDeviceWaitIdle` does not cover a present's wait.
 
 The ImGui textures (`src/ui/imgui_vk_textures.h`: UI art, icon sheets, browser tabs) come from the client's own
-descriptor pools, a new one made when they fill. `ui::UiTextures` keeps at most 1024 files (`kMaxFiles`), retiring the
+descriptor pools, a new one made when they fill (a full one is not asked again) and one left empty destroyed unless
+it is the newest (`ui::DescriptorPoolBook`). `ui::UiTextures` keeps at most 1024 files (`kMaxFiles`), retiring the
 least recently asked for.
 
 #### Modern lighting: the translucent split
@@ -707,7 +711,9 @@ original client. A server owner raises that rule to show the impact further away
 The server can play an effect by its spellsnew.eff number on a spawn (OP_SpellEffect, OP_AddNimbusEffect;
 `game/spell_effect_timers.h`). A nimbus (an item's or buff's aura of orbs or flames) is one.
 
-- Its emitters ask for a forced 5,000 s: it stays until OP_RemoveNimbusEffect or the zone changes.
+- Its emitters ask for a forced 5,000 s: it stays until OP_RemoveNimbusEffect, the zone changes or its spawn leaves.
+- A spawn that leaves (despawns, or its id comes back as another spawn in the same frame) takes its spell, effect and
+  nimbus emitters and its timed entries with it, so none stays frozen or moves to the new spawn (docs/unknowns.md).
 - An effect arriving before its spawn's model has loaded sits at the spawn's place until the model is drawn.
 - EQEmu sends a nimbus only to those in the zone when it is cast: a player zoning in later does not see it, on the
   original client either.
@@ -2185,6 +2191,11 @@ Hailstone Texture Studio (projecthailstone/hailstone-texstudio, a tool add-on: d
 in one windowed program, on any GPU through ncnn's Vulkan compute, with no Python. `src/texpack` is shared by both
 (the scan, the upscale rules behind `texpack::Model`, the three-stage build and the pack's files).
 
+The three-stage build (`texpack::PackJob`: a reader, the GPU worker, a pool of encoders) bounds the textures between
+its reader and its encoders by their estimated bytes as well as their count: their sources and pack images may hold
+`JobOptions::memory_budget` at once (4 GiB by default; one texture always goes, however large). By count alone, 30
+of the largest textures held 10 to 30 GiB.
+
 1. `texpack export ASSETDIR WORK` writes each distinct texture once, keyed by `texture_content_hash` of its file
    (about 61,000 in the RoF2 install, in about a minute).
    - A member named `.bmp`, `.dds` or `.tga` is read whole; any other only when its first four bytes are a DDS or BMP
@@ -2225,6 +2236,11 @@ in one windowed program, on any GPU through ncnn's Vulkan compute, with no Pytho
    Each file is stored in the rows the WLD meshes read: a BMP source's are flipped, and its normal map's green
    inverted with them, so every pack normal map has green toward +v (PBRify's normals are DirectX's way).
 
+   Every pack file, the studio's scan cache and the PNGs of `texpack export` are checked after their last write and
+   flush, the first two through a temporary file renamed into place (`core/atomic_file.h`). A failed write counts
+   as a failure and leaves no short file a resumed build would take as made; a folder named like a pack file is not
+   one.
+
 Set up once (Linux, AMD):
 
     uv venv -p 3.12 venv && uv pip install -p venv/bin/python --index-url https://download.pytorch.org/whl/rocm7.2 torch torchvision
@@ -2254,7 +2270,9 @@ studio ships:
 - `materials.txt` names each material: Poly Haven asset, metres one repeat shows, magnification, detail strength,
   how much of the original's painted shading it keeps, and its colour in the art.
 - A file per zone (`qeytoqrg.txt`) gives each of the zone's textures one material or two
-  (`hhdrockgrass1 = grass greyrock`; `sharp` for small shapes such as a path's flagstones).
+  (`hhdrockgrass1 = grass greyrock`; `sharp` for small shapes such as a path's flagstones). Its name is the zone's
+  short name (letters, digits and `_`): any other `.txt` file beside `materials.txt` (`...txt`, zone `..`, would
+  put its trees in the pack folder itself) stops the rules from loading, and `write_tree` refuses such a zone too.
 - A zone file may set a material's colour in that zone's art (`colour grass = 0.30 0.27 0.12`), for its own tiles
   only, so one material (its photos loaded once) serves zones whose art differs.
 
@@ -2327,7 +2345,7 @@ trunk of a few solid prisms under crossed cut-out cards. Each new tree is fitted
 
 - **Trunk:** the prisms' rings make the skeleton; a limb that is a prism of its own hangs from the ring nearest its
   root. The bark is a tube at 0.8 x the prism corners' distance, so a player stopped by the collision stands at the
-  bark.
+  bark. A model with a trunk or leaf point that is not a number or lies more than 20,000 units out is not regrown.
 - **Leaves:** points spread over the cards, kept where the texture is opaque, give the crown's shape. Colours are
   picked from the texture's opaque texels, then scaled to its mean, so an autumn tree keeps its yellows.
 - **Styles:**

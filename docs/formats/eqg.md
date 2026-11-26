@@ -300,7 +300,11 @@ Not read: `floraexclusion.dat` (the exclusion areas) and the other checks of a s
 #### Unpainted tiles and animated textures
 
 A tile with no DAT layers (in the live files only scorchedwoods' tile (-7, -5)) is not drawn by the original. The
-client gives it the base ecosystem of the nearest painted tile (`eqg::nearest_painted_tile`).
+client gives it the base ecosystem of the nearest painted tile (`eqg::nearest_painted_tile`), searched ring by ring
+out to 16 tiles, the nearest by straight-line distance within the first ring that has one, ties to the lowest
+latitude index and then the lowest longitude index. A zone's fill looks up at most 16 Mi cells in all (each ring
+costs its own cells, 8 per ring step); a DAT with more unpainted tiles far from paint than that leaves the rest as
+holes, as the original does.
 
 **Animated textures.** A texture `<name>.dds` with a `<name>.txt` beside it animates: frame count, ms a frame, the
 frames, the first being the texture itself (`eqg::parse_texture_animation`). Example:

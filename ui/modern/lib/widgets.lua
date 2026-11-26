@@ -62,7 +62,46 @@ end
 -- ---------------------------------------------------------------- buttons
 -- A button for the child: its label (`label`, else the child's text), greyed and inert while the original is
 -- disabled, lit while it is checked (a toggle). The click goes to the game; returns true when it did.
--- opts: width, height (0: fit), primary, tooltip, hidden (draw nothing when the original is hidden), danger.
+-- opts: width, height (0: fit), primary, tooltip, hidden (draw nothing when the original is hidden), danger,
+-- ask (a function giving the question, "Remove Name from the guild?": the click opens it, and its Yes clicks the
+-- original; the question is put away when its answer would act on something else, a new question for the button,
+-- or the original disabled or hidden).
+local asks = {} -- the question up, by "win/id"
+local function askPopup(win, id, label, opts)
+  local key = win .. "/" .. id
+  local popup = "##ask" .. id
+  local q = asks[key]
+  if not ui.BeginPopup(popup) then
+    asks[key] = nil
+    return false
+  end
+  local done = false
+  if not q or q ~= opts.ask() or API.windows.ChildShown(win, id) == false or W.State(win, id) == false then
+    ui.CloseCurrentPopup()
+    asks[key] = nil
+  else
+    ui.Text(q)
+    ui.Dummy(0, 4)
+    local base = opts.danger and C.danger or C.accent
+    ui.PushStyleColor(ui.Col.Button, base[1], base[2], base[3], 0.24)
+    ui.PushStyleColor(ui.Col.ButtonHovered, base[1], base[2], base[3], 0.40)
+    ui.PushStyleColor(ui.Col.ButtonActive, base[1], base[2], base[3], 0.55)
+    local yes = ui.Button((label ~= "" and label or id) .. "##askyes" .. id)
+    ui.PopStyleColor(3)
+    ui.SameLine()
+    local no = ui.Button("Cancel##askno" .. id)
+    if yes then
+      API.windows.ClickChild(win, id, "left")
+      done = true
+    end
+    if yes or no or ui.IsKeyPressed(ui.Key.Escape) then
+      ui.CloseCurrentPopup()
+      asks[key] = nil
+    end
+  end
+  ui.EndPopup()
+  return done
+end
 function W.Button(win, id, label, opts)
   opts = opts or {}
   if opts.hidden ~= false and API.windows.ChildShown(win, id) == false then return false end
@@ -81,6 +120,13 @@ function W.Button(win, id, label, opts)
   ui.EndDisabled()
   if n > 0 then ui.PopStyleColor(n) end
   if opts.tooltip and ui.IsItemHovered(ui.HoveredFlags.AllowWhenDisabled) then ui.SetTooltip(opts.tooltip) end
+  if opts.ask then
+    if clicked and enabled then
+      asks[win .. "/" .. id] = opts.ask()
+      ui.OpenPopup("##ask" .. id)
+    end
+    return askPopup(win, id, label, opts)
+  end
   if clicked and enabled then
     API.windows.ClickChild(win, id, "left")
     return true

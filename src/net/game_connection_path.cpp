@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 
 #include "core/game_dir.h"
 #include "core/ini_file.h"
@@ -65,7 +66,7 @@ void GameConnection::expire_find_requests(std::int64_t now) {
 }
 
 game::ServerPathLease GameConnection::queue_find_request(bool quiet, bool npc_origin, game::ServerPathOrigin origin,
-                                                       std::optional<ActorRef> actor) {
+                                                       std::optional<ActorRef> actor, bool silent) {
     const auto now = now_ms();
     expire_find_requests(now);
     const auto owner_current = [&] {
@@ -80,7 +81,7 @@ game::ServerPathLease GameConnection::queue_find_request(bool quiet, bool npc_or
     if (!owner_current() || find_requests_.size() >= 64) return {};
     if (!quiet && origin.generation != shown_find_generation_) return {};
     game::ServerPathLease lease{interaction_context(), origin.owner, origin.generation, core::next_process_identity()};
-    find_requests_.push_back({quiet, now, npc_origin, false, lease, actor, policy, std::make_shared<bool>(true),
+    find_requests_.push_back({quiet, silent, now, npc_origin, false, lease, actor, policy, std::make_shared<bool>(true),
                               origin.lifetime, origin.has_lifetime});
     return lease;
 }
@@ -174,6 +175,13 @@ const std::vector<glm::vec3>& GameConnection::find_path() const {
     return path_.active() && find_path_allowed() ? path_.points() : none;
 }
 
+bool GameConnection::has_find_path() const {
+    if (path_.active() && find_path_allowed()) return true;
+    return std::any_of(find_requests_.begin(), find_requests_.end(), [&](const PendingFindRequest& request) {
+        return !request.quiet && !request.discard && request.lease == shown_find_lease_;
+    });
+}
+
 bool GameConnection::find_path_allowed() const {
     if (shown_find_lease_ && shown_find_lease_.context != interaction_context()) return false;
     if (path_.kind() != game::FindKind::Spawn || !npc_find_identity_) return true;
@@ -192,6 +200,7 @@ void GameConnection::retire_npc_find() {
     path_.stop();
     cancel_server_path(shown_find_lease_);
     shown_find_lease_ = {};
+    shown_find_silent_ = false;
     ++shown_find_generation_;
     npc_find_identity_.reset();
 }
@@ -203,7 +212,7 @@ void GameConnection::play_wave(std::uint32_t id) {
     sound_cues_.push_back(c);
 }
 
-void GameConnection::send_find(const game::FindRequest& r, bool found) {
+void GameConnection::send_find(const game::FindRequest& r, bool found, bool silent) {
     const auto generation = shown_find_generation_;
     if (!find_path_allowed()) {
         if (generation == shown_find_generation_) retire_npc_find();
@@ -219,11 +228,11 @@ void GameConnection::send_find(const game::FindRequest& r, bool found) {
         }
     }
     if (generation != shown_find_generation_) return;
-    // A find stopped the path first (PlayerPath_Stop: its abort sound), and reads SpellEffects\Path.ini again after
-    // the request (PlayerPath_LoadSettings; FloorOffset times the player's AvatarHeight). The file is read once here.
+    // A find stopped the path first (PlayerPath_Stop: its abort sound unless this is a silent background path), and
+    // reads SpellEffects\Path.ini again after the request. The file is read once here.
     const game::Spawn* me = world_.player();
     if (found) {
-        play_wave(game::kPathSoundAbort);
+        if (!silent) play_wave(game::kPathSoundAbort);
         if (!path_settings_loaded_) {
             path_settings_loaded_ = true;
             IniFile ini;
@@ -244,10 +253,11 @@ void GameConnection::send_find(const game::FindRequest& r, bool found) {
     const bool npc = npc_find_identity_.has_value() && r.kind == game::FindKind::Spawn;
     const auto lease = queue_find_request(false, npc,
         {shown_find_owner_, generation, npc ? game::ServerPathOrigin::Purpose::NpcFind : game::ServerPathOrigin::Purpose::ManualNavigation},
-        r.kind == game::FindKind::Spawn ? captureActorRef(static_cast<std::uint32_t>(r.id)) : std::nullopt);
+        r.kind == game::FindKind::Spawn ? captureActorRef(static_cast<std::uint32_t>(r.id)) : std::nullopt, silent);
     if (!lease) return;
     if (generation != shown_find_generation_) { rollback_find_request(lease); return; }
     shown_find_lease_ = lease;
+    shown_find_silent_ = silent;
     const auto current = [this, lease] {
         const auto it = std::find_if(find_requests_.begin(), find_requests_.end(), [&](const auto& p) { return p.lease == lease; });
         if (it == find_requests_.end()) return false;
@@ -265,7 +275,7 @@ void GameConnection::find_person_request() {
     const auto generation = shown_find_generation_;
     if (!find_path_allowed() && generation == shown_find_generation_) retire_npc_find();
     if (generation != shown_find_generation_) return;
-    if (path_.active()) send_find(path_.request(eq_time()), false);
+    if (path_.active()) send_find(path_.request(eq_time()), false, shown_find_silent_);
 }
 
 void GameConnection::find_target(const std::string& name) {
@@ -298,7 +308,7 @@ void GameConnection::find_target(const std::string& name) {
     find_spawn(id);
 }
 
-bool GameConnection::find_spawn(std::uint32_t spawn_id) {
+bool GameConnection::find_spawn(std::uint32_t spawn_id, FindPathOptions options) {
     const auto generation = shown_find_generation_;
     auto it = world_.spawns.find(spawn_id);
     if (it == world_.spawns.end()) return false;
@@ -306,11 +316,11 @@ bool GameConnection::find_spawn(std::uint32_t spawn_id) {
     if (generation != shown_find_generation_) return false;
     it = world_.spawns.find(spawn_id);
     if (it == world_.spawns.end()) return false;
-    send_find_path(it->second, true);
+    send_find_path(it->second, options);
     return true;
 }
 
-void GameConnection::send_find_path(const game::Spawn& to, bool face) {
+void GameConnection::send_find_path(const game::Spawn& to, FindPathOptions options) {
     // PlayerPath_FindGroupMember / FindRaidMember (after their checks; they leave +0x15 at 0) and
     // PlayerPath_FindSpawnByID(id, face): the server's path to a spawn.
     const auto id = to.id; // extension callbacks may replace the actor
@@ -326,13 +336,17 @@ void GameConnection::send_find_path(const game::Spawn& to, bool face) {
     cancel_server_path(shown_find_lease_);
     ++shown_find_generation_;
     if (npc) npc_find_identity_ = NpcFindIdentity{id, incarnation, world_.player()->incarnation, interaction_context(), policy};
-    send_find(path_.find_spawn(static_cast<std::uint16_t>(id), face, eq_time()));
+    send_find(path_.find_spawn(static_cast<std::uint16_t>(id), options.face, eq_time()), true, options.silent);
 }
 
 void GameConnection::find_map_location(const glm::vec3& at) {
     // MapViewMap::HandleRButtonDown @0x6c9680: PlayerPath_FindMapLocation(point, 1). EQEmu answers a request without
     // a spawn with an empty reply (the find fails).
     if (state_ != ConnectionState::InZone || !world_.player()) return;
+    // Hailstone: a point no zone holds (not finite, or past any map: the UI hands this through from Lua) is not sent.
+    constexpr float kMaxCoord = 1e6f;
+    for (int i = 0; i < 3; ++i)
+        if (!std::isfinite(at[i]) || std::fabs(at[i]) > kMaxCoord) return;
     cancel_server_path(shown_find_lease_); ++shown_find_generation_;
     npc_find_identity_.reset();
     send_find(path_.find_map_location(at, true, eq_time()));
@@ -347,8 +361,8 @@ void GameConnection::find_real_estate_plot(std::uint32_t plot) {
     send_find(path_.find_plot(static_cast<std::int32_t>(plot), true, eq_time()));
 }
 
-void GameConnection::stop_find_path(bool play_sound) {
-    if (play_sound) play_wave(game::kPathSoundAbort);
+void GameConnection::stop_find_path(bool audible) {
+    if (audible && !shown_find_silent_) play_wave(game::kPathSoundAbort);
     retire_npc_find();
 }
 
@@ -417,12 +431,15 @@ void GameConnection::path_reply(const AppPacket& p) {
     ++find_replies_; // FindLocationWnd closes only for the admitted current reply
     me = world_.player();
     if (r.failed) {
+        if (request.silent) shown_find_silent_ = false; // no silent path remains to suppress a later player stop
         if (r.failed_point) failed_find_ = FailedFind{*r.failed_point, r.failed_kind};
-        system(game::kStrPathPrevented, {}, 0x111);
+        if (!request.silent) system(game::kStrPathPrevented, {}, 0x111);
         return;
     }
-    play_wave(game::kPathSoundStart);
-    system(game::kStrPathAppears, {}, 0x111);
+    if (!request.silent) {
+        play_wave(game::kPathSoundStart);
+        system(game::kStrPathAppears, {}, 0x111);
+    }
     if (r.face && me) {
         // PlayerZoneClient_FaceLocation @0x59e7f0: the heading toward the point (__get_bearing).
         glm::vec3 at = motion_known_ ? position_ : me->position;
@@ -441,9 +458,11 @@ void GameConnection::path_tick() {
     if (state_ != ConnectionState::InZone || !me) return;
     auto u = path_.update(motion_known_ ? position_ : me->position, eq_time(), zone_id(), me->gm, path_floor_);
     if (u.arrived) {
-        // PlayerPath_OnDestinationReached: the finish sound, "The mystical path fades away." and the finish emitters.
-        play_wave(game::kPathSoundComplete);
-        system(game::kStrPathFades, {}, 0x111);
+        // Background TargetPath keeps the finish emitters but not the sound or chat.
+        if (!shown_find_silent_) {
+            play_wave(game::kPathSoundComplete);
+            system(game::kStrPathFades, {}, 0x111);
+        }
         path_finish_ = u.finish_at;
     }
 }

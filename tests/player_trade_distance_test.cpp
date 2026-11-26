@@ -1,10 +1,12 @@
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <vector>
 
 #include "app/lua_ui.h"
+#include "game/item_links.h"
 #include "mock_server/harness.h"
 #include "mq_test_world.h"
 #include "net/packet_io.h"
@@ -122,6 +124,75 @@ TEST_CASE("player trade distance: a request waiting for its answer is not checke
     REQUIRE(c.trade());
     CHECK(c.trade()->requested);
     CHECK_FALSE(c.trade()->open);
+}
+
+TEST_CASE("player trade: incoming offer chat links to the offered item") {
+    test::Rig rig;
+    REQUIRE(rig.to_zone());
+    auto& c = rig.conn;
+    open_trade(c, true);
+    rig.chat();
+
+    net::Item offered;
+    offered.slot = {net::kInvTrade, 0};
+    offered.id = 13073;
+    offered.name = "Trade test blade";
+    offered.ornament_icon = 533;
+    net::Item augment;
+    augment.id = 40042;
+    augment.name = "Trade test augment";
+    offered.contents.push_back({2, augment});
+    rig.server.item_packet(net::kItemPacketTradeView, offered);
+    REQUIRE(rig.until([&] { return c.trade() && c.trade()->theirs.contains(offered.slot.slot); }));
+
+    const auto lines = rig.chat();
+    const auto announcement = std::find_if(lines.begin(), lines.end(), [&](const net::ChatEvent& event) {
+        return game::strip_links(event.text) == "[9028] Partner " + offered.name;
+    });
+    REQUIRE(announcement != lines.end());
+    CHECK(announcement->kind == net::ChatEvent::Kind::System);
+    const auto parts = game::split_links(announcement->text);
+    REQUIRE(parts.size() == 2);
+    REQUIRE(parts[1].link);
+    CHECK(parts[1].text == offered.name);
+    CHECK(parts[1].link->item_id == offered.id);
+    CHECK(parts[1].link->augments[2] == augment.id);
+    CHECK(parts[1].link->ornament_icon == offered.ornament_icon);
+
+    c.request_item(*parts[1].link);
+    REQUIRE(rig.until([&] { return test::MockEqServer::count(rig.server.zone_log, net::Op::ItemLinkClick) == 1; }));
+    const auto request = std::find_if(rig.server.zone_log.begin(), rig.server.zone_log.end(),
+                                      [](const net::AppPacket& p) { return net::is_op(p, net::Op::ItemLinkClick); });
+    REQUIRE(request != rig.server.zone_log.end());
+    const auto click = net::decode_item_link_click(*request);
+    REQUIRE(click);
+    CHECK(click->item_id == offered.id);
+    CHECK(click->augments[2] == augment.id);
+    CHECK(click->ornament_icon == offered.ornament_icon);
+}
+
+TEST_CASE("player trade: updating an incoming stack does not repeat the offer chat") {
+    test::Rig rig;
+    REQUIRE(rig.to_zone());
+    auto& c = rig.conn;
+    open_trade(c, true);
+
+    net::Item offered;
+    offered.slot = {net::kInvTrade, 0};
+    offered.id = 13074;
+    offered.name = "Trade test stack";
+    offered.max_stack = 20;
+    rig.server.item_packet(net::kItemPacketTradeView, offered);
+    REQUIRE(rig.until([&] { return c.trade() && c.trade()->theirs.contains(offered.slot.slot); }));
+    rig.chat();
+
+    offered.stack_count = 2;
+    rig.server.item_packet(net::kItemPacketTradeView, offered);
+    REQUIRE(rig.until([&] {
+        return c.trade() && c.trade()->theirs.contains(offered.slot.slot) &&
+               c.trade()->theirs.at(offered.slot.slot).stack_count == offered.stack_count;
+    }));
+    CHECK(rig.chat().empty());
 }
 
 TEST_CASE("player trade: cursor coin opens a coin-only offer after acknowledgement") {

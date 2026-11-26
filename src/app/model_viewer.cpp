@@ -296,9 +296,14 @@ int run_model_viewer(const ModelViewerOptions& opts) {
         const auto& fx = effects[static_cast<std::size_t>(opts.spell_effect)];
         log::info("spell effect {} '{}', stage {}", opts.spell_effect, fx.name, opts.spell_stage);
         for (const auto& slot : fx.stages[static_cast<std::size_t>(std::clamp(opts.spell_stage, 0, 2))].slots)
-            if (slot.emitter > 0)
+            if (slot.emitter > 0) {
+                // (a spellsnew.eff slot may name an emitter past spellsnew.edd's end)
+                const auto i = static_cast<std::size_t>(slot.emitter);
+                const auto& defs = particles.definitions();
                 log::info("  emitter {} '{}' location {} attach {}", slot.emitter,
-                          particles.definitions()[static_cast<std::size_t>(slot.emitter)].name, slot.location, slot.attach);
+                          i < defs.size() ? defs[i].name : std::string("(not in spellsnew.edd)"), slot.location,
+                          slot.attach);
+            }
     }
     double next_effect = 0.0;
     // The models' and held items' own emitters (app/actor_emitters.h).

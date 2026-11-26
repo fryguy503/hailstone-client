@@ -73,8 +73,9 @@ local function drawWindow(x, y, w, h, s)
   local F, all = FL.state, FL.marks()
   -- Retire retained actor state promptly, without asking the host for NPCs when this minimap uses none.
   local rows = (all or F.sel or F.hover or F.menu or F.why) and FL.rows() or NO_ROWS
-  -- the Find window's NPCs (lib/find.lua): as the map marks them, inside the ring
-  if FL.policy() and pmx and k then
+  -- the Find window's NPCs (lib/find.lua): as the map marks them, inside the ring; not on vanilla maps
+  local vanillaQuery = API.map.Vanilla -- (API 1.11)
+  if FL.policy() and pmx and k and not (type(vanillaQuery) == "function" and vanillaQuery() == true) then
     if all or F.sel then
       local sn, cs = nx, -ny -- north's screen direction is (sin, -cos) of the turn
       for _, row in ipairs(rows) do

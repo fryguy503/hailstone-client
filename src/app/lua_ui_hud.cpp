@@ -14,6 +14,7 @@
 #include "app/lua_ui_values.h"
 #include "app/lua_ui_windows.h"
 #include "core/ascii_case.h"
+#include "game/spawn_name_lookup.h"
 #include "game/combat.h"
 #include "game/combat_ability_menu.h"
 #include "app/lua_ui_hotbar.h"
@@ -50,11 +51,11 @@ const game::Spawn* find_spawn(const game::WorldState& w, std::uint32_t id) {
     return it == w.spawns.end() ? nullptr : &it->second;
 }
 
-// Runs per group row every frame: compared in place, not lower-cased per spawn.
+// Runs per group row every frame: through an index kept while the spawn set holds (game::SpawnNameLookup), a
+// player's exact name before an NPC's.
 const game::Spawn* spawn_named(const game::WorldState& w, const std::string& name) {
-    for (const auto& [id, s] : w.spawns)
-        if (iequals(s.name, name)) return &s;
-    return nullptr;
+    static game::SpawnNameLookup lookup; // (the UI runs on the main thread alone)
+    return lookup.find(w, name, false);
 }
 
 std::string self_name(const net::GameConnection& c) {

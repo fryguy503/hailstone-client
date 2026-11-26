@@ -145,6 +145,7 @@ struct Asking {
 } // namespace
 
 TEST_CASE("hs.PluginConsent and hs.AnswerPluginConsent: the question for the packs, and the player's answer") {
+    ImGuiContext* ctx = ImGui::CreateContext(); // (the pack's read guards the window drawing it)
     app::UiHost host;
     app::UiApi api(host);
     lua_State* L = luaL_newstate();
@@ -157,6 +158,10 @@ TEST_CASE("hs.PluginConsent and hs.AnswerPluginConsent: the question for the pac
     CHECK(run(L, "return hs.AnswerPluginConsent(true, 7)") == "false");
     Asking a;
     a.wire(host);
+    CHECK(run(L, "return hs.AnswerPluginConsent(true, 7)") == "false"); // not the interface's own file
+    CHECK(a.answers.empty());
+    lua_pushboolean(L, 1);
+    lua_setfield(L, LUA_REGISTRYINDEX, ui::lua::kPackStateKey);
     const std::string hex = to_hex(sha256(std::string_view("bytes")));
     CHECK(run(L, "return hs.PluginConsent().server") == "Alpha");
     CHECK(run(L, "return hs.PluginConsent().serial") == "7");
@@ -188,6 +193,7 @@ TEST_CASE("hs.PluginConsent and hs.AnswerPluginConsent: the question for the pac
     CHECK(a.answers[1] == std::optional<bool>(false));
     CHECK(a.answers[2] == std::optional<bool>(true));
     lua_close(L);
+    ImGui::DestroyContext(ctx);
 }
 
 // Under an interface Hailstone does not ship (UiHost::trusted_ui false) the pack's own code neither sees the question

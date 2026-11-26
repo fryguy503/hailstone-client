@@ -36,6 +36,18 @@ inline bool swapchain_outdated(Extent window, Extent requested, std::optional<Ex
     return surface && *surface != swapchain;
 }
 
+// A surface's currentExtent that leaves the swapchain's size to it (VkSurfaceCapabilitiesKHR: both sides this value).
+inline constexpr std::uint32_t kSurfaceExtentUndefined = 0xFFFFFFFFu;
+
+// Whether no swapchain can be made for the surface now: its currentExtent has a zero side. Windows reports 0x0 for a
+// minimised window's surface, and a swapchain's imageExtent may not be zero. The window's own state (SDL's, read once
+// a frame) can lag that, so the surface is asked before the old swapchain is let go (VkContext::recreate_swapchain),
+// and the swapchain is made once the surface has a size again.
+inline bool surface_extent_empty(Extent current) {
+    if (current.width == kSurfaceExtentUndefined) return false;
+    return current.width == 0 || current.height == 0;
+}
+
 // When a new size of the 3D view's rectangle (/viewport, VkContext::set_scene_rect) makes the scene targets again.
 // Making them waits for the device and rebuilds every target, so while an edge is dragged (a new size each frame)
 // it waits for the size to hold for kSceneRectSettleFrames, or at the latest kSceneRectMaxWaitFrames after the

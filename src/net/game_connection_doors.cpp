@@ -103,6 +103,7 @@ void GameConnection::handle_door(Op op, const AppPacket& p) {
         break;
     case Op::RemoveAllDoors:
         doors_.clear();
+        door_target_.reset();
         break;
     case Op::GroundSpawn:
         if (auto o = decode_ground_object(p)) {

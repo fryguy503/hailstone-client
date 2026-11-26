@@ -179,6 +179,27 @@ TEST_CASE("shared_file: publication never replaces a content key and abandoned f
     CHECK_FALSE(fs::exists(scratch.path() / "outside.blob"));
 }
 
+TEST_CASE("shared_file: an ordinary-folder lock works where a private one is refused") {
+    test::ScratchDir scratch("shared_lock_ordinary");
+    const fs::path dir = scratch.path() / "update";
+    fs::create_directories(dir);
+    fs::permissions(dir, fs::perms::others_read | fs::perms::others_exec, fs::perm_options::add);
+    const fs::path lock = dir / "install.lock";
+#if !defined(_WIN32)
+    // The cache's lock wants a folder only this user may enter; the install's update/ is not one.
+    CHECK_FALSE(platform::ScopedFileLock::try_acquire(lock, platform::FileLockMode::Exclusive));
+#endif
+    {
+        auto first = platform::ScopedFileLock::try_acquire(lock, platform::FileLockMode::Exclusive,
+                                                           platform::LockFolder::Ordinary);
+        REQUIRE(first);
+        CHECK_FALSE(platform::ScopedFileLock::try_acquire(lock, platform::FileLockMode::Exclusive,
+                                                          platform::LockFolder::Ordinary));
+    }
+    CHECK(platform::ScopedFileLock::try_acquire(lock, platform::FileLockMode::Exclusive,
+                                                platform::LockFolder::Ordinary));
+}
+
 TEST_CASE("shared_file: shared and exclusive locks are scoped and stable") {
     test::ScratchDir scratch("shared_lock");
     const fs::path cache = private_cache(scratch);

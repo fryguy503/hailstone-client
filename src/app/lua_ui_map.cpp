@@ -37,6 +37,8 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -54,8 +56,10 @@
 #include "game/atlas.h"
 #include "game/combat.h"
 #include "game/coords.h"
+#include "game/doors.h"
 #include "game/map_data.h"
 #include "game/map_files.h"
+#include "game/mechanics/abilities.h"
 #include "game/mechanics/character.h"
 #include "game/sine_table.h"
 #include "game/slash_commands.h"
@@ -63,6 +67,8 @@
 #include "game/world_state.h"
 #include "game/zone_names.h"
 #include "game/zone_routes.h"
+#include "mq/map_filter.h"
+#include "mq/spawn_search.h"
 #include "net/game_connection.h"
 #include "plugin/lua_keep.h"
 #include "ui/dev_screens.h"
@@ -1116,35 +1122,186 @@ struct GroupSpawn {
     net::GameConnection::ActorRef actor;
     game::Spawn spawn;
 };
+struct FilteredSpawn {
+    net::GameConnection::ActorRef actor;
+    game::Spawn spawn;
+    game::MapSpawnMark mark;
+    glm::vec3 at{0.0f};
+    mq::MapFilter marker_filter = mq::MapFilter::Invalid;
+    bool target = false;
+    bool npc_allowed = false; // a living NPC passed the server's NPC map policy (map_markers)
+};
+struct GroundMark {
+    std::uint32_t drop_id = 0;
+    game::GroundObject object;
+    game::MapSpawnMark mark;
+    glm::vec3 at{0.0f};
+};
+struct MapFilterLine {
+    glm::vec3 start{0.0f}, end{0.0f};
+    std::uint32_t rgb = 0;
+};
+struct MapFilterCircle {
+    glm::vec3 center{0.0f};
+    float radius = 0.0f;
+    std::uint32_t rgb = 0;
+};
 struct MapMarkers {
     std::vector<GroupSpawn> group;
     std::vector<SpawnMark> custom;
+    std::vector<FilteredSpawn> filtered;
+    std::vector<GroundMark> ground;
+    std::vector<MapFilterLine> lines;
+    std::vector<MapFilterCircle> circles;
+    int layer = 0;
 };
 
-// Collect both kinds before drawing or choosing a hover target. Providers may synchronously change the world,
-// roster or their own permissions: only owned values and issued actor references cross those calls. The local
-// player's direct marker never enters this path, and MARKER admission does not consult Find/navigation flags.
-MapMarkers map_markers(const UiHost& h, bool show_group, bool show_custom,
+constexpr int kMapCircleSegments = 36;
+constexpr float kMapDegreesToRadians = glm::pi<float>() / 180.0f;
+constexpr float kMapCircleStep = 360.0f / static_cast<float>(kMapCircleSegments);
+constexpr float kMapVectorLength = 4.0f;
+constexpr float kMapDiamondScale = 0.71f;
+constexpr float kMapTriangleRadiusScale = 0.8660254037844386f; // MQ2Map: size * 1.5 * sqrt(3) / 3
+constexpr float kMapTriangleSideOneDegrees = 210.0f;
+constexpr float kMapTriangleSideTwoDegrees = 330.0f;
+constexpr int kMapRingSegments = 8;
+constexpr float kMapRingStartDegrees = 22.5f;
+constexpr float kMapRingStepDegrees = 45.0f;
+
+void append_map_marker(std::vector<MapFilterLine>& lines, glm::vec3 center, mq::MapMarker shape, int size,
+                       float heading, std::uint32_t rgb) {
+    if (shape == mq::MapMarker::None) return;
+    const float side = static_cast<float>(std::max(size, mq::kMapFilterMinMarkerSize));
+    const auto add = [&](glm::vec2 a, glm::vec2 b) {
+        lines.push_back({center + glm::vec3(a, 0.0f), center + glm::vec3(b, 0.0f), rgb});
+    };
+    if (shape == mq::MapMarker::Square) {
+        const float h = side * 0.5f;
+        add({-h, -h}, {h, -h});
+        add({h, -h}, {h, h});
+        add({h, h}, {-h, h});
+        add({-h, h}, {-h, -h});
+    } else if (shape == mq::MapMarker::Diamond) {
+        const float d = side * kMapDiamondScale;
+        add({0, -d}, {d, 0});
+        add({d, 0}, {0, d});
+        add({0, d}, {-d, 0});
+        add({-d, 0}, {0, -d});
+    } else if (shape == mq::MapMarker::Triangle) {
+        const float angle = game::heading_to_yaw(heading);
+        const float radius = side * kMapTriangleRadiusScale;
+        // MQ2Map's triangle is deliberately arrow-like: its first vertex uses +sin/+cos, the other two -sin/-cos.
+        const glm::vec2 a(-std::sin(angle) * radius, -std::cos(angle) * radius);
+        const float a1 = angle + kMapTriangleSideOneDegrees * kMapDegreesToRadians;
+        const float a2 = angle + kMapTriangleSideTwoDegrees * kMapDegreesToRadians;
+        const glm::vec2 b(-std::sin(a1) * radius, -std::cos(a1) * radius);
+        const glm::vec2 c(std::sin(a2) * radius, std::cos(a2) * radius);
+        add(a, b);
+        add(b, c);
+        add(c, a);
+    } else if (shape == mq::MapMarker::Ring) {
+        for (int i = 0; i < kMapRingSegments; ++i) {
+            const float a = (kMapRingStartDegrees + static_cast<float>(i) * kMapRingStepDegrees) * kMapDegreesToRadians;
+            const float b = (kMapRingStartDegrees + static_cast<float>(i + 1) * kMapRingStepDegrees) * kMapDegreesToRadians;
+            add({std::sin(a) * side, std::cos(a) * side}, {std::sin(b) * side, std::cos(b) * side});
+        }
+    }
+}
+
+game::mechanics::SkillActor map_melee_actor(const game::Spawn& spawn) {
+    game::mechanics::SkillActor actor;
+    actor.melee_radius = spawn.melee_radius;
+    actor.scale = spawn.heights.model_scale;
+    actor.avatar_height = spawn.heights.avatar_height;
+    return actor;
+}
+
+void add_filter_geometry(const net::GameConnection& connection, const mq::MapFilters& filters, MapMarkers& markers) {
+    if (!filters.enabled(mq::MapFilter::All)) return;
+    for (const auto& spawn : markers.filtered) {
+        if (filters.enabled(mq::MapFilter::Vector)) {
+            glm::vec2 delta;
+            if (spawn.spawn.speed_run > 0.0f) {
+                const glm::vec3 velocity = game::world_to_server(spawn.spawn.velocity);
+                delta = {-velocity.x, -velocity.y};
+            } else {
+                const float angle = game::heading_to_yaw(spawn.spawn.heading);
+                delta = {-std::sin(angle), -std::cos(angle)};
+            }
+            if (glm::dot(delta, delta) > 0.0f)
+                markers.lines.push_back({spawn.at, spawn.at + glm::vec3(delta * kMapVectorLength, 0.0f), spawn.mark.rgb});
+        }
+        if (filters.enabled(mq::MapFilter::Marker)) {
+            const auto& state = filters.state(spawn.marker_filter);
+            append_map_marker(markers.lines, spawn.at, state.marker, state.marker_size, spawn.spawn.heading, spawn.mark.rgb);
+        }
+    }
+
+    const game::Spawn* player = connection.world().player();
+    if (!player) return;
+    const glm::vec3 me = game::world_to_map(mq::spawn_position(*player));
+    auto circle = [&](mq::MapFilter filter, glm::vec3 center, float radius) {
+        if (radius <= 0.0f) return;
+        markers.circles.push_back({center, radius, filters.state(filter).rgb});
+    };
+    if (filters.enabled(mq::MapFilter::CastRadius)) circle(mq::MapFilter::CastRadius, me, filters.state(mq::MapFilter::CastRadius).radius);
+    if (filters.enabled(mq::MapFilter::SpellRadius)) circle(mq::MapFilter::SpellRadius, me, filters.state(mq::MapFilter::SpellRadius).radius);
+
+    const auto target = std::find_if(markers.filtered.begin(), markers.filtered.end(),
+                                     [](const FilteredSpawn& spawn) { return spawn.target; });
+    if (target == markers.filtered.end()) return;
+    if (filters.enabled(mq::MapFilter::TargetLine))
+        markers.lines.push_back({me, target->at, filters.state(mq::MapFilter::TargetLine).rgb});
+    if (filters.enabled(mq::MapFilter::TargetRadius))
+        circle(mq::MapFilter::TargetRadius, target->at, filters.state(mq::MapFilter::TargetRadius).radius);
+    if (filters.enabled(mq::MapFilter::TargetMelee)) {
+        const auto a = map_melee_actor(*player), b = map_melee_actor(target->spawn);
+        circle(mq::MapFilter::TargetMelee, target->at, game::mechanics::melee_range(&a, &b));
+    }
+}
+
+// Collect every marker source before drawing. Providers may synchronously change the world, roster or their own
+// permissions: only owned values and issued actor references cross those calls. The local player's direct marker
+// never enters this path, and MARKER admission does not consult Find/navigation flags.
+MapMarkers map_markers(UiHost& h, mq::MapFilters* filters, int active_layer, bool show_group, bool show_custom,
                        const std::function<bool(const glm::vec3&)>& in_view = {}) {
     static thread_local bool collecting = false;
-    if (!h.conn || collecting) return {};
+    if (!h.conn || collecting || (h.map_filters && h.map_filters->vanilla_mode())) return {};
     collecting = true;
     struct Finish { ~Finish() { collecting = false; } } finish;
     try {
         const net::GameConnection& c = *h.conn;
         const auto context = c.interaction_context();
         auto current = [&] { return h.conn == &c && c.interaction_context() == context; };
-        using SourceStamp = std::pair<std::uint64_t, std::uint64_t>;
+        // The policy's flags join its revision: a provider need not advance the revision when only its flags change.
+        using SourceStamp = std::tuple<std::uint64_t, std::uint64_t, std::uint32_t>;
         auto source = [&]() -> std::optional<SourceStamp> {
             if (!current()) return std::nullopt;
-            const auto policy = c.server_ext().map_policy(c).revision;
+            const auto policy = c.server_ext().map_policy(c);
             if (!current()) return std::nullopt;
             const auto life = c.server_ext().lifecycle_revision(c);
             if (!current()) return std::nullopt;
-            return SourceStamp{policy, life};
+            return SourceStamp{policy.revision, life, policy.flags};
         };
         const auto stamp = source();
         if (!stamp) return {};
+        // /mapfilter's marks for living NPCs follow the server's NPC map policy as the packs' Find overlays do: none
+        // when it hides stock NPCs, disables NPC Find or supplies its own spawn marks; only listed NPCs with
+        // server-only Find; and each one through the Find visibility hook. The current target is exempt (the player
+        // already has it; its line, circles and mark stay), and so are corpses, which Find never lists.
+        const game::MapPolicy npc_policy{std::get<2>(*stamp), {}, 0};
+        const bool npc_marks = npc_policy.npc_find_enabled() &&
+            !(npc_policy.flags & (game::MapPolicyHideStockNpcs | game::MapPolicyCustomSpawns));
+        const bool npc_server_only = npc_policy.npc_find_server_only();
+        auto policy_npc = [](const std::optional<mq::MapFilterMark>& mark, const game::Spawn& sp) {
+            return mark && !mark->is_target() && sp.is_npc && !sp.is_corpse;
+        };
+        std::optional<mq::SpawnSearchMatcher> custom_matcher;
+        if (filters && filters->custom_enabled() && filters->custom_search()) {
+            mq::SearchSources search_sources = mq::sources_of(c);
+            if (h.tlo_context) search_sources.can_see = h.tlo_context().can_see;
+            custom_matcher.emplace(*filters->custom_search(), c.world(), search_sources);
+        }
         std::array<std::string, game::kGroupSlots> names{};
         const bool grouped = show_group && c.group().active;
         if (grouped)
@@ -1180,18 +1337,53 @@ MapMarkers map_markers(const UiHost& h, bool show_group, bool show_custom,
             if (!current() || !c.matches(actor)) return std::nullopt;
             return c.world().spawns.at(actor.id);
         };
+        auto filter_input = [&](const game::Spawn& sp, bool group) {
+            mq::MapFilterSpawnInput input;
+            input.target = sp.id == c.world().target_id;
+            input.group = group;
+            input.player_level = static_cast<int>(c.player_status().level);
+            input.pvp_rules = c.pvp_rules();
+            input.custom = custom_matcher ? &*custom_matcher : nullptr;
+            return input;
+        };
         MapMarkers out;
+        out.layer = active_layer;
         for (const auto& actor : actors) {
             auto sp = copy(actor);
             if (!sp) continue;
             const bool group = std::any_of(group_actors.begin(), group_actors.end(), [&](const auto& candidate) {
                 return candidate && *candidate == actor;
             });
-            const bool custom = show_custom && (!in_view || in_view(spawn_map(*sp)));
-            if (!group && !custom) continue;
+            const glm::vec3 at = spawn_map(*sp);
+            const bool visible = !in_view || in_view(at);
+            const bool is_target = sp->id == c.world().target_id;
+            const bool custom = show_custom && visible;
+            std::optional<mq::MapFilterMark> filtered;
+            // The current target also feeds TargetLine/TargetRadius/TargetMelee when it is outside the minimap's
+            // circle: those lines and arcs can still cross into view. Its own dot and label remain clipped.
+            if (filters && (visible || is_target)) {
+                filtered = filters->spawn_mark(*sp, filter_input(*sp, group));
+                if (filtered && !visible && !filtered->is_target()) filtered.reset();
+            }
+            if (!group && !custom && !filtered) continue;
+            if (!visible && !(filtered && filtered->is_target())) continue;
+            const bool npc_check = policy_npc(filtered, *sp);
             const bool allowed = c.server_ext().map_visible(c, *sp, 0); // HAILSTONE_MAP_VISIBLE_MARKER
+            // (npc_find_visible asks the HAILSTONE_MAP_FIND hook and pins the actor it asked about)
+            const bool npc_allowed = npc_check && allowed && npc_marks && c.npc_find_visible(sp->id, npc_server_only);
             sp = copy(actor);
             if (!sp || !allowed) continue;
+            const glm::vec3 admitted_at = spawn_map(*sp);
+            const bool admitted_visible = !in_view || in_view(admitted_at);
+            if (filters && (admitted_visible || sp->id == c.world().target_id)) {
+                filtered = filters->spawn_mark(*sp, filter_input(*sp, group));
+                if (filtered && !admitted_visible && !filtered->is_target()) filtered.reset();
+                if (policy_npc(filtered, *sp) && !npc_allowed) filtered.reset();
+            } else {
+                filtered.reset();
+            }
+            if (!group && !custom && !filtered) continue;
+            if (!admitted_visible && !(filtered && filtered->is_target())) continue;
             std::optional<game::MapSpawnMark> mark;
             if (custom) {
                 game::MapSpawnMark d;
@@ -1202,9 +1394,31 @@ MapMarkers map_markers(const UiHost& h, bool show_group, bool show_custom,
                 sp = copy(actor);
                 if (!sp) continue;
             }
-            if (group && same_group() && member(*sp)) out.group.push_back({actor, *sp});
-            if (mark && (!in_view || in_view(spawn_map(*sp))))
-                out.custom.push_back({actor, std::move(*mark), spawn_map(*sp)});
+            // A filtered mark replaces Hailstone's stock group dot for that actor, so one spawn is not drawn twice.
+            if (group && !filtered && same_group() && member(*sp)) out.group.push_back({actor, *sp});
+            if (filtered && (admitted_visible || filtered->is_target())) {
+                game::MapSpawnMark m;
+                m.rgb = filtered->rgb;
+                m.layer = active_layer;
+                m.label = std::move(filtered->label);
+                out.filtered.push_back({actor, *sp, std::move(m), spawn_map(*sp), filtered->marker_filter,
+                                        filtered->is_target(), npc_allowed});
+            }
+            if (mark) {
+                const glm::vec3 mark_at = spawn_map(*sp);
+                if (!in_view || in_view(mark_at)) out.custom.push_back({actor, std::move(*mark), mark_at});
+            }
+        }
+        if (filters && filters->ground_visible()) {
+            for (const auto& object : c.ground_objects()) {
+                const glm::vec3 at = game::world_to_map(object.position);
+                if (in_view && !in_view(at)) continue;
+                game::MapSpawnMark mark;
+                mark.rgb = filters->state(mq::MapFilter::Ground).rgb;
+                mark.layer = active_layer;
+                mark.label = mq::MapFilters::ground_label(object);
+                out.ground.push_back({object.drop_id, object, std::move(mark), at});
+            }
         }
         // The final source query can itself reenter. Validate context, actors and roster after it, without any
         // further provider calls, so a later member's callback cannot leave an earlier member's stale snapshot.
@@ -1231,6 +1445,39 @@ MapMarkers map_markers(const UiHost& h, bool show_group, bool show_custom,
             m.at = spawn_map(*sp);
             return in_view && !in_view(m.at);
         });
+        std::erase_if(out.filtered, [&](FilteredSpawn& f) {
+            auto sp = copy(f.actor);
+            if (!sp) return true;
+            f.spawn = *sp;
+            f.at = spawn_map(*sp);
+            if (!filters) return true;
+            const auto mark = filters->spawn_mark(*sp, filter_input(*sp, same_group() && member(*sp)));
+            if (!mark) return true;
+            if (policy_npc(mark, *sp) &&
+                (!f.npc_allowed || (npc_server_only && (sp->id > 0xffff || !c.findable_npcs().contains(sp->id)))))
+                return true;
+            f.mark.rgb = mark->rgb;
+            f.mark.label = std::move(mark->label);
+            f.marker_filter = mark->marker_filter;
+            f.target = mark->is_target();
+            return !f.target && in_view && !in_view(f.at);
+        });
+        // One table of the current ground objects for every mark, not a scan of them per mark. Nothing below calls
+        // a provider, so the pointers stay valid. (The first object with an id wins, as a scan would find it.)
+        std::unordered_map<std::uint32_t, const game::GroundObject*> ground_now;
+        if (!out.ground.empty()) {
+            ground_now.reserve(c.ground_objects().size());
+            for (const auto& object : c.ground_objects()) ground_now.emplace(object.drop_id, &object);
+        }
+        std::erase_if(out.ground, [&](GroundMark& g) {
+            const auto found = ground_now.find(g.drop_id);
+            if (found == ground_now.end()) return true;
+            g.object = *found->second;
+            g.at = game::world_to_map(g.object.position);
+            g.mark.label = mq::MapFilters::ground_label(g.object);
+            return in_view && !in_view(g.at);
+        });
+        if (filters) add_filter_geometry(c, *filters, out);
         return out;
     } catch (...) {
         // A failing provider cannot unwind through a Lua draw entrypoint or turn a failed filter into allowance.
@@ -1239,7 +1486,8 @@ MapMarkers map_markers(const UiHost& h, bool show_group, bool show_custom,
 }
 
 // A mark as the view shows its labels: on a shown layer and, with the height filter, near the player's feet.
-bool mark_shown(const game::MapView& v, const SpawnMark& m, std::optional<float> feet) {
+template <typename T>
+bool mark_shown(const game::MapView& v, const T& m, std::optional<float> feet) {
     if (!v.layer_shown(m.mark.layer)) return false;
     if (!v.z_filter || !feet) return true;
     return *feet - static_cast<float>(v.min_z) <= m.at.z && m.at.z <= *feet + static_cast<float>(v.max_z);
@@ -1248,15 +1496,24 @@ bool mark_shown(const game::MapView& v, const SpawnMark& m, std::optional<float>
 // A screen rectangle's four numbers from argument i on, as floats (true), or false when one is not a number or lies
 // past any screen: cast as they are they could overflow float (undefined) and carry the map's mapping past int's range
 // (the pan and the label layout are ints).
-bool rect_arg(lua_State* L, int i, float out[4]) {
-    constexpr double kMaxCoord = 1e6;
+constexpr double kMaxCoord = 1e6;
+// n numbers from argument i on, as floats (true), or false when one is not finite or lies past kMaxCoord (a screen
+// position, or a point of a zone's map: no zone reaches that far).
+bool coords_arg(lua_State* L, int i, int n, float* out) {
     bool sound = true;
-    for (int n = 0; n < 4; ++n) {
-        const double c = luaL_checknumber(L, i + n);
+    for (int k = 0; k < n; ++k) {
+        const double c = luaL_checknumber(L, i + k);
         sound = sound && std::isfinite(c) && std::fabs(c) <= kMaxCoord;
-        out[n] = sound ? static_cast<float>(c) : 0.0f;
+        out[k] = sound ? static_cast<float>(c) : 0.0f;
     }
     return sound;
+}
+bool rect_arg(lua_State* L, int i, float out[4]) { return coords_arg(L, i, 4, out); }
+// An optional coordinate at argument i (fallback when missing), or nullopt when it is not finite or out of range.
+std::optional<float> opt_coord_arg(lua_State* L, int i, float fallback) {
+    const double c = luaL_optnumber(L, i, fallback);
+    if (!std::isfinite(c) || std::fabs(c) > kMaxCoord) return std::nullopt;
+    return static_cast<float>(c);
 }
 // A scale (screen pixels per original pixel) from argument i: 1 when missing, not a number or outside 0.05..100.
 float scale_arg(lua_State* L, int i) {
@@ -1300,6 +1557,22 @@ int DrawMap(lua_State* L) {
     v.precalc(me ? std::optional<glm::vec2>(glm::vec2(*me)) : std::nullopt, s.label_box(h), s.find_box(h));
     auto T = [&](float x, float y) { return v.transform(x, y, cw, ch); };
     bool edit = s.edit_mode();
+    const bool vanilla = h.map_filters && h.map_filters->vanilla_mode();
+    const bool normal_labels = !h.map_filters || h.map_filters->enabled(mq::MapFilter::NormalLabels);
+    const bool labels_visible = normal_labels || edit; // the editor needs the labels it edits
+    auto draw_filtered_mark = [&](const auto& mk, bool show_label) {
+        if (!mark_shown(v, mk, feet)) return;
+        glm::vec2 p = T(mk.at.x, mk.at.y);
+        const float gx = std::trunc(p.x), gy = std::trunc(p.y);
+        const ImU32 col = faded(color(mk.mark.rgb, 0xff), v.z_fade(mk.at.z, feet));
+        line(gx - 2, gy, gx + 3, gy, col);
+        line(gx, gy - 2, gx, gy + 3, col);
+        if (!show_label || mk.mark.label.empty()) return;
+        MapFont f = map_font(1);
+        float fs = f.font ? f.font->LegacySize / f.scale * k : ImGui::GetFontSize();
+        ImVec2 tp = S(gx + 4, gy - std::trunc(f.height / 2));
+        dl->AddText(f.font, fs, ImVec2(std::trunc(tp.x), std::trunc(tp.y)), col, mk.mark.label.c_str(), nullptr, 300.0f * k);
+    };
 
     // The mouse in the original's pixels; the drag's pan follows it (CMapViewWnd::OnProcessFrame).
     ImVec2 mouse = ImGui::GetMousePos();
@@ -1319,6 +1592,18 @@ int DrawMap(lua_State* L) {
         v.relayout = false;
     }
 
+    // Vanilla keeps the map's lines and its mouse mapping, but no labels, paths, marks or editor overlays. What the
+    // pack draws over the map itself is the pack's to leave out (hs.MapVanilla).
+    if (vanilla) {
+        for (auto& l : v.lines) {
+            if (!v.line_shown(l, feet)) continue;
+            glm::vec2 a = T(l.start.x, l.start.y), b = T(l.end.x, l.end.y);
+            line(a.x, a.y, b.x, b.y, faded(color(l.color), v.z_fade(l.start.z, l.end.z, feet)));
+        }
+        dl->PopClipRect();
+        return 0;
+    }
+
     // Hover: a group member within 5 pixels first; else the nearest label within 20 and, editing, the nearest line
     // within 3 (the label wins a tie).
     // Find can consult providers too. Copy its points first, so neither its storage nor marker hover/drawing
@@ -1328,7 +1613,7 @@ int DrawMap(lua_State* L) {
     const auto* path = s.path(h);
     const bool have_path = path != nullptr;
     const auto find_points = path ? path->points() : std::vector<glm::vec3>{};
-    auto markers = v.current_zone && me ? map_markers(h, v.show_group, true) : MapMarkers{};
+    auto markers = v.current_zone && me ? map_markers(h, h.map_filters, v.active_layer, v.show_group, true) : MapMarkers{};
     const auto& members = markers.group;
     const auto& marks = markers.custom;
     const GroupSpawn* hover_member = nullptr;
@@ -1356,7 +1641,7 @@ int DrawMap(lua_State* L) {
             }
         }
     }
-    if (mouse_in && !hover_member && !hover_mark) {
+    if (mouse_in && labels_visible && !hover_member && !hover_mark) {
         float best_label = 20.0f, best_line = 3.0f;
         for (auto& l : v.labels) {
             if (!v.label_shown(l, feet)) continue;
@@ -1405,6 +1690,30 @@ int DrawMap(lua_State* L) {
         glm::vec2 a = T(v.current_point.x, v.current_point.y), b = T(me->x, me->y);
         line(a.x, a.y, b.x, b.y, color(v.current_color));
     }
+    // /mapfilter's vectors, markers and target line, then its radius circles.
+    if (v.layer_shown(markers.layer)) {
+        for (const auto& overlay : markers.lines) {
+            if (v.z_filter && feet) {
+                const float low = *feet - static_cast<float>(v.min_z), high = *feet + static_cast<float>(v.max_z);
+                if (std::max(overlay.start.z, overlay.end.z) < low || std::min(overlay.start.z, overlay.end.z) > high) continue;
+            }
+            glm::vec2 a = T(overlay.start.x, overlay.start.y), b = T(overlay.end.x, overlay.end.y);
+            line(a.x, a.y, b.x, b.y, faded(color(overlay.rgb, 0xff), v.z_fade(overlay.start.z, overlay.end.z, feet)));
+        }
+        for (const auto& circle : markers.circles) {
+            if (v.z_filter && feet &&
+                (circle.center.z < *feet - static_cast<float>(v.min_z) || circle.center.z > *feet + static_cast<float>(v.max_z)))
+                continue;
+            const ImU32 col = faded(color(circle.rgb, 0xff), v.z_fade(circle.center.z, feet));
+            for (int i = 0; i < kMapCircleSegments; ++i) {
+                const float a = static_cast<float>(i) * kMapCircleStep * kMapDegreesToRadians;
+                const float b = static_cast<float>(i + 1) * kMapCircleStep * kMapDegreesToRadians;
+                const glm::vec2 p = T(circle.center.x + std::cos(a) * circle.radius, circle.center.y + std::sin(a) * circle.radius);
+                const glm::vec2 q = T(circle.center.x + std::cos(b) * circle.radius, circle.center.y + std::sin(b) * circle.radius);
+                line(p.x, p.y, q.x, q.y, col);
+            }
+        }
+    }
     // The find path, from the player to its last point and on to the destination, with an X there; else a failed
     // find's X; else the selected label's X. The path and the failed X only on the player's zone.
     const bool path_current = h.conn == find_connection && (!h.conn || h.conn->interaction_context() == find_context);
@@ -1432,7 +1741,7 @@ int DrawMap(lua_State* L) {
     // The labels.
     game::MapLabel* marked = edit ? v.marked_label : nullptr;
     for (auto& l : v.labels) {
-        if (!v.label_shown(l, feet)) continue;
+        if (!labels_visible || !v.label_shown(l, feet)) continue;
         glm::vec2 p = T(l.pos.x, l.pos.y);
         bool lit = &l == s.hover_label || &l == marked;
         ImU32 col = lit ? color(kHighlight) : faded(color(l.color), v.z_fade(l.pos.z, feet));
@@ -1465,6 +1774,10 @@ int DrawMap(lua_State* L) {
         ImVec2 at = S(tx, ty);
         dl->AddText(f.font, fs, ImVec2(std::trunc(at.x), std::trunc(at.y)), col, l.text.c_str(), nullptr, 300.0f * k);
     }
+
+    // /mapfilter's own marks: MQ2Map's small plus and label, in the option's colour.
+    for (const auto& mk : markers.filtered) draw_filtered_mark(mk, true);
+    for (const auto& mk : markers.ground) draw_filtered_mark(mk, true);
 
     // A plugin's spawns: a small plus in the mark's colour, named as the labels are (the Labels button, or hovered).
     for (const auto& mk : marks) {
@@ -1612,6 +1925,8 @@ void draw_zone_view(MapState& s, UiHost& h, const ZoneView& zv) {
     // Another zone's map (an atlas zone link, hs.ShowZoneMap) is drawn without the player, the find path and the
     // height fade, which belong to the player's zone.
     auto feet = v.current_zone ? s.feet_z(h) : std::nullopt;
+    const bool vanilla = h.map_filters && h.map_filters->vanilla_mode();
+    const bool normal_labels = !h.map_filters || h.map_filters->enabled(mq::MapFilter::NormalLabels);
     const glm::vec2 here = zv.P(me->x, me->y);
     // The minimap's square: in a busy zone's thousands of lines, most are outside it.
     const float reach = zv.reach > 0.0f ? zv.reach + 1.0f : 0.0f;
@@ -1619,12 +1934,45 @@ void draw_zone_view(MapState& s, UiHost& h, const ZoneView& zv) {
         return reach > 0.0f && (std::max(a.x, b.x) < zv.reach_from.x - reach || std::min(a.x, b.x) > zv.reach_from.x + reach ||
                                 std::max(a.y, b.y) < zv.reach_from.y - reach || std::min(a.y, b.y) > zv.reach_from.y + reach);
     };
+    auto in_circle = [&](const glm::vec3& m) { return inside(zv.P(m.x, m.y)); };
+    const auto markers = !vanilla && v.current_zone
+        ? map_markers(h, h.map_filters, v.active_layer, v.show_group, true,
+                      r > 0.0f ? std::function<bool(const glm::vec3&)>(in_circle) : nullptr)
+        : MapMarkers{};
     for (const auto& l : v.lines)
         if (!out_of_reach(l.start, l.end) && v.line_shown(l, feet))
             seg(zv.P(l.start.x, l.start.y), zv.P(l.end.x, l.end.y), faded(ink(l.color), v.z_fade(l.start.z, l.end.z, feet)), w);
-    if (v.line_active) seg(zv.P(v.current_point.x, v.current_point.y), here, ink(v.current_color), w);
     lap.mark("map view lines");
-    if (zv.labels) {
+    if (vanilla) return;
+    if (v.line_active) seg(zv.P(v.current_point.x, v.current_point.y), here, ink(v.current_color), w);
+    if (v.layer_shown(markers.layer)) {
+        for (const auto& overlay : markers.lines) {
+            if (out_of_reach(overlay.start, overlay.end)) continue;
+            if (v.z_filter && feet) {
+                const float low = *feet - static_cast<float>(v.min_z), high = *feet + static_cast<float>(v.max_z);
+                if (std::max(overlay.start.z, overlay.end.z) < low || std::min(overlay.start.z, overlay.end.z) > high) continue;
+            }
+            seg(zv.P(overlay.start.x, overlay.start.y), zv.P(overlay.end.x, overlay.end.y),
+                faded(color(overlay.rgb, 255), v.z_fade(overlay.start.z, overlay.end.z, feet)), w);
+        }
+        for (const auto& circle : markers.circles) {
+            const glm::vec3 lo = circle.center - glm::vec3(circle.radius, circle.radius, 0.0f);
+            const glm::vec3 hi = circle.center + glm::vec3(circle.radius, circle.radius, 0.0f);
+            if (out_of_reach(lo, hi)) continue;
+            if (v.z_filter && feet &&
+                (circle.center.z < *feet - static_cast<float>(v.min_z) || circle.center.z > *feet + static_cast<float>(v.max_z)))
+                continue;
+            const ImU32 col = faded(color(circle.rgb, 255), v.z_fade(circle.center.z, feet));
+            for (int i = 0; i < kMapCircleSegments; ++i) {
+                const float a = static_cast<float>(i) * kMapCircleStep * kMapDegreesToRadians;
+                const float b = static_cast<float>(i + 1) * kMapCircleStep * kMapDegreesToRadians;
+                seg(zv.P(circle.center.x + std::cos(a) * circle.radius, circle.center.y + std::sin(a) * circle.radius),
+                    zv.P(circle.center.x + std::cos(b) * circle.radius, circle.center.y + std::sin(b) * circle.radius), col, w);
+            }
+        }
+    }
+    lap.mark("map view lines");
+    if (zv.labels && normal_labels) {
         ImFont* f = ImGui::GetFont();
         float fs = ImGui::GetFontSize();
         for (const auto& l : v.labels) {
@@ -1675,13 +2023,25 @@ void draw_zone_view(MapState& s, UiHost& h, const ZoneView& zv) {
                               IM_COL32(64, 255, 64, 255));
         }
     lap.mark("map view labels, path, compass");
-    // A plugin's spawns: a dot in the mark's colour, named with the labels.
-    // In a circle a mark shows only inside it, so the others are not asked about; a rectangle clips by itself (a
-    // label may reach in from a mark outside), so all are.
-    auto in_circle = [&](const glm::vec3& m) { return inside(zv.P(m.x, m.y)); };
-    const auto markers = v.current_zone
-        ? map_markers(h, v.show_group, true, r > 0.0f ? std::function<bool(const glm::vec3&)>(in_circle) : nullptr)
-        : MapMarkers{};
+    auto draw_filtered_mark = [&](const auto& mk) {
+        if (!mark_shown(v, mk, feet)) return;
+        const glm::vec2 p = zv.P(mk.at.x, mk.at.y);
+        if (!inside(p)) return;
+        const ImVec2 q = at(p);
+        const float fade = v.z_fade(mk.at.z, feet);
+        const ImU32 col = faded(color(mk.mark.rgb, 255), fade);
+        dl->AddLine(ImVec2(q.x - 2.0f * w, q.y), ImVec2(q.x + 3.0f * w, q.y), col, w);
+        dl->AddLine(ImVec2(q.x, q.y - 2.0f * w), ImVec2(q.x, q.y + 3.0f * w), col, w);
+        if (!zv.labels || mk.mark.label.empty()) return;
+        ImFont* f = ImGui::GetFont();
+        float fs = ImGui::GetFontSize();
+        ImVec2 tp(q.x + 4.0f * w, q.y - fs / 2);
+        dl->AddText(f, fs, ImVec2(tp.x + 1, tp.y + 1), faded(IM_COL32(0, 0, 0, 200), fade), mk.mark.label.c_str());
+        dl->AddText(f, fs, tp, col, mk.mark.label.c_str());
+    };
+    for (const auto& mk : markers.filtered) draw_filtered_mark(mk);
+    for (const auto& mk : markers.ground) draw_filtered_mark(mk);
+    lap.mark("map view filter marks");
     if (v.current_zone)
         for (const auto& mk : markers.custom) {
             if (!mark_shown(v, mk, feet)) continue;
@@ -1736,10 +2096,12 @@ void draw_zone_view(MapState& s, UiHost& h, const ZoneView& zv) {
 int DrawMinimap(lua_State* L) {
     MapState& s = *state_of(L);
     UiHost& h = *host_of(L);
-    const float cx = static_cast<float>(luaL_checknumber(L, 1)), cy = static_cast<float>(luaL_checknumber(L, 2));
-    const float r = static_cast<float>(luaL_checknumber(L, 3));
-    const float range = std::max(1.0f, static_cast<float>(luaL_checknumber(L, 4)));
+    float a[4];
+    if (!coords_arg(L, 1, 4, a)) return 0; // (not finite, or past any screen or map)
+    const float cx = a[0], cy = a[1], r = a[2];
+    const float range = std::max(1.0f, a[3]);
     const bool rotate = lua_toboolean(L, 5) != 0;
+    const bool vanilla = h.map_filters && h.map_filters->vanilla_mode();
     // Map coordinates are screen-aligned (x right, y down, world_to_map); the heading turns counter-clockwise from
     // north, so turning the map by it puts the facing up.
     const float hd = rotate ? h.heading : 0.0f;
@@ -1774,7 +2136,7 @@ int DrawMinimap(lua_State* L) {
     if (overlay.have_player) { overlay.player_x = me->x; overlay.player_y = me->y; }
     overlay.zone = s.zone;
     overlay.current_zone = s.view.current_zone;
-    dispatch_map_overlays(L, overlay);
+    if (!vanilla) dispatch_map_overlays(L, overlay);
     lua_pushnumber(L, me->x);
     lua_pushnumber(L, me->y);
     lua_pushnumber(L, k);
@@ -1788,10 +2150,12 @@ int DrawMinimap(lua_State* L) {
 int DrawZoneMap(lua_State* L) {
     MapState& s = *state_of(L);
     UiHost& h = *host_of(L);
-    const float x0 = static_cast<float>(luaL_checknumber(L, 1)), y0 = static_cast<float>(luaL_checknumber(L, 2));
-    const float x1 = static_cast<float>(luaL_checknumber(L, 3)), y1 = static_cast<float>(luaL_checknumber(L, 4));
-    const float zoom = std::max(0.1f, static_cast<float>(luaL_checknumber(L, 5)));
+    float a[5];
+    if (!coords_arg(L, 1, 5, a)) return 0; // (not finite, or past any screen)
+    const float x0 = a[0], y0 = a[1], x1 = a[2], y1 = a[3];
+    const float zoom = std::max(0.1f, a[4]);
     const auto& v = s.view;
+    const bool vanilla = h.map_filters && h.map_filters->vanilla_mode();
     if (!h.in_game || x1 <= x0 || y1 <= y0) return 0;
     auto feet = s.feet_z(h);
     glm::vec2 lo(FLT_MAX), hi(-FLT_MAX);
@@ -1808,7 +2172,8 @@ int DrawZoneMap(lua_State* L) {
     }
     const glm::vec2 mid = (lo + hi) * 0.5f, size = glm::max(hi - lo, glm::vec2(1.0f));
     const float k = std::min((x1 - x0) / size.x, (y1 - y0) / size.y) * 0.94f * zoom;
-    const float cx = static_cast<float>(luaL_optnumber(L, 6, mid.x)), cy = static_cast<float>(luaL_optnumber(L, 7, mid.y));
+    const std::optional<float> ocx = opt_coord_arg(L, 6, mid.x), ocy = opt_coord_arg(L, 7, mid.y);
+    const float cx = ocx.value_or(mid.x), cy = ocy.value_or(mid.y); // (a centre past any map: the zone's middle)
     lua_pushnumber(L, k);
     lua_pushnumber(L, mid.x);
     lua_pushnumber(L, mid.y);
@@ -1837,7 +2202,7 @@ int DrawZoneMap(lua_State* L) {
     if (overlay.have_player) { overlay.player_x = me->x; overlay.player_y = me->y; }
     overlay.zone = s.zone;
     overlay.current_zone = s.view.current_zone;
-    dispatch_map_overlays(L, overlay);
+    if (!vanilla) dispatch_map_overlays(L, overlay);
     ImGui::GetWindowDrawList()->PopClipRect();
     return out;
 }
@@ -1930,7 +2295,9 @@ int DrawAtlas(lua_State* L) {
 // click (PlayerPath_FindMapLocation, at the player's height); for the modern and gamepad maps.
 int FindMapLocation(lua_State* L) {
     UiHost& h = *host_of(L);
-    const float x = static_cast<float>(luaL_checknumber(L, 1)), y = static_cast<float>(luaL_checknumber(L, 2));
+    float p[2];
+    if (!coords_arg(L, 1, 2, p)) return 0; // (not finite, or past any map: nothing to find)
+    const float x = p[0], y = p[1];
     if (!h.in_game || !h.conn || !h.feet_valid) return 0;
     auto me = h.conn->world().player();
     float z = me ? me->position.z : h.feet[2];
@@ -1944,6 +2311,14 @@ int FindMapLocation(lua_State* L) {
 int FindPathShown(lua_State* L) {
     UiHost& h = *host_of(L);
     lua_pushboolean(L, (h.conn && h.conn->player_path().active()) || h.guide_line);
+    return 1;
+}
+// on = hs.MapVanilla()   -- vanilla maps (/mapfilter vanilla, or the server's [map] vanilla): the maps draw only their
+// lines; a pack or add-on leaves out what it would draw over them itself (markers, Find marks, exits), keeping its
+// text, frames and controls.
+int MapVanilla(lua_State* L) {
+    UiHost& h = *host_of(L);
+    lua_pushboolean(L, h.map_filters && h.map_filters->vanilla_mode());
     return 1;
 }
 int EndFind(lua_State* L) {
@@ -2226,7 +2601,9 @@ int MapPanReset(lua_State* L) {
 int MapRightClick(lua_State* L) {
     MapState& s = *state_of(L);
     UiHost& h = *host_of(L);
-    const float x = static_cast<float>(luaL_checknumber(L, 1)), y = static_cast<float>(luaL_checknumber(L, 2));
+    float p[2];
+    if (!coords_arg(L, 1, 2, p)) return 0; // (not finite, or past any screen)
+    const float x = p[0], y = p[1];
     if (!drawn_now(s) || !h.conn || !h.feet_valid || !s.view.current_zone) return 0;
     if (s.area_w < 1.0f || s.area_h < 1.0f) return 0;
     // The point in the original's pixels, the integer mouse as the original's.
@@ -2505,7 +2882,9 @@ int ZoneRoute(lua_State* L) {
     const std::uint32_t from = lua_isstring(L, 2) ? game::zone_id_by_short_name(lua_tostring(L, 2))
                                : h.conn                ? h.conn->zone_id()
                                                        : 0u;
-    game::ZoneRoute r = s.routes.route(from, to, [&](std::uint32_t z) { return s.zone_allowed(h, z); });
+    // (the route in a box the state owns across the pushes: plugin/lua_keep.h)
+    auto& r = plugin::lua_keep<game::ZoneRoute>(L);
+    plugin::cxx_guard(L, [&] { r = s.routes.route(from, to, [&](std::uint32_t z) { return s.zone_allowed(h, z); }); });
     if (r.zones.empty()) {
         lua_pushnil(L);
         return 1;
@@ -2632,7 +3011,7 @@ void register_map_api(lua_State* L, UiHost& host, std::vector<std::unique_ptr<St
     static const luaL_Reg fns[] = {{"DrawMap", DrawMap},         {"MapZoom", MapZoom},         {"MapMouseDown", MapMouseDown},
                                    {"MapMouseUp", MapMouseUp},   {"MapPanReset", MapPanReset}, {"MapRightClick", MapRightClick},
                                    {"DrawMinimap", DrawMinimap}, {"DrawZoneMap", DrawZoneMap},
-                                   {"FindMapLocation", FindMapLocation}, {"DrawAtlas", DrawAtlas}, {"FindPathShown", FindPathShown}, {"EndFind", EndFind}, {"ZoneName", ZoneName}, {"MapAutoZ", MapAutoZ}, {"MapPolicy", MapPolicy}, {"GameTime", GameTime},
+                                   {"FindMapLocation", FindMapLocation}, {"DrawAtlas", DrawAtlas}, {"FindPathShown", FindPathShown}, {"EndFind", EndFind}, {"ZoneName", ZoneName}, {"MapAutoZ", MapAutoZ}, {"MapPolicy", MapPolicy}, {"MapVanilla", MapVanilla}, {"GameTime", GameTime},
                                    {"AtlasIndex", AtlasIndex}, {"AtlasPageData", AtlasPageData}, {"AtlasTexture", AtlasTexture},
                                    {"ZoneLinks", ZoneLinks}, {"ZoneRoute", ZoneRoute}, {"ZoneExits", ZoneExits},
                                    {"ZoneExitWalk", ZoneExitWalk}, {"ShowZoneMap", ShowZoneMap}, {"MapZoneShown", MapZoneShown},

@@ -8,6 +8,7 @@
 // @0x76bda0) and the element descriptions (CTaskManager::GetElementDescription
 // @0x4800c0). Pure state; the packets are handled in net/game_connection_progress.cpp.
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -21,6 +22,10 @@ class EqStrings;
 
 // Task types (EQEmu TaskType; the original's CTaskManager keeps one task, one shared task and the quests).
 inline constexpr std::uint32_t kTaskTypeTask = 0, kTaskTypeShared = 1, kTaskTypeQuest = 2;
+// The shared task's member list kept: far above any shared task's size (EQEmu sets a task's maximum per task,
+// raid-sized at most); additions past it are dropped against a flood. The original's list has no limit of its own
+// that is known (docs/unknowns.md).
+inline constexpr std::size_t kSharedTaskMembersKept = 1024;
 
 // One objective (activity / element).
 struct TaskElement {

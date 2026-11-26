@@ -3,6 +3,8 @@
 // conversion that holds NaN and out-of-range values, and an UiApi takes its handlers off the host when it goes.
 #include <doctest/doctest.h>
 
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <string>
@@ -213,6 +215,89 @@ TEST_CASE("hs API: the session's menus and dialogs go when the connection does")
     CHECK_FALSE(host.confirm);
     CHECK_FALSE(host.color_pick);
     CHECK_FALSE(ran);
+}
+
+// The quantity dialog's Accept reads the box's number less the minimum in 64 bits: int's least value less a minimum
+// of 1 does not overflow, it is held to the slider's start.
+TEST_CASE("hs API: the quantity dialog holds a typed number past int's range to its slider") {
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::GetIO().DisplaySize = ImVec2(1600, 900);
+    app::UiHost host;
+    host.in_game = host.ui_ready = true;
+    app::UiApi api(host);
+    std::optional<std::int32_t> got;
+    auto open = [&] {
+        got.reset();
+        app::UiHost::UiQuantity q;
+        q.min = 1, q.max = 20, q.slider = 5;
+        q.done = [&](std::int32_t n) { got = n; };
+        q.serial = ++host.quantity_serial;
+        host.quantity = std::move(q);
+        REQUIRE(api.shown("QuantityWnd"));
+    };
+    for (const auto& [text, want] : {std::pair{"-2147483648", 1}, std::pair{"2147483647", 20}, std::pair{"7", 7},
+                                     std::pair{"0", 1}}) {
+        open();
+        REQUIRE(api.set_child_text("QuantityWnd", "QTYW_SliderInput", text));
+        REQUIRE(api.click_child("QuantityWnd", "QTYW_Accept_Button"));
+        CHECK(got == want);
+    }
+    ImGui::DestroyContext(ctx);
+}
+
+// hs.SetUiIni changes the character's UI ini in memory; the file is written with the window places (at most every
+// 2 s) and at once by UiApi::save_layout (a quit, a camp, back to the login screen), not on every call (a slider drag).
+TEST_CASE("hs API: SetUiIni does not write the file each call; save_layout writes it") {
+    test::ScratchDir dir("lua_ui_set_ui_ini");
+    app::UiHost host;
+    app::UiApi api(host);
+    const auto file = dir.path() / "UI_Test.ini";
+    api.load_layout(dir.path() / "defaults.ini", file, {});
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+    lua_newtable(L);
+    api.register_functions(L);
+    lua_setglobal(L, "hs");
+    auto text = [&] {
+        std::ifstream in(file);
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    };
+    for (int i = 0; i < 50; ++i) run(L, "hs.SetUiIni('Main', 'GlobalAlpha', '" + std::to_string(100 + i) + "')");
+    CHECK(run(L, "return hs.UiIni('Main', 'GlobalAlpha')") == "149");
+    CHECK(text().find("GlobalAlpha") == std::string::npos);
+    api.save_layout();
+    CHECK(text().find("GlobalAlpha=149") != std::string::npos);
+    CHECK(run(L, "return hs.UiIni('Main', 'Nothing')") == "nil");
+    lua_close(L);
+}
+
+// hs.ReplaceWindow and hs.WindowShown keep the names they are given in bounded maps: past 1024 names the stale ones
+// (not replaced in the last frames) are dropped, and a new name while all are recent is not kept.
+TEST_CASE("hs API: ReplaceWindow keeps a bounded number of window names") {
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::GetIO().DisplaySize = ImVec2(1600, 900);
+    {
+        app::UiHost host;
+        host.in_game = host.ui_ready = true;
+        app::UiApi api(host);
+        api.begin_frame();
+        lua_State* L = luaL_newstate();
+        luaL_openlibs(L);
+        lua_newtable(L);
+        api.register_functions(L);
+        lua_setglobal(L, "hs");
+        CHECK(run(L, "for i = 1, 3000 do hs.ReplaceWindow('Script' .. i) end return hs.WindowShown('Late')") == "false");
+        CHECK(api.replaces("Script1"));
+        CHECK(api.replaces("Script1024"));
+        CHECK_FALSE(api.replaces("Script1025")); // all 1024 are this frame's: not kept
+        CHECK_FALSE(api.replaces("Late"));
+        for (int i = 0; i < 4; ++i) api.begin_frame();
+        run(L, "hs.ReplaceWindow('Script2000')");
+        CHECK(api.replaces("Script2000")); // the stale names made room
+        CHECK_FALSE(api.replaces("Script1"));
+        lua_close(L);
+    }
+    ImGui::DestroyContext(ctx);
 }
 
 TEST_CASE("plugin values: deep tables both ways stop at the depth limit, with room on the stack") {

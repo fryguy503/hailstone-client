@@ -264,24 +264,47 @@ void add_nav_commands(plugin::Hooks& h, plugin::Hooks::Owner owner, const Comman
         },
         plugin::kCapMove);
 
-    // /moveto: a straight walk, no mesh (MQ2MoveUtils). mdist sets the distance it stops at.
-    auto mdist = std::make_shared<float>(10.0f);
+    // /moveto: a straight walk, no mesh (MQ2MoveUtils): it turns to the spot and holds forward, and ends at /moveto off
+    // or the player's own movement keys. dist or mdist <n> sets the flat distance it stops at, for this walk and the
+    // ones after it (NavControl::moveto_distance). As in MQ2MoveUtils, mdist may come inline, before id or after
+    // loc y x [z] or id [#] (E3 sends "/moveto loc <y> <x> mdist <n>"); alone it only sets the distance.
     h.add_command(
         owner, "/moveto",
-        [context, out, mdist](std::string_view args) {
+        [context, out](std::string_view args) {
             const Context& ctx = context();
             nav::NavControl* nav = ctx.nav;
             const net::GameConnection* conn = ctx.conn;
             const game::Spawn* me = conn ? conn->world().player() : nullptr;
             if (!nav || !me) return;
             std::vector<std::string> w = words(args);
-            if (w.empty() || iequals(w[0], "off") || iequals(w[0], "stop")) {
+            if (!w.empty() && (iequals(w[0], "off") || iequals(w[0], "stop"))) {
                 nav->stop("");
                 return;
             }
-            if (iequals(w[0], "mdist")) {
-                if (auto d = number(w, 1)) *mdist = std::max(*d, 1.0f);
-                out(std::format("/moveto stops within {:.0f}.", *mdist));
+            // Take out every "dist <n>" / "mdist <n>": the number sets the distance, a word without one is left.
+            bool set_distance = false;
+            for (std::size_t i = 0; i < w.size();) {
+                if ((iequals(w[i], "dist") || iequals(w[i], "mdist")) && i + 1 < w.size()) {
+                    if (auto d = number(w, i + 1)) {
+                        nav->moveto_distance() = std::max(*d, 1.0f);
+                        set_distance = true;
+                        w.erase(w.begin() + static_cast<std::ptrdiff_t>(i), w.begin() + static_cast<std::ptrdiff_t>(i + 2));
+                        continue;
+                    }
+                }
+                ++i;
+            }
+            const float mdist = nav->moveto_distance();
+            if (w.empty() && set_distance) {
+                out(std::format("/moveto stops within {:.0f}.", mdist));
+                return;
+            }
+            if (w.empty()) {
+                nav->stop("");
+                return;
+            }
+            if (iequals(w[0], "dist") || iequals(w[0], "mdist")) { // without a number: what it is
+                out(std::format("/moveto stops within {:.0f}.", mdist));
                 return;
             }
             if (iequals(w[0], "loc")) {
@@ -295,31 +318,49 @@ void add_nav_commands(plugin::Hooks& h, plugin::Hooks::Owner owner, const Comman
                     out("Usage: /moveto loc <y> <x> [z]");
                     return;
                 }
+                // Without a Z only Y and X count: the point takes the player's height and arrival ignores height.
                 glm::vec3 server(*x, *y, z ? *z : game::world_to_server(spawn_position(*me)).z);
-                std::string err = nav->go_to_point(game::server_to_world(server), *mdist,
-                                                   std::format("{:.0f}, {:.0f}", server.y, server.x), true);
+                std::string err = nav->go_to_point(game::server_to_world(server), mdist,
+                                                   std::format("{:.0f}, {:.0f}", server.y, server.x), true, !z);
                 if (!err.empty()) out(err);
                 return;
             }
             const game::Spawn* s = nullptr;
+            std::uint32_t spawn_id = 0;
             if (iequals(w[0], "id")) {
                 auto id = w.size() >= 2 ? id_number<std::uint32_t>(w, 1) : std::optional<std::uint32_t>(conn->world().target_id);
                 if (id) {
                     auto it = conn->world().spawns.find(*id);
-                    if (it != conn->world().spawns.end() && it->first != conn->world().player_id) s = &it->second;
+                    if (it != conn->world().spawns.end() && it->first != conn->world().player_id) {
+                        s = &it->second;
+                        spawn_id = it->first;
+                    }
                 }
             }
             if (!s) {
-                out("Usage: /moveto loc <y> <x> [z] | id [#] | mdist <n> | off");
+                out("Usage: /moveto loc <y> <x> [z] | id [#] | dist <n> | off");
                 return;
             }
-            std::string err = nav->go_to_point(spawn_position(*s), *mdist, s->name, true);
+            // Flat, height ignored: a spawn levitating or on a ledge above is reached once within the distance on
+            // the flat, where a height check left the player circling under it. Its place is taken again each
+            // second (NavControl::moveto_spawn): the walk turns after it and looks up or down at it.
+            std::string err = nav->moveto_spawn(spawn_id, mdist);
             if (!err.empty()) out(err);
         },
         plugin::kCapMove);
 
     // /stick (MQ2MoveUtils' words): keep to the target, or a spawn by id, until /stick off, the player moves, or it
     // is gone. [<distance>] (default: inside melee range), [behind], [id <#>]. Hailstone's own (NavControl::stick).
+    // MQ2MoveUtils' words E3 sends are taken too:
+    //  - pause / unpause: hold the stick (and any walk) where it is, and let it go on (NavControl::set_paused);
+    //  - imsafe: lifts MQ2MoveUtils' lock after a GM or summon break, which Hailstone has none of: nothing to do;
+    //  - hold: keep to this spawn whatever is targeted later, which Hailstone's stick always does;
+    //  - uw / underwater, delaystrafe: accepted, not acted on yet (looking up and down at the spawn; a pause before
+    //    strafing back into place);
+    //  - moveback: accepted, not acted on yet (backing off a spawn that comes nearer than the distance);
+    //  - snaproll [rear]: taken as behind (MQ2MoveUtils runs straight round to its back once, then faces it; E3
+    //    sends it only to get there before its real stick). Its left / right / face directions are not taken.
+    // front, !front, pin and behindonce are not supported yet.
     h.add_command(
         owner, "/stick",
         [context, say](std::string_view args) {
@@ -332,17 +373,36 @@ void add_nav_commands(plugin::Hooks& h, plugin::Hooks::Owner owner, const Comman
                 nav->unstick("You are no longer sticking to anything.");
                 return;
             }
+            if (!w.empty() && iequals(w[0], "pause")) { // "pause lock" too: Hailstone never unpauses on its own
+                nav->set_paused(true);
+                return;
+            }
+            if (!w.empty() && iequals(w[0], "unpause")) {
+                nav->set_paused(false);
+                return;
+            }
+            if (!w.empty() && iequals(w[0], "imsafe")) return;
             nav::StickOptions opt;
             std::uint32_t id = conn->world().target_id;
             for (std::size_t i = 0; i < w.size(); ++i) {
                 if (iequals(w[i], "behind")) {
                     opt.behind = true;
+                } else if (iequals(w[i], "snaproll")) {
+                    opt.behind = true;
+                    if (i + 1 < w.size() && iequals(w[i + 1], "rear")) ++i;
+                } else if (iequals(w[i], "hold") || iequals(w[i], "uw") || iequals(w[i], "underwater") ||
+                           iequals(w[i], "delaystrafe") || iequals(w[i], "moveback")) {
+                    // accepted (above)
                 } else if (iequals(w[i], "id") && id_number<std::uint32_t>(w, i + 1)) {
                     id = *id_number<std::uint32_t>(w, ++i);
                 } else if (auto d = number(w, i); d && *d > 0.0f) {
                     opt.distance = *d;
+                } else if (iequals(w[i], "front") || iequals(w[i], "!front") || iequals(w[i], "pin") ||
+                           iequals(w[i], "behindonce")) {
+                    say("[Stick] /stick " + w[i] + " is not supported yet.");
+                    return;
                 } else {
-                    say("Usage: /stick [<distance>] [behind] [id <#>] | off");
+                    say("Usage: /stick [<distance>] [behind] [id <#>] [hold] | off | pause | unpause");
                     return;
                 }
             }
@@ -361,6 +421,77 @@ void add_nav_commands(plugin::Hooks& h, plugin::Hooks::Owner owner, const Comman
             say(std::format("You are now sticking to {}{} ({:.0f}).",
                             it != spawns.end() ? game::display_name(it->second.name) : std::string("it"),
                             opt.behind ? ", behind" : "", st.stick_distance));
+        },
+        plugin::kCapMove);
+
+    // /afollow (MQ2AdvPath's words; Hailstone's own walk, NavControl::afollow): follow the target, or a spawn by id,
+    // along the trail it leaves. The distance and door words are kept for the follows after them, as MQ2AdvPath keeps
+    // them, and each starts a follow of the target too (E3 sends "/afollow on nodoor <distance>").
+    //  - /afollow alone: stops a follow, else follows the target;
+    //  - on: follows the target; spawn <id>: that spawn; off: stops; pause / unpause;
+    //  - <distance> (at least 1; 10 at first), door / nodoor (open doors in the way or not; door at first);
+    //  - help.
+    auto settings = std::make_shared<nav::AFollowOptions>();
+    h.add_command(
+        owner, "/afollow",
+        [context, say, settings](std::string_view args) {
+            const Context& ctx = context();
+            nav::NavControl* nav = ctx.nav;
+            const net::GameConnection* conn = ctx.conn;
+            if (!nav || !conn || !conn->world().player()) return;
+            const std::vector<std::string> w = words(args);
+            if (w.empty() && nav->status().afollow_spawn != 0) {
+                nav->afollow_off("[AFollow] Off.");
+                return;
+            }
+            if (!w.empty() && (iequals(w[0], "off") || iequals(w[0], "stop"))) {
+                nav->afollow_off("[AFollow] Off.");
+                return;
+            }
+            if (!w.empty() && iequals(w[0], "pause")) {
+                nav->set_paused(true);
+                return;
+            }
+            if (!w.empty() && iequals(w[0], "unpause")) {
+                nav->set_paused(false);
+                return;
+            }
+            if (!w.empty() && iequals(w[0], "help")) {
+                say("[AFollow] /afollow [on] [<distance>] [door|nodoor] [spawn <id>] | off | pause | unpause");
+                say("[AFollow] Follows your target (or the spawn) the way it walks; your movement keys stop it.");
+                return;
+            }
+            std::uint32_t id = conn->world().target_id;
+            for (std::size_t i = 0; i < w.size(); ++i) {
+                if (iequals(w[i], "on")) {
+                    // follow (below)
+                } else if (iequals(w[i], "door")) {
+                    settings->doors = true;
+                } else if (iequals(w[i], "nodoor")) {
+                    settings->doors = false;
+                } else if (iequals(w[i], "spawn") && id_number<std::uint32_t>(w, i + 1)) {
+                    id = *id_number<std::uint32_t>(w, ++i);
+                } else if (auto d = number(w, i)) {
+                    settings->distance = std::max(*d, 1.0f);
+                } else {
+                    say("Usage: /afollow [on] [<distance>] [door|nodoor] [spawn <id>] | off | pause | unpause");
+                    return;
+                }
+            }
+            if (id == 0 || id == conn->world().player_id) {
+                say("[AFollow] You must have a target to follow.");
+                return;
+            }
+            const std::string err = nav->afollow(id, *settings);
+            if (!err.empty()) {
+                say("[AFollow] " + err + ".");
+                return;
+            }
+            const auto& spawns = conn->world().spawns;
+            const auto it = spawns.find(id);
+            say(std::format("[AFollow] Following {} ({:.0f}{}).",
+                            it != spawns.end() ? game::display_name(it->second.name) : std::string("it"),
+                            settings->distance, settings->doors ? "" : ", no doors"));
         },
         plugin::kCapMove);
 }

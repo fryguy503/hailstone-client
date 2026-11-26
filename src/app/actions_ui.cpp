@@ -301,13 +301,7 @@ bool ActionsUi::close_top_window() {
 }
 
 void ActionsUi::message(net::GameConnection& conn, const mech::SkillMessage& m) {
-    std::vector<std::string> args;
-    for (const std::string& a : m.args) {
-        // "@<id>": an eqstr text (the original copies getString(id) into the argument).
-        if (!a.empty() && a[0] == '@') args.push_back(conn.strings().format(static_cast<std::uint32_t>(std::stoul(a.substr(1))), {}));
-        else args.push_back(a);
-    }
-    messages_.push_back({conn.strings().format(m.eqstr, args), m.color});
+    messages_.push_back({mech::format_skill_message(conn.strings(), m), m.color});
     log::info("skill: {}", messages_.back().first);
 }
 
@@ -405,7 +399,8 @@ mech::SkillContext ActionsUi::context(net::GameConnection& conn, const mech::Cha
     ctx.speed_z = v.z;
     ctx.cursor_has_item = conn.inventory().at(net::ItemSlot::possessions(net::kSlotCursor)) != nullptr;
     ctx.can_see_target = view.can_see_target;
-    ctx.form_slam = mech::slam_innate(skill_race(conn, ch)); // current form; illusions can grant/lose Slam
+    ctx.form_race = skill_race(conn, ch);
+    ctx.form_slam = mech::slam_innate(ctx.form_race); // current form; illusions can grant/lose Slam
     if (ctx.target && !ctx.target_is_me) ctx.allowed_to_attack = conn.allowed_to_attack(world.target_id, -1);
     ctx.attack_locked = conn.attack_locked();
     ctx.backstab_either_hand = conn.server_ext().backstab_either_hand(conn);
@@ -623,6 +618,7 @@ void ActionsUi::run_socials(net::GameConnection& conn) {
             // "%s %s %d" of eqstr 0x3773 (/alternateadv) and 0x33d9 (act).
             c.send_command(c.strings().format(0x3773, {}) + " " + c.strings().format(0x33d9, {}) + " " + std::to_string(group));
         }
+        bool allow_directive(std::string_view name) override { return c.allow_server_command(name); }
         bool cooldown_running(std::int32_t social) override {
             return social >= 0 && social < 120 && ui.store_.social(social).cooldown_length != 0;
         }

@@ -111,6 +111,19 @@ vec3 material_tint(uint argb) {
     return vec3(float((argb >> 16) & 0xffu), float((argb >> 8) & 0xffu), float(argb & 0xffu)) / 255.0;
 }
 
+vec3 actor_haze(vec3 color) {
+    // The scene behind an additive draw already contains the scattered light. Only attenuate the contribution
+    // from the actor, so a black texel on a wing or glow card still adds zero.
+    vec4 haze_color = kAdditive ? vec4(0.0) : lighting.haze_color;
+    vec4 haze_light = kAdditive ? vec4(0.0) : lighting.light;
+    return apply_haze(color, v_world, lighting.camera, lighting.haze, haze_color, lighting.to_light, haze_light);
+}
+
+vec3 actor_classic_fog(vec3 color) {
+    vec3 fog_color = kAdditive ? vec3(0.0) : pc.fog_color.rgb;
+    return to_linear(mix(fog_color, color, v_fog));
+}
+
 void main() {
     uint material = uint(pc.camera_pos.w);
     bool unlit = (material & 4096u) != 0u, fogged = (material & 8192u) == 0u;
@@ -173,10 +186,7 @@ void main() {
         // AddAlpha's authored SELECTARG1 texture colour is independent of scene light, including in previews.
         color = to_linear(base);
         if (fogged)
-            color = lighting.params.x > 0.5
-                ? apply_haze(color, v_world, lighting.camera, lighting.haze, lighting.haze_color,
-                             lighting.to_light, lighting.light)
-                : to_linear(mix(pc.fog_color.rgb, base, v_fog));
+            color = lighting.params.x > 0.5 ? actor_haze(color) : actor_classic_fog(base);
     } else if (lighting.params.x > 0.5) {
         // Modern (render/scene_lighting.h): the daylight, the special ambient and the nearby point lights, per pixel
         // and wrapped for the rounded bodies, never below the floor so a character stays readable in the dark.
@@ -231,7 +241,7 @@ void main() {
                               zone_surface_gloss(native_surface, packed_channels, surface.params.y));
         // The rain's sheen on whoever stands out in it (shaders/weather.glsl), lighter than the ground's; no snow:
         // they move, and drifts fixed in the world would slide over them.
-        if (lighting.weather.x > 0.0) {
+        if (!kAdditive && lighting.weather.x > 0.0) {
             float open = sky_open(shadow_map, lighting.cover, lighting.cover_params, lighting.shadow_params.y, v_world + n * 0.5);
             if (open > 0.0) {
                 vec3 horizon = lighting.haze.z > 0.5 ? lighting.haze_color.rgb : to_linear(pc.fog_color.rgb);
@@ -240,11 +250,11 @@ void main() {
             }
         }
         if (glowing) shaded += zone_surface_glow(to_linear(base), native_surface.b, true);
-        color = fogged ? apply_haze(shaded, v_world, lighting.camera, lighting.haze, lighting.haze_color,
-                                    lighting.to_light, lighting.light) : shaded;
-        color += underwater_shafts(water_map, lighting.cover, lighting.cover_params, lighting.camera.xyz, v_world,
-                                   lighting.to_light, lighting.light, lighting.haze_color.rgb, lighting.time.x,
-                                   caustic_hash(gl_FragCoord.xy));
+        color = fogged ? actor_haze(shaded) : shaded;
+        if (!kAdditive)
+            color += underwater_shafts(water_map, lighting.cover, lighting.cover_params, lighting.camera.xyz, v_world,
+                                       lighting.to_light, lighting.light, lighting.haze_color.rgb, lighting.time.x,
+                                       caustic_hash(gl_FragCoord.xy));
     } else {
         // Classic (render::classic_actor_light, its mirror; not the original's, which is not traced): the region
         // shaders' vertex light for the zone's baked light where the player stands, so a character takes the light of
@@ -269,7 +279,7 @@ void main() {
                                         lava_secondary, lava_alpha, bump);
         }
         if (glowing) color += zone_surface_glow(base, native_surface.b, false);
-        color = to_linear(mix(pc.fog_color.rgb, color, v_fog));
+        color = actor_classic_fog(color);
     }
     o_color = vec4(color, kPreview && kAdditive ? preview_additive_alpha(color) : out_alpha);
     // Additive, a fragment adds its colour as it is: one that adds little (a glow's faint spread) leaves the motion of

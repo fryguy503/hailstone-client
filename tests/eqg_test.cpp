@@ -4,12 +4,15 @@
 #include <limits>
 #include <optional>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <random>
 #include <string>
 #include <vector>
 #include <glm/gtc/matrix_transform.hpp>
@@ -705,8 +708,14 @@ TEST_CASE("Crescent Reach loads as an EQG zone with water regions" * doctest::sk
     CHECK_FALSE(is_eqg_zone(game, "qeynos2"));
     auto z = load_zone(game, "crescent");
     REQUIRE(z.terrain.size() == 1);
-    CHECK(z.terrain[0].indices.size() / 3 == 67484);
-    CHECK(z.placements.size() == 2341);
+    CHECK_FALSE(z.terrain[0].indices.empty());
+    CHECK(z.terrain[0].indices.size() % 3 == 0);
+    CHECK_FALSE(z.placements.empty());
+    // A live install's crescent.eqg has another terrain and object list; the counts are the reference folder's.
+    if (hailstone::test::reference_folder()) {
+        CHECK(z.terrain[0].indices.size() / 3 == 67484);
+        CHECK(z.placements.size() == 2341);
+    }
     CHECK(z.regions.region_count() == 58);
     // AWT_river30 (index 31): narrow in X, long in Y (OpenEQ's orientation fixture).
     glm::vec3 river(-1091.171875f, -2348.66162109375f, -204.40826416015625f);
@@ -1017,6 +1026,65 @@ TEST_CASE("unpainted heightmap tiles take the nearest painted tile") {
     std::map<std::pair<std::int32_t, std::int32_t>, std::size_t> edge{{{lo + 1, hi}, 7}};
     CHECK(eqg::nearest_painted_tile(lo, hi, edge) == 7u);
     CHECK_FALSE(eqg::nearest_painted_tile(hi, lo, edge).has_value());
+}
+
+TEST_CASE("nearest_painted_tile: the ring's cells only give what the whole square gave, ties and all") {
+    // The search as it was: every cell of the square, those off the ring skipped.
+    using Painted = std::map<std::pair<std::int32_t, std::int32_t>, std::size_t>;
+    auto square = [](std::int32_t lng, std::int32_t lat, const Painted& painted, std::int32_t reach) {
+        for (std::int32_t ring = 1; ring <= reach; ++ring) {
+            std::optional<std::size_t> best;
+            std::int64_t best_d2 = 0;
+            for (std::int32_t dy = -ring; dy <= ring; ++dy)
+                for (std::int32_t dx = -ring; dx <= ring; ++dx) {
+                    if (std::max(std::abs(dx), std::abs(dy)) != ring) continue;
+                    auto it = painted.find({lng + dx, lat + dy});
+                    if (it == painted.end()) continue;
+                    const std::int64_t d2 = std::int64_t{dx} * dx + std::int64_t{dy} * dy;
+                    if (!best || d2 < best_d2) {
+                        best = it->second;
+                        best_d2 = d2;
+                    }
+                }
+            if (best) return best;
+        }
+        return std::optional<std::size_t>{};
+    };
+    std::mt19937 rng(20261124);
+    for (int round = 0; round < 200; ++round) {
+        Painted painted;
+        const int count = std::uniform_int_distribution<int>(1, 12)(rng);
+        std::uniform_int_distribution<std::int32_t> at(-20, 20);
+        for (int i = 0; i < count; ++i) painted.emplace(std::pair{at(rng), at(rng)}, static_cast<std::size_t>(i));
+        for (std::int32_t lat = -24; lat <= 24; lat += 3)
+            for (std::int32_t lng = -24; lng <= 24; lng += 3) {
+                CAPTURE(round);
+                CAPTURE(lng);
+                CAPTURE(lat);
+                CHECK(eqg::nearest_painted_tile(lng, lat, painted) == square(lng, lat, painted, 16));
+                CHECK(eqg::nearest_painted_tile(lng, lat, painted, 4) == square(lng, lat, painted, 4));
+            }
+    }
+    // Opposite corners of ring 1 tie: the lower lat wins, though the map holds the other first.
+    Painted corners{{{-1, 1}, 0}, {{1, -1}, 1}};
+    CHECK(eqg::nearest_painted_tile(0, 0, corners) == 1u);
+    CHECK(square(0, 0, corners, 16) == 1u);
+}
+
+TEST_CASE("nearest_painted_tile: a lookup budget bounds the search and gives none once spent") {
+    std::map<std::pair<std::int32_t, std::int32_t>, std::size_t> painted{{{5, 0}, 3}};
+    // Rings 1 to 5 look up 8 + 16 + 24 + 32 + 40 = 120 cells; (5, 0) is found in the last.
+    std::uint64_t budget = 120;
+    CHECK(eqg::nearest_painted_tile(0, 0, painted, 16, &budget) == 3u);
+    CHECK(budget == 0);
+    budget = 119;
+    CHECK_FALSE(eqg::nearest_painted_tile(0, 0, painted, 16, &budget).has_value());
+    CHECK(budget == 0);
+    CHECK_FALSE(eqg::nearest_painted_tile(1, 0, painted, 16, &budget).has_value());
+    // A far tile with nothing in reach spends a ring's cells each: 16 rings, 1088 lookups.
+    budget = 5000;
+    CHECK_FALSE(eqg::nearest_painted_tile(100, 100, painted, 16, &budget).has_value());
+    CHECK(budget == 5000 - 1088);
 }
 
 TEST_CASE("animated texture sidecars list their frames") {

@@ -9,6 +9,7 @@ local API = hs.UI
 local T = dofile("lib/theme.lua")
 local C = T.color
 local stml = dofile("lib/stml.lua")
+local stmlBlocks = dofile("lib/stml_blocks.lua")
 
 local K = {}
 
@@ -22,9 +23,45 @@ function K.FooterH(s) return K.ButtonH(s) + 8 * s end
 -- opts.place for a dialog that opens in the middle of the screen (a question, a prompt).
 function K.Centered(W, H, w, h) return W / 2 - w / 2, H * 0.42 - h / 2 end
 
+local function styledBlocks(raw, color, tables)
+  local blocks = tables and stmlBlocks.parse(raw) or { { text = raw } }
+  for _, block in ipairs(blocks) do
+    if block.rows then
+      for _, row in ipairs(block.rows) do
+        for i, cell in ipairs(row) do row[i] = stml.Lines(cell, color) end
+      end
+    else
+      block.lines = stml.Lines(block.text, color)
+    end
+  end
+  return blocks
+end
+
+local function drawLines(lines, onLink)
+  local width = ui.GetContentRegionAvail()
+  for _, line in ipairs(lines) do stml.DrawLine(line, width, onLink) end
+end
+
+local function drawBlocks(blocks, onLink)
+  for i, block in ipairs(blocks) do
+    if block.lines then
+      drawLines(block.lines, onLink)
+    elseif ui.BeginTable("##stml" .. i, block.columns) then
+      for _, row in ipairs(block.rows) do
+        ui.TableNextRow()
+        for _, cell in ipairs(row) do
+          if ui.TableNextColumn() then drawLines(cell, onLink) end
+        end
+      end
+      ui.EndTable()
+    end
+  end
+end
+
 -- A text box: an inset, padded, scrolled area with the child's text. opts.plain: the text as lines (a book's
 -- page) rather than STML; opts.font; opts.color (the text's colour outside any <c>); opts.bg (the inset's colour);
 -- opts.border = false (no hairline: text that sits on the window itself); opts.empty (shown while there is no text).
+-- opts.tables enables STML table layout for server popups.
 -- w, h as for ui.BeginChild (0: the rest; negative: leave that much). Links go to the window (hs.StmlLink). A new
 -- text is shown from its top.
 local cache = {}
@@ -35,11 +72,10 @@ function K.TextBox(win, id, w, h, opts)
   if not byId then byId = {}; cache[win] = byId end
   local c = byId[id]
   local changed = c and c.raw ~= raw
-  if not c or c.raw ~= raw or c.plain ~= opts.plain then
-    local lines = nil
-    if not opts.plain then lines = stml.Lines(raw, opts.color) end
+  if not c or c.raw ~= raw or c.plain ~= opts.plain or c.tables ~= opts.tables then
     -- (the link handler is made with the lines, not once a line a frame)
-    c = { raw = raw, plain = opts.plain, lines = lines,
+    c = { raw = raw, plain = opts.plain, tables = opts.tables,
+      blocks = not opts.plain and styledBlocks(raw, opts.color, opts.tables),
       onLink = function(link) API.windows.StmlLink(win, id, link[1], link[2]) end }
     byId[id] = c
   end
@@ -56,8 +92,7 @@ function K.TextBox(win, id, w, h, opts)
     local col = opts.color or C.text
     for line in (raw .. "\n"):gmatch("(.-)\n") do ui.TextColored(col[1], col[2], col[3], 1, line) end
   else
-    local width = ui.GetContentRegionAvail()
-    for _, line in ipairs(c.lines) do stml.DrawLine(line, width, c.onLink) end
+    drawBlocks(c.blocks, c.onLink)
   end
   if raw == "" and opts.empty then ui.TextColored(C.faint[1], C.faint[2], C.faint[3], 1, opts.empty) end
   if opts.font then ui.PopFont() end

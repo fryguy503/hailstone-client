@@ -143,6 +143,24 @@ float point_segment_distance_squared(const PickSegment& s, const glm::vec3& p) {
     return glm::dot(q, q);
 }
 
+std::optional<glm::vec3> pick_ground_placement(const PickSegment& seg, const PickScene& scene) {
+    if (!scene.world) return std::nullopt;
+    float first = 1.0f;
+    bool ground = false;
+    scene.world(seg, [&](const PickTriangle& tri) {
+        constexpr auto hidden = kTriangleTransparent | kTriangleInvisible | kTriangleLadderSlab |
+                                kTriangleNoVisualSurface;
+        const float facing = glm::dot(tri.normal, seg.dir);
+        if ((tri.flags & hidden) || !(facing < 0.0f || (facing > 0.0f && tri.visual_two_sided))) return;
+        const auto hit = segment_triangle_distance(seg, tri.v0, tri.v1, tri.v2);
+        if (!(hit.distance_squared <= kPickHitDistanceSquared && hit.t < first)) return;
+        first = hit.t;
+        ground = facing < 0.0f && !(tri.flags & kTrianglePassable) && tri.normal.z >= 0.5f;
+    });
+    if (!ground) return std::nullopt;
+    return seg.start + seg.dir * first;
+}
+
 PickHit pick_actor(const PickSegment& seg, const PickScene& scene, std::uint32_t required, std::uint32_t skip) {
     PickHit out;
     const float dir_len = glm::length(seg.dir);

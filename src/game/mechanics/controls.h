@@ -14,6 +14,7 @@
 // camera, chat) is a ControlsQueries call too, in the original's order.
 
 #include <cstdint>
+#include <optional>
 
 #include "game/mechanics/fpu.h"
 
@@ -104,6 +105,7 @@ struct ControlsState {
     // ranged_queued / throw_queued): DoAttack(13) / DoAttack(14) while auto attack is on.
     bool primary_ready = false;      // 0xde0864
     bool secondary_ready = false;    // 0xde0865
+    std::optional<bool> swim_jump;   // follow can supply a jump intent independent of the camera
 
     ControlSpawn& spawn(ControlWho w) { return w == ControlWho::Local && !controlled_is_local ? local : controlled; }
 };

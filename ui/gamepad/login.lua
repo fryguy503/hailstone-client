@@ -965,7 +965,8 @@ end
 local CORNER_FLAGS = ui.WindowFlags.NoDecoration | ui.WindowFlags.NoInputs | ui.WindowFlags.NoSavedSettings
   | ui.WindowFlags.NoFocusOnAppearing | ui.WindowFlags.NoBringToFrontOnFocus | ui.WindowFlags.AlwaysAutoResize
   | ui.WindowFlags.NoBackground
-local CORNER_COLORS = { uptodate = "good", checking = "dim", newer = "gold", unknown = "faint", off = "faint" }
+local CORNER_COLORS = { uptodate = "good", checking = "dim", newer = "gold", unknown = "faint", off = "faint",
+  behind = "bad" }
 local function corner(v)
   local a = v.about
   if not a then return end

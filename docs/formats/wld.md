@@ -321,6 +321,13 @@ take the placement transform without a sprite's mesh centre or any bone's motion
 volume supplies collision in place of both the still and the animated sprite faces. Warsliks Woods' pines use
 narrow trunk volumes even though some of their masked branch polygons carry solid flags.
 
+**Jungle foliage.** The leaf cards on four jungle actors carry solid flags without a skeleton volume. The client
+makes those parts passable to match the EQEmu zone collision maps, which omit the leaves and keep the solid stems.
+The correction matches the actor and the leaf material's name and masked render method (0x80000013). It applies to
+`CMPLANT105`, `CMPLANT105B` and `JNTREE101` with `CMPLANT105_MDF`, and `JNTREE102` with `JNTR2LEAF_MDF`.
+These models occur in Trakanon's Teeth, Emerald Jungle and other classic zones. Their leaf animation and drawing
+still use the original sprite geometry.
+
 **Keys and interval.** Key i of a track stands at i × interval ms. The interval is the 0x13 fragment's timing word
 when its flag 1 is set, else 100 (`0x1001b0bc`, `0x1001b116`).
 

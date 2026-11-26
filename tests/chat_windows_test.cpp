@@ -33,6 +33,11 @@
 using namespace hailstone;
 namespace fs = std::filesystem;
 
+namespace hailstone::app {
+void chat_layout_loaded(ui::UiIni& ini, UiHost& host, const fs::path& user_dir, bool profile_change);
+void chat_host_gone(const UiHost& host, const ui::UiIni& ini);
+}
+
 namespace {
 
 struct Lua {
@@ -479,6 +484,48 @@ assert(calls[2][1] == 7 and calls[2][2] == 2)
     const int result = luaL_dostring(state, code.c_str());
     INFO((result == LUA_OK ? "" : lua_tostring(state, -1)));
     CHECK(result == LUA_OK);
+}
+
+TEST_CASE("Layout profiles: chat reload reroutes visible scrollback and keeps cleared messages hidden") {
+    ImGuiContext* ctx = ImGui::CreateContext();
+    hailstone::test::ScratchDir scratch("layout_profile_scrollback");
+    {
+        GameDir game(scratch.path());
+        ui::ChatView view;
+        app::UiHost host;
+        host.in_game = host.ui_ready = true;
+        host.game = &game;
+        host.chat = &view;
+        app::UiApi api(host);
+        api.load_layout({}, scratch.path() / "UI.ini", {});
+        Lua lua(api);
+        lua.run(kLines + std::string("_G.lines = lines"));
+        view.add(ui::ChatChannel::Say, "cleared");
+        CHECK(lua.run("return lines(1)") == "cleared");
+        lua.run("hs.ChatClear(1)");
+        view.add(ui::ChatChannel::Say, "visible main");
+        view.add(ui::ChatChannel::Group, "visible group");
+        CHECK(lua.run("return lines(1)") == "visible main|visible group");
+        view.add(ui::ChatChannel::Group, "pending group");
+
+        IniFile saved;
+        saved.set_int("ChatManager", "NumWindows", 1);
+        saved.set_int("ChatManager", "ChatWindow1_LanguageId", 0);
+        saved.set_int("ChatManager", "ChatWindow1_FontStyle", 9);
+        saved.set_int("ChatManager", std::format("ChannelMap{}", game::chat_channel_of_color(258)), 1);
+        const auto layout_file = scratch.path() / "profile-test.ini";
+        REQUIRE(saved.save(layout_file));
+        ui::UiIni layout;
+        layout.load({}, layout_file);
+        app::chat_layout_loaded(layout, host, scratch.path(), true);
+        CHECK(lua.run("return lines(1)") == "visible main");
+        CHECK(lua.run("return lines(2)") == "visible group|pending group");
+        CHECK(lua.run("local font = hs.ChatInfo(2); return font") == "9");
+        app::chat_layout_loaded(layout, host, scratch.path(), false);
+        CHECK(lua.run("local font = hs.ChatInfo(2); return font") == "3");
+        app::chat_host_gone(host, layout);
+    }
+    ImGui::DestroyContext(ctx);
 }
 
 TEST_CASE("Chat windows: each window keeps its own last 1000 lines; a busy one does not push out a quiet one's") {
@@ -1159,7 +1206,75 @@ TEST_CASE("Chat windows: Always Chat Here takes the chat keys; the main window h
     ImGui::DestroyContext(ctx);
 }
 
-TEST_CASE("Chat windows: the chat history keeps each line's time; a version 1 file reads without times") {
+TEST_CASE("Chat windows: named chat groups route, expand, and keep ungrouped readers working") {
+    hailstone::test::ScratchDir dir_scratch("chat_client_messages_test");
+    const fs::path dir = dir_scratch.path();
+    fs::create_directories(dir / "game");
+    write_strings(dir / "game");
+    GameDir game(dir / "game");
+    ui::ChatView view;
+    app::UiHost host;
+    host.in_game = host.ui_ready = true;
+    host.game = &game;
+    host.chat = &view;
+    const fs::path layout = dir / "UI_Test_Server.ini";
+    std::ofstream(layout) << "[ChatManager]\nNumWindows=1\nChatWindow1_LanguageId=0\n"
+                          << "ChatWindow1_Name=System\nChatWindow1_Dock=-1\nChannelMap"
+                          << game::chat_channel_of_color(273) << "=1\n";
+    app::UiApi api(host);
+    api.load_layout(dir / "defaults.ini", layout, {});
+    Lua lua(api);
+
+    view.add(ui::ChatChannel::System, "[Lua] initial sign-in");
+    view.add(ui::ChatChannel::System, "You have entered The Skyfire Mountains.");
+    view.add_client_messages({});
+    view.add_client_messages({"[Lua] stow <stopped>", "[Plugin] crest loaded"});
+    view.add(ui::ChatChannel::Say, "Hello!");
+    CHECK(lua.run(kLines + std::string("return lines(1)")) == "Hello!");
+    CHECK(lua.run(kLines + std::string("return lines(2)")) ==
+          "[Lua] initial sign-in|You have entered The Skyfire Mountains.|[Lua] stow &lt;stopped&gt;|[Plugin] crest loaded");
+    CHECK(lua.run(R"lua(
+local lines, reset, count
+version, lines, reset, count = hs.ChatText(2, nil, false, false, true, true)
+id = lines[3]:match('WndNotify="1003,(%d+)"')
+return reset and count == 3 and #lines == 3 and id ~= nil
+   and lines[3]:find('#edc375', 1, true) ~= nil
+   and lines[3]:find('+ Client System Messages [2]', 1, true) ~= nil
+   and not lines[3]:find('crest', 1, true)
+)lua") == "true");
+    CHECK(lua.run("hs.ChatLink(1, 1003, id); return select(2, hs.ChatText(2, version, false, false, true, true)) == nil") ==
+          "true");
+    CHECK(lua.run(R"(
+hs.ChatLink(2, 1003, id)
+local nextVersion, lines, reset, count = hs.ChatText(2, version, false, false, true, true)
+version = nextVersion
+return reset and count == 3 and #lines == 3
+   and lines[3]:find('- Client System Messages [2]', 1, true) ~= nil
+   and lines[3]:find('[Lua] stow &lt;stopped&gt;', 1, true) ~= nil
+   and lines[3]:find('[Plugin] crest loaded', 1, true) ~= nil
+)") == "true");
+    CHECK(lua.run(R"(
+hs.ChatLink(2, 1003, id)
+local lines, reset
+version, lines, reset = hs.ChatText(2, version, false, false, true, true)
+return reset and lines[3]:find('+ Client System Messages [2]', 1, true) ~= nil and not lines[3]:find('crest', 1, true)
+)") == "true");
+    view.add_chat_group("Raid <Plan> & Ready", {"First", "Second"});
+    CHECK(lua.run(R"lua(
+local _, lines, reset, count = hs.ChatText(2, version, false, false, true, true)
+local raidId = lines[1]:match('WndNotify="1003,(%d+)"')
+assert(not reset and count == 4 and #lines == 1 and raidId ~= id)
+assert(lines[1]:find('+ Raid &lt;Plan&gt; &amp; Ready [2]', 1, true))
+hs.ChatLink(2, 1003, raidId)
+local _, opened = hs.ChatText(2, nil, false, false, true, true)
+return opened[3]:find('+ Client System Messages [2]', 1, true) ~= nil
+   and opened[4]:find('- Raid &lt;Plan&gt; &amp; Ready [2]', 1, true) ~= nil
+   and opened[4]:find('First', 1, true) ~= nil and opened[4]:find('Second', 1, true) ~= nil
+)lua") == "true");
+    CHECK(lua.run("hs.ChatClear(2); hs.ChatLink(2, 1003, id); return #select(2, hs.ChatText(2))") == "0");
+}
+
+TEST_CASE("Chat windows: the chat history keeps times and client-message groups, and reads old formats") {
     ImGuiContext* ctx = ImGui::CreateContext();
     hailstone::test::ScratchDir dir_scratch("chat_history_test");
     fs::path dir = dir_scratch.path();
@@ -1200,6 +1315,34 @@ TEST_CASE("Chat windows: the chat history keeps each line's time; a version 1 fi
     session([&](Lua& lua, ui::ChatView&) {
         CHECK(lua.run(stamped) == "0/2");
         CHECK(lua.run("local _, l = hs.ChatText(1) return (l[1]:gsub('<[^>]*>', ''))") == "old line");
+    });
+    std::ofstream(file) << "# Hailstone chat history 2\n" << "1\t0\t0\t600\t\ttimed line\n";
+    session([&](Lua& lua, ui::ChatView& view) {
+        CHECK(lua.run(stamped) == "1/2");
+        view.add_chat_group("Raid <Plan> & Ready", {"[Lua]\tpath\\file", "[Plugin] line 1\nline 2"});
+        view.toggle_chat_group(view.lines.back());
+    });
+    {
+        std::ifstream saved(file);
+        std::string line;
+        REQUIRE(std::getline(saved, line));
+        CHECK(line == "# Hailstone chat history 2");
+        REQUIRE(std::getline(saved, line));
+        CHECK(line == "1\t0\t0\t600\t\ttimed line");
+        REQUIRE(std::getline(saved, line));
+        CHECK(line == "# Hailstone chat group\t2\tRaid <Plan> & Ready");
+        REQUIRE(std::getline(saved, line));
+        CHECK(line.ends_with("\t\t[Lua]\\tpath\\\\file"));
+        REQUIRE(std::getline(saved, line));
+        CHECK(line.ends_with("\t\t[Plugin] line 1\\nline 2"));
+    }
+    session([&](Lua& lua, ui::ChatView& view) {
+        REQUIRE(view.lines.size() == 3);
+        CHECK(view.lines[1].text == "Raid <Plan> & Ready");
+        CHECK(view.lines[1].group_messages == std::vector<std::string>{"[Lua]\tpath\\file", "[Plugin] line 1\nline 2"});
+        CHECK_FALSE(view.lines[1].group_expanded);
+        CHECK(lua.run("local _, l = hs.ChatText(1, nil, false, false, true, true) "
+                      "return l[2]:find('+ Raid &lt;Plan&gt; &amp; Ready [2]', 1, true) ~= nil") == "true");
     });
     ImGui::DestroyContext(ctx);
 }

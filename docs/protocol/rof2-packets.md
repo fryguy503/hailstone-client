@@ -21,7 +21,7 @@ What `src/net/world_packets.*` and `src/net/zone_packets.*` encode and decode, a
 3. C→W `OP_World_Client_CRC1/2/3` after each character list, and CRC1 again before every `OP_EnterWorld`.
 4. C→W `OP_WorldClientReady` (empty) once the character select screen is up, after the first list's checksums. EQEmu's world eats it.
 5. Character creation (section 3).
-6. C→W `OP_EnterWorld` (72 B). W→C `OP_MOTD`, `OP_SetChatServer`, `OP_SetChatServer2`, (an `OP_GroupUpdate` for grouped characters), then `OP_ZoneServerInfo` or `OP_ZoneUnavail`.
+6. C→W `OP_EnterWorld` (72 B). W→C `OP_MOTD`, `OP_SetChatServer`, `OP_SetChatServer2`, (an `OP_GroupUpdate` for grouped characters), then `OP_ZoneServerInfo` or `OP_ZoneUnavail`. An `OP_ZoneServerInfo` at any other time (before `OP_EnterWorld`, or a second one) is logged and ignored.
 7. C→W `OP_WorldComplete` (empty). World closes the connection (EQEmu: `eqs->Close()`). The client connects to the zone only after world has dropped the link, and gives up after 30 s ("World did not drop the connection"). Without it, EQEmu drops the idle world client about 3 s later.
 
 While zoning (`LoginInfo::zoning = true`), world skips the guild list and character list. The client re-sends CRC1 and `OP_EnterWorld` with the name world sent in its `OP_EnterWorld`.
@@ -315,7 +315,7 @@ Consent rules:
 | ItemLinkResponse | Z→C | 0x70c0 | same as ItemPacket with type 0 (`SendItemPacket(0, inst, ItemPacketViewLink)`) |
 | MoveItem | both | 0x32ee | 28 B: InventorySlot from, InventorySlot to, u32 count. See note 1 |
 | DeleteItem | both | 0x18ad | same 28 B; the server's resync sends {slot, invalid, 0xffffffff}; the client takes -count off the stack and removes an emptied one |
-| DeleteCharge | Z→C | 0x01b8 | encoded as OP_MoveItem |
+| DeleteCharge | Z→C | 0x01b8 | MoveItem layout. Spends one charge on an item that stays in inventory |
 | MoneyUpdate | Z→C | 0x640c | 16 B: u32 platinum, gold, silver, copper carried |
 | LootRequest | C→Z | 0x0adf | 4 B: u32 corpse spawn id. The server echoes it after the item packets |
 | MoneyOnCorpse | Z→C | 0x5f44 | 20 B: u8 response (0 someone else, 1/3 ok, 2 not now, 4 hostiles, 5 too far, 6 all items sent), u8 0x42/0x5a, u8 0xef/0x40, u8, u32 pp, gp, sp, cp (the coin is already added to the player) |
@@ -329,7 +329,8 @@ Consent rules:
 
 1. MoveItem. InventorySlot = i16 type (0 possessions, 1 bank, 2 shared bank, 3 trade, 4 world, 5 limbo, 9 merchant, 11 corpse), i16, i16 slot, i16 bag sub-slot (-1), i16 augment (-1), i16.
    - Client: count 0 = move/swap a whole item; a count only for stack merges/splits. to = {-1, -1, -1, -1, -1} destroys (`DestroyHeldItemOrMoney`).
-   - Server: to invalid deletes (count = charges for OP_DeleteCharge), else a swap/merge.
+   - Server `OP_MoveItem`: to invalid removes the item, else a swap/merge.
+   - Server `OP_DeleteCharge`: EQEmu sends `{from, invalid, 0xffffffff}` once per charge spent on a retained non-stackable item. When it removes an expended item, it sends `OP_MoveItem`.
 2. LootItem: the corpse slot is 23..56, the header slot of the loot item packet (type 11). Auto loot 1 = into the inventory, 0 = cursor; the server refuses a cursor loot while the cursor is full. Echoed when looted; then the item arrives as an item packet.
 3. AugmentItem: the host serial is instance id, parcel id, ignored by the server. The distiller is (-1, -1, 0xffff and 2 unwritten bytes) when none. The cursor augment is never named. No reply packet: the server answers with OP_ItemPacket 0x67 (the host rebuilt, same serial), OP_MoveItem / OP_DeleteItem, OP_ItemPacket 0x6a (an augment back on the cursor) or red chat.
 4. AugmentInfo request: the augment's SolventItemID and the display's index, the rest 0. Reply: the solvent's name, shown as eqstr 5881 (13325 when the last field is 55, never from EQEmu).
@@ -714,12 +715,12 @@ OP_TradeSkillCombine (above) goes out; the server's empty OP_TradeSkillCombine e
 | TaskDescription | Z→C | 0x3714 | u32 slot, u32 task id, u8 open journal, u32 type (0 task, 1 shared, 2 quest), u32 reward type; title; u32 duration, u32 duration code, u32 elapsed seconds (the RoF2 translator turns the start time into elapsed time); description; u8 has rewards, u32 coin, u32 xp, u32 faction; reward text; reward item link; u32 points; u8 reward selection |
 | TaskActivity | Z→C | 0x08d3 | u32 slot, u32 type, u32 task id, u32 element, u32 step; short form (25 B, a hidden element): u32 0xffffffff, u8 optional; else i32 element type, u8 optional, i32 0, target name, counted item list, i32 goal, counted skill list ("-1"), counted spell list ("0"), zones, i32 dz switch, description override, i32 done, u8 1, zones again |
 | CompletedTasks | Z→C | 0x4eba | u32 count, {u32 task id, title, u32 completed time} (the 50 most recent) |
-| TaskSelectWindow / SharedTaskSelectWindow | Z→C | 0x705b / 0x48a2 | u32 count, u32 type, u32 giver spawn; per task: u32 id, f32 reward multiplier, u32 duration, u32 duration code, title, description, u8 reward preview, u32 elements, per element: i32 index, i32 type, i32 0, target, counted items, i32 goal, counted skills, counted spells, zones, description, zones (up to 40 tasks) |
+| TaskSelectWindow / SharedTaskSelectWindow | Z→C | 0x705b / 0x48a2 | u32 count, u32 type, u32 giver spawn; per task: u32 id, f32 reward multiplier, u32 duration, u32 duration code, title, description, u8 reward preview, u32 elements, per element: i32 index, i32 type, i32 0, target, counted items, i32 goal, counted skills, counted spells, zones, description, zones (up to 40 tasks; more than 256 elements in a task refuses the packet, Hailstone's limit) |
 | AcceptNewTask | C→Z | 0x0a23 | 12 B: u32 the selection's type, u32 task id (0 declines), u32 giver |
 | SharedTaskAcceptNew | C→Z | 0x6646 | 20 B: 0, 0, u32 giver, u32 task id, f32 reward multiplier |
 | CancelTask | both | 0x39f0 | 8 B: u32 slot, u32 type. C→Z abandons; Z→C removes the task |
 | TaskHistoryRequest | C→Z | 0x5f1c | 4 B: the completed list index |
-| TaskHistoryReply | Z→C | 0x3d05 | u32 index, u32 count; per completed element: u32 type, target, counted items, u32 goal, counted "-1", counted "-1", zones, u32 0, description, u8 '1', zones |
+| TaskHistoryReply | Z→C | 0x3d05 | u32 index (50 or more is ignored), i32 count (the first 20 are read, as in the original); per completed element: u32 type, target, counted items, u32 goal, counted "-1", counted "-1", zones, u32 0, description, u8 '1', zones |
 | TaskActivityComplete | Z→C | 0x5e19 | 24 B: index, type, task id, element, completed (0 failed), stage completed. The client shows 6005 "Task Stage Completed", or 6003 / 6004 with the title, as large on-screen text |
 | TaskRequestTimer | Z→C | 0x7a48 | 4 B: milliseconds before another shared task request |
 | TaskTimers | C→Z | 0x2b0f | empty (/tasktimers) |
@@ -928,6 +929,15 @@ The language part is 1411 " in <language>," (language names from the client's ta
 | LFPGetMatchesResponse | Z→C | 0x22c6 | u32 (skipped), then {comments, i16 from, i16 to, u32 classes, i16 count, count × {name, i16 class, level, zone, guild}} |
 | Consent / ConsentDeny | C→Z | 0x1fd1 / 0x7a45 | the name, NUL-terminated |
 | SpawnAppearance 21 / 24 | C→Z | 0x0971 | anonymous flags (1 anonymous, 2 roleplaying) / AFK; other spawns' 18 linkdead, 20 GM, 22 guild id, 23 guild rank, 52 guild show, 53 offline mode update `game::Spawn` (the guild lines: Guilds below) |
+
+#### Chat: /who race labels
+
+The stock chat lines and the `raceName` field returned by `hs.WhoResults()` use the race id sent in
+`WhoAllResponse`, which may be the player's current illusion. As `HandleWhoAllResponse` (`0x4bc010`) does, a
+playable race takes the client's own name (`CharacterZoneClient_GetRaceDescription`) and any other race the name
+in `dbstr_us.txt` type 11 (`GetRaceDesc` at `0x515ce0`). Where RoF2 would print a missing, empty or `UNKNOWN RACE`
+entry as it stands, Hailstone deliberately uses its built-in race label instead: `Tree` for the Illusion Tree model
+(143), or `Race <id>` for an otherwise unknown id. A zero race id has an empty label.
 
 #### Chat: /who friends
 
@@ -1158,7 +1168,7 @@ Tried live against EQEmu with two clients (playprobe `--duel`, `--duel-wait`, `-
     - Z→C: 0 a slot's update (230 B: slot, area, shown, item id, icon, quantity, permission, merge, usable, `char[64]` name, donator, who for); 9 acknowledgement (12 B); 4 deposit acknowledgement (16 B, failed at +12). Z→C 2 and 4 carry a u16 slot, u16 area at +12 the window selects (EQEmu: its failed flag); on 4 the held item goes.
     - C→Z, each {u32 action, u32 the banker's spawn id, u32}: 2 promote; 3 view (value 1 unless Shift); 6 withdraw, 7 split, 8 merge (24 B: u16 slot, u16 area, u32 item id, u32 value); 4 deposit the cursor item (16 B); 5 permissions (88 B: slot, area, item id, permission, `char[64]` member).
 
-Duel state (`game::DuelState`) is the player we challenged or accepted, the challenger, and an on flag. The profile's bandolier sets and potion belt are decoded (`PlayerProfile::bandoliers`, `potion_belt`).
+Duel state (`game::DuelState`) is the player we challenged or accepted, the challenger, and an on flag. While the duel is on, the opponent may be attacked (melee, abilities, detrimental spells) whatever the PvP flags and guilds, and a beneficial spell on a player outside the duel is refused (AllowedToAttack reads the on flag and the opponent). Hailstone ends a duel, running or offered, with a zone change: the original keeps its duel state across a zone, but EQEmu ends the duel when the client leaves (Client::~Client), and the old opponent's id names someone else in the new zone. The profile's bandolier sets and potion belt are decoded (`PlayerProfile::bandoliers`, `potion_belt`).
 
 #### Adventures: requests and leaderboard
 
@@ -1328,6 +1338,7 @@ Mail commands go on the chat session as OP_Mail with the mail command text, the 
 | MailNew | UCS→C | 0x10 | strings: mailbox, id, time, status, from, subject → 4547 (another mailbox: 4533) |
 | MailDeliveryStatus | UCS→C | 0x12 | strings: sequence, recipient (failure), subject, "1" sent / "0" failed → 4530 / 4531 |
 
+- A mail packet with more than 64 strings is dropped (Hailstone's limit; the longest stock layout, MailHeader, has 8), so a packet of NULs cannot become one string per byte.
 - Delete in the inbox sends TRASH, in the trash DELETED. Purge sends DELETED for the trash.
 - The composition window's From is the current mailbox's address as MailLogin listed it.
 - The composition window opens and sends only with the membership feature 6.
@@ -1340,7 +1351,7 @@ The in-game store (CMarketplaceWnd). Unit-tested and mock-server tested; not tri
 - Layouts are the original's readers and senders (NMS-Release-Extras' `offsets/Market.h` section 44, HandleWorldMessage's cases).
 - The funding pages (Add Funds, credit cards) used the publisher's web service and are not offered.
 
-The feeds are read as the original's `CUnSerializeBuffer` does, each field bounds-checked on its own, so a short packet leaves the missing fields at their defaults. Catalog strings are NUL-terminated and cut to the node's buffer (name 127, the 64-byte one 63, the rest 1023 characters) while the cursor skips the whole string. The state feed's string is a u32 length and the bytes.
+A catalog counting more than 10,000 entries is refused (Hailstone's limit; docs/unknowns.md). The feeds are read as the original's `CUnSerializeBuffer` does, each field bounds-checked on its own, so a short packet leaves the missing fields at their defaults. Catalog strings are NUL-terminated and cut to the node's buffer (name 127, the 64-byte one 63, the rest 1023 characters) while the cursor skips the whole string. The state feed's string is a u32 length and the bytes.
 
 | Packet | Dir | Opcode | Layout |
 |---|---|---|---|

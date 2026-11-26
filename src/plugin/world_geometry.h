@@ -1,14 +1,58 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "game/world_geometry.h"
 #include "hailstone_world_geometry.h"
 
 namespace hailstone::plugin {
+
+struct WorldPlacementScene {
+    std::uint32_t epoch;
+    std::uint32_t zone_id;
+    std::uint32_t instance_id;
+    bool operator==(const WorldPlacementScene&) const = default;
+};
+
+using WorldPlacementPoint = std::array<float, 3>;
+
+// The host owns the input gesture. Each owner can read its own result once.
+class WorldPlacementHost {
+public:
+    bool start(std::uint64_t owner, WorldPlacementScene scene);
+    bool get(std::uint64_t owner, std::optional<WorldPlacementScene> scene, HailstoneWorldPlacement* out);
+    bool aiming() const { return aim_.has_value(); }
+    void update(std::optional<WorldPlacementPoint> ground, bool pressed, bool released);
+    void cancel();
+    void cancel(std::uint64_t owner);
+    // The player's own cancel (Escape, a right click): until player_input, the owner cannot start another aim, so a
+    // plugin that arms again at once cannot keep the player's world clicks.
+    void player_cancel();
+    // A press in one of the windows: owners held off by player_cancel may aim again.
+    void player_input() { held_off_.clear(); }
+    void retire(std::uint64_t owner);
+
+private:
+    struct Result {
+        WorldPlacementScene scene;
+        std::optional<WorldPlacementPoint> ground;
+    };
+    struct Aim {
+        std::uint64_t owner;
+        Result result;
+        bool pressed = false;
+    };
+    std::optional<Aim> aim_;
+    std::unordered_map<std::uint64_t, Result> results_;
+    std::unordered_set<std::uint64_t> held_off_;
+};
 
 struct WorldQueries {
     std::function<int(float, float, float, float&)> floor;

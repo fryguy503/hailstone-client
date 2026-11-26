@@ -89,7 +89,7 @@ struct Submission {
     }
 };
 
-// An exported image: the GPU objects and the handle the broker duplicates into each client.
+// An exported image: the GPU objects and the handle each client duplicates from the broker (platform/gpu_ipc.h).
 struct ExportedImage {
     VkDevice device = VK_NULL_HANDLE;
     VolkDeviceTable* api = nullptr;

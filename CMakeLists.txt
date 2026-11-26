@@ -130,7 +130,9 @@ add_library(hailstone_engine STATIC
   src/plugin/hooks.cpp
   src/plugin/consent.cpp
   src/plugin/policy.cpp
+  src/plugin/command_policy.cpp
   src/net/settings_packets.cpp
+  src/net/server_management_packets.cpp
   src/net/quest_npc_packets.cpp
   src/net/zone_link_packets.cpp
   src/net/server_files_packets.cpp
@@ -139,6 +141,7 @@ add_library(hailstone_engine STATIC
   src/mq/tlo.cpp
   src/mq/tlo_game.cpp
   src/mq/spawn_search.cpp
+  src/mq/map_filter.cpp
   src/mq/parse.cpp
   src/mq/commands.cpp
   src/mq/nav_commands.cpp
@@ -179,6 +182,7 @@ add_library(hailstone_engine STATIC
   src/net/des.cpp
   src/net/login.cpp
   src/net/game_connection.cpp
+  src/net/game_connection_server_management.cpp
   src/net/game_connection_spells.cpp
   src/net/game_connection_ticks.cpp
   src/net/game_connection_spell_sets.cpp
@@ -258,6 +262,7 @@ add_library(hailstone_engine STATIC
   src/game/server_ext.cpp
   src/game/server_ext_chain.cpp
   src/game/chat_text.cpp
+  src/game/mq_colors.cpp
   src/game/chat_windows.cpp
   src/game/client_options.cpp
   src/game/buff_overlays.cpp
@@ -575,11 +580,13 @@ add_library(hailstone_engine STATIC
   src/ui/ui_textures.cpp
   src/ui/ui_packs.cpp
   src/ui/ui_ini.cpp
+  src/ui/layout_profile.cpp
   src/app/lua_ui.cpp
   src/app/automation.cpp
   src/app/navigator.cpp
   src/app/guide_path.cpp
   src/app/lua_ui_values.cpp
+  src/app/lua_ui_server_management.cpp
   src/app/lua_ui_hud.cpp
   src/app/lua_ui_hotbar.cpp
   src/app/lua_ui_caps.cpp
@@ -595,6 +602,7 @@ add_library(hailstone_engine STATIC
   src/app/lua_ui_customization.cpp
   src/app/lua_ui_dialogs.cpp
   src/app/lua_ui_menu.cpp
+  src/app/spawn_interaction.cpp
   src/app/lua_ui_social.cpp
   src/app/lua_ui_realestate.cpp
   src/app/lua_ui_progress.cpp
@@ -766,27 +774,39 @@ set(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256 "" CACHE STRING
     "SHA-256 of the Windows x64 preview plugin with popup slots after UI contribution services")
 set(HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256 "" CACHE STRING
     "SHA-256 digests of Windows x64 preview plugins with popup slots after bulk buffer services")
-foreach(legacy_popup_option IN ITEMS HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256 HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256
-                                  HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256)
-  if("${${legacy_popup_option}}" STREQUAL "")
+set(HAILSTONE_LEGACY_POPUP_SPELL_PLUGIN_SHA256 "" CACHE STRING
+    "SHA-256 digests of Windows x64 preview plugins with popup slots after spell ID services")
+set(HAILSTONE_LEGACY_PLACEMENT_PLUGIN_SHA256 "" CACHE STRING
+    "SHA-256 digests of Windows x64 preview plugins with the earlier world placement API")
+foreach(legacy_sdk_option IN ITEMS HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256 HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256
+                                 HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256 HAILSTONE_LEGACY_POPUP_SPELL_PLUGIN_SHA256
+                                 HAILSTONE_LEGACY_PLACEMENT_PLUGIN_SHA256)
+  if("${${legacy_sdk_option}}" STREQUAL "")
     continue()
   endif()
-  foreach(legacy_popup_hash IN LISTS ${legacy_popup_option})
-    string(LENGTH "${legacy_popup_hash}" legacy_popup_hash_length)
-    if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT legacy_popup_hash_length EQUAL 64 OR
-       NOT "${legacy_popup_hash}" MATCHES "^[0-9a-fA-F]+$")
-      message(FATAL_ERROR "${legacy_popup_option} requires 64-digit digests on 64-bit Windows")
+  foreach(legacy_sdk_hash IN LISTS ${legacy_sdk_option})
+    string(LENGTH "${legacy_sdk_hash}" legacy_sdk_hash_length)
+    if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT legacy_sdk_hash_length EQUAL 64 OR
+       NOT "${legacy_sdk_hash}" MATCHES "^[0-9a-fA-F]+$")
+      message(FATAL_ERROR "${legacy_sdk_option} requires 64-digit digests on 64-bit Windows")
     endif()
   endforeach()
-  string(REPLACE ";" "," legacy_popup_digests "${${legacy_popup_option}}")
+  string(REPLACE ";" "," legacy_sdk_digests "${${legacy_sdk_option}}")
   set_property(SOURCE src/plugin/native_plugins.cpp APPEND PROPERTY COMPILE_DEFINITIONS
-               ${legacy_popup_option}="${legacy_popup_digests}")
+               ${legacy_sdk_option}="${legacy_sdk_digests}")
 endforeach()
 set(HAILSTONE_UPDATE_KEY_DEFAULT "")
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/update-key.pub)
   file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/update-key.pub HAILSTONE_UPDATE_KEY_DEFAULT REGEX "^[0-9a-fA-F]+$" LIMIT_COUNT 1)
 endif()
 set(HAILSTONE_UPDATE_KEY "${HAILSTONE_UPDATE_KEY_DEFAULT}" CACHE STRING "The release key's public half (hex); empty: no updates")
+# The cache keeps the key of the build folder's first configure (or a -D given since): said at every configure, so a
+# folder that holds another key than update-key.pub's is noticed. Release builds name it each time
+# (tools/docker/release_options.sh), and tools/make_update.py refuses a binary without update-key.pub's.
+if(NOT HAILSTONE_UPDATE_KEY STREQUAL HAILSTONE_UPDATE_KEY_DEFAULT)
+  message(WARNING "HAILSTONE_UPDATE_KEY is not update-key.pub's key: this build takes no update signed with the "
+                  "release key (configure with -DHAILSTONE_UPDATE_KEY=<update-key.pub's line> to change it)")
+endif()
 set_property(SOURCE src/app/updater.cpp APPEND PROPERTY COMPILE_DEFINITIONS
              HAILSTONE_UPDATE_FEED="${HAILSTONE_UPDATE_FEED}" HAILSTONE_UPDATE_KEY="${HAILSTONE_UPDATE_KEY}"
              HAILSTONE_ADDON_INDEX="${HAILSTONE_ADDON_INDEX}" HAILSTONE_PROJECT_PAGE="${HAILSTONE_PROJECT_PAGE}")
@@ -898,6 +918,14 @@ add_library(MQ2Example MODULE plugins/example/MQ2Example.c)
 target_include_directories(MQ2Example PRIVATE sdk)
 set_target_properties(MQ2Example PROPERTIES PREFIX "" LIBRARY_OUTPUT_DIRECTORY ${HAILSTONE_TREE_DIR}/plugins$<0:>
                                             RUNTIME_OUTPUT_DIRECTORY ${HAILSTONE_TREE_DIR}/plugins$<0:>)
+
+# HSMono (the MQ2Mono port), a repository of its own: built with the client when cloned into plugins/hsmono (ignored
+# here, as the server plugins below are).
+set(HSMONO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/plugins/hsmono")
+if(EXISTS "${HSMONO_DIR}/CMakeLists.txt")
+    message(STATUS "Found optional subproject: HSMono")
+    add_subdirectory("${HSMONO_DIR}")
+endif()
 
 # The example upscaler provider (plugins/example/upscaler): plain C against sdk/hailstone_upscaler.h, in
 # build/hailstone/upscalers/example/example.<so|dll|dylib> (render/upscaler_provider.h finds it by its folder's name).
@@ -1192,6 +1220,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/caster_bounds_test.cpp
     tests/descriptor_limits_test.cpp
     tests/swapchain_size_test.cpp
+    tests/descriptor_pool_book_test.cpp
     tests/input_script_test.cpp
     tests/texture_claims_test.cpp
     tests/zone_settle_test.cpp
@@ -1263,6 +1292,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/ui_rules_vectors_test.cpp
     tests/net_login_test.cpp
     tests/net_packets_test.cpp
+    tests/server_management_packets_test.cpp
     tests/shroud_packets_test.cpp
     tests/pfs_test.cpp
     tests/pfs_mapped_test.cpp
@@ -1286,6 +1316,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/collision_test.cpp
     tests/nav_test.cpp
     tests/map_data_test.cpp
+    tests/map_filter_test.cpp
     tests/map_files_test.cpp
     tests/player_path_test.cpp
     tests/atlas_test.cpp
@@ -1413,10 +1444,14 @@ if(HAILSTONE_BUILD_TESTS)
     tests/lua_folders_test.cpp
     tests/lua_keep_test.cpp
     tests/lua_character_settings_test.cpp
+    tests/layout_profile_test.cpp
     tests/lua_plugin_test.cpp
     tests/spell_projectiles_test.cpp
     tests/commerce_test.cpp
     tests/bandolier_swap_test.cpp
+    tests/exchange_test.cpp
+    tests/player_commands_test.cpp
+    tests/item_notify_test.cpp
     tests/bank_test.cpp
     tests/bank_snapshot_test.cpp
     tests/real_estate_test.cpp
@@ -1461,6 +1496,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/achievements_test.cpp
     tests/achievement_connection_test.cpp
     tests/achievement_chat_test.cpp
+    tests/mq_colors_test.cpp
     tests/stml_link_injection_test.cpp
     tests/achievement_chat_input_test.cpp
     tests/lua_ui_achievements_test.cpp
@@ -1557,6 +1593,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/hover_respawn_test.cpp
     tests/tracking_death_test.cpp
     tests/mock_eqemu_compat_test.cpp
+    tests/server_keyed_caps_test.cpp
     tests/item_use_test.cpp
     tests/game_connection_cast_test.cpp
     tests/game_connection_buff_test.cpp
@@ -1590,13 +1627,17 @@ if(HAILSTONE_BUILD_TESTS)
   add_library(HostProbe MODULE tests/plugins/HostProbe.cpp)
   add_library(HostProbeThrow MODULE tests/plugins/HostProbe.cpp)
   target_compile_definitions(HostProbeThrow PRIVATE HAILSTONE_PROBE_THROW_INIT)
+  # A C++ test plugin built with the SDK's C++ wrapper (tests/plugins/CppWrapper.cpp, sdk/hailstone_plugin.hpp), with
+  # the client's warnings: the header must compile cleanly in a plugin.
+  add_library(CppWrapper MODULE tests/plugins/CppWrapper.cpp)
+  target_compile_options(CppWrapper PRIVATE ${HAILSTONE_WARNINGS})
   # A plugin built against the 0.7.1-beta SDK header (a frozen copy): released plugins must keep loading.
   add_library(Sdk071Plugin MODULE tests/plugins/Sdk071Plugin.c)
   target_include_directories(Sdk071Plugin PRIVATE tests/plugins/sdk071)
   target_compile_options(Sdk071Plugin PRIVATE ${HAILSTONE_WARNINGS})
   set_target_properties(Sdk071Plugin PROPERTIES PREFIX "")
   add_dependencies(hailstone_tests Sdk071Plugin)
-  foreach(p ExtendTest ExtendTestV1 ExtendTestNew HostProbe HostProbeThrow)
+  foreach(p ExtendTest ExtendTestV1 ExtendTestNew HostProbe HostProbeThrow CppWrapper)
     target_include_directories(${p} PRIVATE sdk)
     set_target_properties(${p} PROPERTIES PREFIX "")
   endforeach()
@@ -1624,9 +1665,14 @@ if(HAILSTONE_BUILD_TESTS)
   target_compile_definitions(TestUpscaler_newer PRIVATE EXAMPLE_ABI=99)
   target_compile_definitions(TestUpscaler_nodevice PRIVATE EXAMPLE_REFUSE_DEVICE)
   target_compile_definitions(TestUpscaler_failing PRIVATE EXAMPLE_FAIL_EVALUATE)
-  add_dependencies(hailstone_tests MQ2Example ExtendTest ExtendTestV1 ExtendTestNew HostProbe HostProbeThrow hailstone_mock_web_helper)
-  target_compile_definitions(hailstone_tests PRIVATE HAILSTONE_EXAMPLE_PLUGIN="$<TARGET_FILE:MQ2Example>"
-    HAILSTONE_PROBE_PLUGIN="$<TARGET_FILE:HostProbe>" HAILSTONE_PROBE_THROW_PLUGIN="$<TARGET_FILE:HostProbeThrow>"
+  add_dependencies(hailstone_tests MQ2Example ExtendTest ExtendTestV1 ExtendTestNew HostProbe HostProbeThrow CppWrapper
+                   hailstone_mock_web_helper)
+
+  target_compile_definitions(hailstone_tests PRIVATE
+    HAILSTONE_EXAMPLE_PLUGIN="$<TARGET_FILE:MQ2Example>"
+    HAILSTONE_PROBE_PLUGIN="$<TARGET_FILE:HostProbe>"
+    HAILSTONE_PROBE_THROW_PLUGIN="$<TARGET_FILE:HostProbeThrow>"
+    HAILSTONE_CPP_PLUGIN="$<TARGET_FILE:CppWrapper>"
     HAILSTONE_SDK071_PLUGIN="$<TARGET_FILE:Sdk071Plugin>"
     HAILSTONE_EXTEND_PLUGIN="$<TARGET_FILE:ExtendTest>" HAILSTONE_EXTEND_PLUGIN_V1="$<TARGET_FILE:ExtendTestV1>"
     HAILSTONE_EXTEND_PLUGIN_NEW="$<TARGET_FILE:ExtendTestNew>"

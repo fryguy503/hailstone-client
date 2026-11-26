@@ -109,6 +109,15 @@ void arm_allocation_guard(bool on);
 void reset_largest_allocation();
 std::size_t largest_allocation();
 
+// A scoped count for CPU benchmarks. Only one count may be active at a time; the fuzz guard and counting modes do
+// not overlap. Counts every global operator new/delete-sized request, not Lua's private allocator.
+struct AllocationCount {
+    std::size_t calls = 0;
+    std::size_t bytes = 0;
+};
+void start_allocation_count();
+AllocationCount stop_allocation_count();
+
 // Mutated input makes parsers log warnings by the thousand; keep them out of the test output.
 struct QuietLog {
     QuietLog() { log::set_level(log::Level::Error); }

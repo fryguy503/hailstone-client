@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -70,6 +71,7 @@ struct PickTriangle {
     glm::vec3 v0{0.0f}, v1{0.0f}, v2{0.0f};
     glm::vec3 normal{0.0f};
     std::uint8_t flags = 0; // kTrianglePassable ...
+    bool visual_two_sided = false;
 };
 using PickTriangleSink = std::function<void(const PickTriangle&)>;
 
@@ -112,5 +114,8 @@ struct PickHit {
 // (0: any) found in the first pass that finds one, skipping actors with
 // `mask & skip`.
 PickHit pick_actor(const PickSegment& seg, const PickScene& scene, std::uint32_t required, std::uint32_t skip);
+
+// A visible wall or steep face stops the ray. Only solid upward ground accepts placement.
+std::optional<glm::vec3> pick_ground_placement(const PickSegment& seg, const PickScene& scene);
 
 } // namespace hailstone::game

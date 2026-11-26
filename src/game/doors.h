@@ -179,6 +179,13 @@ struct GroundObject {
     std::int32_t type = 0;    // EQEmu object type: 1 = temporary (an item to pick up)
 };
 glm::mat4 ground_object_transform(const GroundObject& o);
+// What an OP_GroundSpawn that replaces the record under the same drop id changes: the model (another name) and the
+// placement (position, heading, tilt or size). Floats compare by their bits, so a NaN field is not a change each time.
+struct GroundObjectChange {
+    bool model = false;
+    bool placement = false;
+};
+GroundObjectChange ground_object_change(const GroundObject& was, const GroundObject& now);
 // The actor definition CDisplay::CreateActor @0x48b710 looks up for `name`: a name shorter than 10 characters
 // (other than PLAYER_1) gets "_ACTORDEF" ("IT63" -> "IT63_ACTORDEF"); a longer one is looked up as it is.
 std::string create_actor_definition(std::string_view name);

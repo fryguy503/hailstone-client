@@ -1,6 +1,6 @@
 // server/quests/global/encounters/hailstone.lua, the server side's drop-in quest script, run in the client's Lua
 // with a stand-in for the parts of EQEmu's Lua API it uses (eq.*, Packet, the player events), os.time, io.open and
-// io.popen. What it checks is the script's own bookkeeping: its limits and the files it keeps open, not EQEmu.
+// io.popen. The cases check the encounter's own decisions and file operations with those stand-ins.
 
 #include <doctest/doctest.h>
 
@@ -15,16 +15,15 @@
 namespace {
 
 std::string script_path() {
-    std::string dir = std::string(__FILE__);
-    dir = dir.substr(0, dir.rfind('/') == std::string::npos ? 0 : dir.rfind('/'));
-    return dir + "/../server/quests/global/encounters/hailstone.lua";
+    return (std::filesystem::path(__FILE__).parent_path() /
+            "../server/quests/global/encounters/hailstone.lua").generic_string();
 }
 
 constexpr const char* kHarness = R"lua(
 package.config = "/\n;\n?\n!\n-\n" -- the script's Linux commands, whatever runs the test
 T = { now = 1000, finds = 0, stats = 0, gets = 0, opens = {}, open_now = 0, open_max = 0, messages = {}, data = {}, files = {},
       mtimes = {}, handlers = {}, powershell = {}, timers = {}, clients = {}, logs = {}, dirs = {}, hashes = 0,
-      sleeps = 0, mkdirs = 0 }
+      sleeps = 0, mkdirs = 0, policy_scans = 0 }
 os.time = function() return T.now end
 
 -- A packet's bytes: what the Write* calls put there, 0 elsewhere. A fixed-length string (a file piece) is kept whole
@@ -57,6 +56,14 @@ function P:ReadInt32(o) return get(self, o, 4) end
 function P:ReadInt16(o) return get(self, o, 2) end
 function P:ReadInt8(o) return get(self, o, 1) end
 function P:ReadString(o) local t = {}; while self.b[o] ~= 0 do t[#t + 1] = string.char(self.b[o]); o = o + 1 end; return table.concat(t) end
+function P:ReadFixedLengthString(o, n)
+  local chars = {}
+  for i = o, o + n - 1 do
+    if self.b[i] == 0 then break end
+    chars[#chars + 1] = string.char(self.b[i])
+  end
+  return table.concat(chars)
+end
 function P:GetSize() return self.size end
 function P:GetProtocolOpcode() return self.op end
 
@@ -65,10 +72,11 @@ local function bytes_packet(op, size)
 end
 Packet = function(op, size) return bytes_packet(op, size) end
 
-Event = { unhandled_opcode = 1, signal = 2 }
+Event = { unhandled_opcode = 1, signal = 2, disconnect = 3 }
 eq = {
   debug = function(s) T.logs[#T.logs + 1] = s end,
   get_data = function(k) T.gets = T.gets + 1; return T.data[k] end,
+  get_zone_short_name = function() return T.zone end,
   set_data = function(k, v) T.data[k] = v end,
   delete_data = function(k) T.data[k] = nil end,
   cross_zone_message_player_by_name = function(_, name, text) T.messages[#T.messages + 1] = name .. ": " .. text end,
@@ -88,12 +96,19 @@ local real_open, real_popen = io.open, io.popen
 io.open = function(path, mode)
   if path == SCRIPT then return real_open(path, mode) end
   if mode and mode:sub(1, 1) == "w" then
+    local parent = path:match("^(.*)/[^/]+$")
+    if (parent and T.files[parent]) or (T.fail_write and path:match(T.fail_write)) then return nil, "refused", 13 end
     local parts = {}
-    return { write = function(_, s) parts[#parts + 1] = s end, close = function() T.files[path] = table.concat(parts) end }
+    return {
+      write = function(_, s) parts[#parts + 1] = s; return true end,
+      close = function() T.files[path] = table.concat(parts); return true end,
+    }
   end
-  -- The zone's own scratch files are not read back, except the hashing lock's owner and, when a test asks, the cache.
-  local own = path:match("/%.hailstone%-lock/owner$") or (T.read_cache and path:match("/%.hailstone%-cache$"))
-  if T.files[path] == nil or (path:match("/%.hailstone") and not own) then return nil end
+  -- The test controls whether the zone can see the on-disk hash cache.
+  local own = path:match("/%.hailstone%-lock/owner$") or path:match("/%.hailstone%-admin%-") or
+    (T.read_cache and path:match("/%.hailstone%-cache$"))
+  if T.dirs[path] then return nil, "directory", 13 end
+  if T.files[path] == nil or (path:match("/%.hailstone") and not own) then return nil, "missing", 2 end
   T.opens[path] = (T.opens[path] or 0) + 1
   T.open_now = T.open_now + 1
   T.open_max = math.max(T.open_max, T.open_now)
@@ -108,17 +123,61 @@ io.open = function(path, mode)
       if type(n) ~= "number" then n = #(T.files[path] or "") end -- "*a"
       local s = (T.files[path] or ""):sub(pos + 1, pos + n); pos = pos + #s; return s
     end,
-    close = function() T.open_now = T.open_now - 1 end,
+    close = function() T.open_now = T.open_now - 1; return true end,
     lines = function()
       local text = T.files[path] or ""
       return text:gmatch("([^\n]*)\n")
     end,
   }
 end
+
+local function policy_listing(windows)
+  T.policy_scans = T.policy_scans + 1
+  local names = {}
+  for path in pairs(T.files) do
+    local name = path:match("^client_files/([^/]+)$")
+    if name and name:lower() == "hailstone.cfg" then names[#names + 1] = (windows and "" or "f ") .. name end
+  end
+  if not windows then
+    for path in pairs(T.dirs) do
+      local name = path:match("^client_files/([^/]+)$")
+      if name and name:lower() == "hailstone.cfg" then names[#names + 1] = "d " .. name end
+    end
+  end
+  names[#names + 1] = "listed"
+  return table.concat(names, "\n") .. "\n"
+end
+
+local function file_hash(rel, default)
+  if not T.hash_contents then return string.rep(default, 32) end
+  local data = T.files["client_files/" .. rel] or ""
+  local signature = 0
+  for i = 1, #data do signature = (signature * 131 + data:byte(i)) % 2147483647 end
+  return string.rep(string.format("%08x", signature), 8)
+end
+
+local function replace(from, to)
+  if T.fail_replace or not T.files[from] then return "" end
+  T.files[to], T.files[from] = T.files[from], nil
+  return "replaced\n"
+end
+
 io.popen = function(cmd)
   local out = ""
   local one = cmd:match("^find '(client_files/[^']+)' %-maxdepth 0")
-  if T.real_root and cmd:match("^find ") and not one then
+  local policy_scan = cmd:find(" -iname hailstone.cfg ", 1, true)
+  local policy_scan_windows = cmd:match("^if exist .-%(dir /b /a:%-d ")
+  if policy_scan or policy_scan_windows then
+    out = policy_listing(policy_scan_windows ~= nil)
+  elseif cmd:match("^find 'client_files/%.hailstone%-admin%-history' %-maxdepth 1") or
+      cmd:match("^dir /b /a:%-d%-l ") then
+    local names = {}
+    for path in pairs(T.files) do
+      local name = path:match("^client_files/%.hailstone%-admin%-history/([^/]+)$")
+      if name then names[#names + 1] = name end
+    end
+    out = table.concat(names, "\n") .. "\n"
+  elseif T.real_root and cmd:match("^find ") and not one then
     -- The script's own listing command, run by the shell in a scratch folder holding a real client_files.
     T.finds = T.finds + 1
     local p = real_popen("cd '" .. T.real_root .. "' && " .. cmd)
@@ -140,9 +199,13 @@ io.popen = function(cmd)
     local text = T.files["client_files/" .. cmd:match('"client_files\\([^"]+)"')] or ""
     T.powershell[#T.powershell + 1] = text
     local names = {}
-    if text:find("Get-FileHash", 1, true) then
+    if text:find("[System.IO.File]::Replace", 1, true) then
+      local from, to = cmd:match('"([^"]+)" "([^"]+)"$')
+      out = replace(from:gsub("\\", "/"), to:gsub("\\", "/"))
+      return { read = function() return out end, close = function() end }
+    elseif text:find("Get-FileHash", 1, true) then
       for rel in (T.files["client_files/" .. cmd:match('" (%S+)$')] or ""):gmatch("[^\n]+") do
-        names[#names + 1] = string.rep("cd", 32) .. "  " .. rel
+        names[#names + 1] = file_hash(rel, "cd") .. "  " .. rel
       end
     else
       for path, data in pairs(T.files) do
@@ -152,18 +215,37 @@ io.popen = function(cmd)
     end
     out = table.concat(names, "\r\n") .. "\r\n"
   elseif cmd:match("^mkdir ") then
-    -- The hashing lock: made once, refused while it is there (T.no_mkdir: never made, as on a read-only folder).
-    -- Windows' cmd quotes and separates as Windows does: the same folder.
-    local dir = cmd:match("^mkdir '([^']+)'") or cmd:match('^mkdir "([^"]+)"'):gsub("\\\\", "/")
+    local dir = cmd:match("^mkdir %-m 700 %-%- '([^']+)'") or cmd:match("^mkdir '([^']+)'") or
+      cmd:match('^mkdir "([^"]+)"'):gsub("\\+", "/")
     T.mkdirs = T.mkdirs + 1
-    if not T.dirs[dir] and not T.no_mkdir then T.dirs[dir] = true; out = "taken\n" end
+    if not T.dirs[dir] and not T.files[dir] and not T.no_mkdir then
+      T.dirs[dir] = true
+      out = cmd:match("echo made$") and "made\n" or "taken\n"
+      if T.on_mkdir then T.on_mkdir(dir) end
+    end
+  elseif cmd:match("^rm %-f %-%- ") or cmd:match("^del /Q ") then
+    local path = cmd:match("^rm %-f %-%- '([^']+)'") or cmd:match('^del /Q "([^"]+)"'):gsub("\\+", "/")
+    -- Windows deletion may report success for an absent file, but cannot remove a directory.
+    if not T.dirs[path] then T.files[path] = nil; out = "removed\n" end
   elseif cmd:match("^rm %-rf ") or cmd:match("^rmdir ") then
-    local dir = cmd:match("^rm %-rf '([^']+)'") or cmd:match('"([^"]+)"'):gsub("\\\\", "/")
-    T.dirs[dir] = nil
-    for path in pairs(T.files) do if path:sub(1, #dir + 1) == dir .. "/" then T.files[path] = nil end end
+    local dir = cmd:match("^rm %-rf '([^']+)'") or cmd:match("^rmdir '([^']+)'") or
+      cmd:match('"([^"]+)"'):gsub("\\+", "/")
+    local recursive = cmd:match("^rm %-rf ") or cmd:match("^rmdir /s /q ")
+    local children = false
+    for path in pairs(T.files) do
+      if path:sub(1, #dir + 1) == dir .. "/" then
+        if recursive then T.files[path] = nil else children = true end
+      end
+    end
+    if not children then T.dirs[dir] = nil end
   elseif cmd:match("^mv %-f ") then
     local from, to = cmd:match("^mv %-f '([^']+)' '([^']+)'")
     T.files[to], T.files[from] = T.files[from], nil
+  elseif cmd:match("^mv %-fT ") then
+    local from, to = cmd:match("^mv %-fT %-%- '([^']+)' '([^']+)'")
+    out = replace(from, to)
+  elseif cmd:match("^chmod %-%-reference=") then
+    out = T.fail_chmod and "" or "preserved\n"
   elseif cmd == "sleep 1" or cmd:match("^ping ") then
     T.now = T.now + 1
     T.sleeps = T.sleeps + 1
@@ -174,9 +256,9 @@ io.popen = function(cmd)
     for rel in (T.files["client_files/" .. cmd:match("%-a (%S+)")] or ""):gmatch("[^\n]+") do
       -- As GNU's: a name with a backslash is escaped, and its line starts with one.
       if rel:find("\\", 1, true) then
-        names[#names + 1] = "\\" .. string.rep("ab", 32) .. "  " .. rel:gsub("\\", "\\\\")
+        names[#names + 1] = "\\" .. file_hash(rel, "ab") .. "  " .. rel:gsub("\\", "\\\\")
       else
-        names[#names + 1] = string.rep("ab", 32) .. "  " .. rel
+        names[#names + 1] = file_hash(rel, "ab") .. "  " .. rel
       end
     end
     out = table.concat(names, "\n") .. "\n"
@@ -188,12 +270,15 @@ function add_files(n, size)
   for i = 1, n do T.files[string.format("client_files/f%02d.bin", i)] = string.rep(string.char(64 + i), size) end
 end
 
-function client(id, name)
-  local c = { id = id, name = name, sent = {}, vars = {}, valid = true }
+function client(id, name, rank)
+  local c = { id = id, name = name, sent = {}, vars = {}, valid = true, rank = rank or 0, account = id + 100, entity = id }
   T.clients[id] = c
   function c:CharacterID() return c.id end
+  function c:Admin() return c.rank end
+  function c:AccountID() return c.account end
+  function c:GetID() return c.entity end
   function c:GetCleanName() return c.name end
-  function c:QueuePacket(p) c.sent[#c.sent + 1] = p end
+  function c:QueuePacket(p, reliable) c.sent[#c.sent + 1] = p; p.reliable = reliable end
   function c:Message() end
   function c:SetEntityVariable(k, v) c.vars[k] = v end
   function c:GetEntityVariable(k) return c.vars[k] end
@@ -252,6 +337,82 @@ function load_script()
 end
 )lua";
 
+constexpr const char* kManagementHarness = R"lua(
+function management_zone(name)
+  T.data["hailstone:server_management"] = "1"
+  T.handlers, T.zone = {}, name
+  load_script()
+  return T.handlers
+end
+
+function management_settings(c, expected_flags, expected_rank, legacy)
+  local p = Packet(legacy and 0x1424 or 0x1432, 6)
+  p:WriteInt32(0, 0x50534d4e); p:WriteInt16(4, 1)
+  T.now = T.now + 1
+  local before = #c.sent
+  send(c, p)
+  assert(#c.sent == before + 1, "settings reply received")
+  local reply = c.sent[#c.sent]
+  assert(reply.op == (legacy and 0x1425 or 0x1433))
+  assert(reply:ReadInt32(6) == expected_flags, "settings flags: " .. reply:ReadInt32(6))
+  assert(reply:GetSize() == (expected_rank and 12 or 10))
+  if expected_rank then assert(reply:ReadInt16(10) == expected_rank) end
+end
+
+function management_packet(action, token, ...)
+  local edits, size = { ... }, token and 18 or 12
+  for _, e in ipairs(edits) do size = size + 4 + #e[1] + #e[2] + #e[3] end
+  local p = Packet(0x143a, size)
+  T.nonce = (T.nonce or 0) + 1
+  p:WriteInt32(0, 0x4d415348); p:WriteInt16(4, 1); p:WriteInt16(6, action); p:WriteInt32(8, T.nonce)
+  if token then
+    p:WriteInt32(12, token); p:WriteInt16(16, #edits)
+    local off = 18
+    for _, e in ipairs(edits) do
+      p:WriteInt8(off, #e[1]); p:WriteInt8(off + 1, #e[2]); p:WriteInt16(off + 2, #e[3])
+      off = off + 4
+      for _, value in ipairs(e) do p:WriteFixedLengthString(off, value, #value); off = off + #value end
+    end
+  end
+  return p
+end
+
+function management_request(c, status, p)
+  local before = #c.sent
+  T.now = T.now + 1
+  send(c, p)
+  assert(#c.sent == before + 1, "management reply received")
+  local reply = c.sent[#c.sent]
+  assert(reply.op == 0x143b and reply.reliable and reply:ReadInt32(0) == 0x4d415348 and reply:ReadInt16(4) == 1)
+  assert(reply:ReadInt16(6) == p:ReadInt16(6) and reply:ReadInt32(8) == p:ReadInt32(8))
+  local n = reply:ReadInt16(18)
+  local result, token, text = reply:ReadInt16(12), reply:ReadInt32(14), reply:ReadFixedLengthString(20, n)
+  assert(reply:GetSize() == 20 + n and #text == n)
+  assert(result == status, "expected status " .. status .. ", got " .. result .. ": " .. text)
+  assert((result == 0) == (token ~= 0), "only a successful request issues a token")
+  return token, text
+end
+
+function management_open(c, status)
+  return management_request(c, status or 0, management_packet(1))
+end
+
+function management_save(c, token, status, ...)
+  return management_request(c, status, management_packet(2, token, ...))
+end
+
+management_cfg = "client_files/hailstone.cfg"
+management_history = "client_files/.hailstone-admin-history"
+management_lock = "client_files/.hailstone-admin-lock"
+
+function management_backup(current, previous)
+  local revision = assert(current:match("^; hailstone%-policy%-revision = ([%w_-]+)"))
+  local base = management_history .. "/" .. revision
+  assert(T.files[base .. ".cfg"] == (previous or ""), "previous policy stored byte for byte")
+  return revision, assert(T.files[base .. ".txt"])
+end
+)lua";
+
 // Runs the harness, then `scenario`; "" when it ran to the end, else Lua's error. "skip" without the sources.
 std::string run(const std::string& scenario) {
     const std::string path = script_path();
@@ -261,7 +422,8 @@ std::string run(const std::string& scenario) {
     lua_pushstring(L, path.c_str());
     lua_setglobal(L, "SCRIPT");
     std::string err;
-    if (luaL_dostring(L, kHarness) != LUA_OK || luaL_dostring(L, scenario.c_str()) != LUA_OK)
+    const std::string harness = std::string(kHarness) + kManagementHarness;
+    if (luaL_dostring(L, harness.c_str()) != LUA_OK || luaL_dostring(L, scenario.c_str()) != LUA_OK)
         err = lua_tostring(L, -1) ? lua_tostring(L, -1) : "error";
     lua_close(L);
     return err;
@@ -269,7 +431,10 @@ std::string run(const std::string& scenario) {
 
 void check_run(const char* scenario) {
     const std::string err = run(scenario);
-    if (err == "skip") return;
+    if (err == "skip") {
+        MESSAGE("Could not find the server encounter source");
+        return;
+    }
     CHECK_MESSAGE(err.empty(), err);
 }
 
@@ -959,6 +1124,376 @@ for _, op in ipairs({0x1423, 0x1425, 0x1427}) do
   local before = #new.sent
   send(new, q)
   assert(#new.sent == before, string.format("0x%04x is not answered", op))
+end
+)lua");
+}
+
+TEST_CASE("Server script: management is opt-in and checks GM status before scanning or writing") {
+    check_run(R"lua(
+local player = client(1, "Player", 0)
+local low = client(2, "Low GM", 199)
+local gm = client(3, "GM", 200)
+local senior = client(4, "Senior GM", 250)
+load_script()
+management_settings(senior, 4, 250)
+management_open(senior, 1)
+assert(T.policy_scans == 0, "opting out does not scan for the policy")
+
+management_zone("first")
+management_settings(player, 4, 0)
+management_settings(low, 4, 199)
+management_settings(gm, 6, 200)
+management_settings(senior, 2, nil, true)
+local missing = client(5, "Old API", 250)
+missing.Admin = nil
+management_settings(missing, 0, nil)
+management_settings(client(6, "Too high", 32768), 0, nil)
+management_settings(client(7, "Suspended", -1), 4, 0)
+local scans = T.policy_scans
+management_open(player, 1)
+management_open(low, 1)
+assert(T.policy_scans == scans, "unauthorized accounts never spawn a fresh policy scan")
+local before = #gm.sent
+T.handlers[Event.unhandled_opcode]({ self = gm, packet = management_packet(1), connecting = true })
+assert(#gm.sent == before, "a connecting client cannot use the management opcode")
+
+T.files[management_cfg] = "[management]\nmin_status = 100\n"
+management_settings(low, 6, 199)
+local token = management_open(low)
+low.rank = 99
+scans = T.policy_scans
+management_save(low, token, 1, { "client", "deny", "on" })
+assert(T.policy_scans == scans, "a demoted account cannot cause a rescan or save")
+low.rank = 199
+T.on_mkdir = function(dir)
+  if dir == management_lock then low.rank = 99 end
+end
+management_save(low, token, 1, { "client", "deny", "on" })
+T.on_mkdir = nil
+assert(T.files[management_cfg] == "[management]\nmin_status = 100\n" and not T.dirs[management_lock])
+
+T.files[management_cfg] = "[management]\nmin_status = typo\n"
+management_open(senior, 1)
+management_settings(gm, 4, 200)
+T.data["hailstone:client_files"] = "0"
+T.now = T.now + 11
+management_open(senior, 1)
+management_settings(senior, 4, 250)
+)lua");
+}
+
+TEST_CASE("Server script: management preserves missing or empty configs and backs up the first save") {
+    check_run(R"lua(
+management_zone("first")
+local gm = client(3, "GM", 200)
+local token, proposed = management_open(gm)
+assert(proposed:find("[scripts]\nplayer = on", 1, true))
+assert(proposed:find("mode = full\ncaps = all", 1, true))
+assert(T.files[management_cfg] == nil, "opening an absent policy never creates it")
+T.files[management_cfg] = ""
+local empty_token, empty = management_open(gm)
+assert(empty_token ~= token and empty == "", "an existing empty file uses configured defaults")
+T.files[management_cfg] = "[management]\nmin_status = 200\0\n"
+management_settings(gm, 4, 200)
+management_open(gm, 4)
+T.files[management_cfg] = ("x"):rep(16385)
+management_open(gm, 4)
+T.files[management_cfg] = nil
+token = management_open(gm)
+local stamp = os.date("!%Y%m%dT%H%M%SZ", T.now + 1)
+T.dirs[management_history] = true
+T.files[management_history .. "/" .. stamp .. "-0001.cfg"] = "existing backup"
+T.files[management_history .. "/" .. stamp .. "-0002.txt"] = "existing metadata"
+local _, changed = management_save(gm, token, 0, { "commands", "default", "allow" })
+assert(changed == T.files[management_cfg])
+assert(changed:find("\nplayer = on\n", 1, true) and changed:find("mode = full\ncaps = all", 1, true))
+local revision, audit = management_backup(changed)
+assert(revision == stamp .. "-0003", "revision selection avoids an existing backup or audit")
+assert(audit:find("previous_existed=false", 1, true))
+assert(T.files[management_history .. "/" .. stamp .. "-0001.cfg"] == "existing backup")
+assert(T.files[management_history .. "/" .. stamp .. "-0002.txt"] == "existing metadata")
+assert(not T.dirs[management_lock])
+)lua");
+}
+
+TEST_CASE("Server script: management keeps cfg contents and other zones see a saved revision") {
+    check_run(R"lua(
+local original = "; custom comment\r\n[gameplay_custom]\r\nmy_option = On # keep me\r\n"
+  .. "[Movement]\r\nNPC_Collision = yes ; earlier duplicate\r\n"
+  .. "[addons]\r\nsuggest = https://github.com/Owner/Repo/releases/tag/V1.2.0\r\n"
+  .. "required = Owner/Old:V1.2.3-RC.1\r\n"
+  .. "[movement] ; duplicate section\r\nNPC_Collision   =   on   ; keep my spacing\r\n"
+  .. '[COMMANDS]\r\nblocked_message = "old # message" ; keep this too\r\n'
+  .. "[existing_custom]\r\nvalue = untouched"
+T.files[management_cfg], T.hash_contents = original, true
+local a = management_zone("alpha")
+local gm = client(3, "GM", 200)
+local token = management_open(gm)
+local b = management_zone("beta")
+local other = client(4, "Other GM", 250)
+local other_token = management_open(other)
+local function cfg_hash(c)
+  local page = assert(list_request(c, 0))
+  assert(page.op == 0x1435 and page:ReadInt32(20) == 1)
+  local bytes = {}
+  for i = 28, 59 do bytes[#bytes + 1] = string.char(page.b[i]) end
+  return table.concat(bytes)
+end
+local old_hash = cfg_hash(other)
+T.handlers = a
+local message = 'Ask an admin #help; "\195\137dit" the rule.'
+local _, changed = management_save(gm, token, 0,
+  { "movement", "npc_collision", "off" }, { "commands", "blocked_message", message })
+assert(changed == T.files[management_cfg])
+assert(changed:find("NPC_Collision = yes ; earlier duplicate", 1, true))
+assert(changed:find("NPC_Collision   =   off   ; keep my spacing", 1, true))
+assert(changed:find("my_option = On # keep me", 1, true))
+assert(changed:find("; keep this too", 1, true) and changed:find('"' .. message .. '"', 1, true))
+assert(changed:find("required = Owner/Old:V1.2.3-RC.1", 1, true))
+assert(changed:find("suggest = https://github.com/Owner/Repo/releases/tag/V1.2.0", 1, true))
+assert(changed:sub(-#"value = untouched") == "value = untouched")
+local _, audit = management_backup(changed, original)
+assert(audit:find("edited=movement.npc_collision,commands.blocked_message", 1, true))
+
+T.handlers = b
+assert(cfg_hash(other) ~= old_hash, "another zone immediately delivers the new policy")
+management_save(other, other_token, 3, { "client", "deny", "on" })
+assert(T.files[management_cfg] == changed, "a stale edit never writes")
+)lua");
+}
+
+TEST_CASE("Server script: management rejects malformed edits and preserves the cfg on write failures") {
+    check_run(R"lua(
+local original = "[addons]\nrequired = Owner/Old:V1.2.3-RC.1\n"
+T.files[management_cfg] = original
+management_zone("validation")
+local gm = client(3, "GM", 200)
+local token = management_open(gm)
+
+gm.entity = 70
+management_save(gm, token, 3, { "client", "deny", "on" })
+gm.entity = 3
+gm.account = 104
+management_save(gm, token, 3, { "client", "deny", "on" })
+gm.account = 103
+management_save(gm, token, 2, { "assets", "player", "on\n[client]" })
+management_save(gm, token, 2, { "commands", "blocked_message", ("x"):rep(241) })
+management_save(gm, token, 2, { "commands", "blocked_message", "bad \192\175" })
+management_save(gm, token, 2, { "commands", "blocked_message", "NUL\0inside" })
+for _, rule in ipairs({ "/nav:0", "/nav:32768", "/nav:bad", "/nav:-1", "/nav:200\n[client]", ":200", "/:200" }) do
+  management_save(gm, token, 2, { "commands", "gm", rule })
+end
+management_save(gm, token, 2, { "custom", "private", "1" })
+management_save(gm, token, 2, { "client", "deny", "on" }, { "client", "deny", "off" })
+management_save(gm, token, 2, { "addons", "block", "owner/old" })
+management_save(gm, token, 2)
+local truncated = management_packet(2, token, { "assets", "player", "off" })
+truncated.size = truncated.size - 1
+management_request(gm, 2, truncated)
+assert(T.files[management_cfg] == original)
+
+T.dirs[management_lock] = true
+management_save(gm, token, 5, { "assets", "player", "off" })
+T.dirs[management_lock] = nil
+T.files[management_history] = "not a directory"
+management_save(gm, token, 4, { "assets", "player", "off" })
+T.files[management_history] = nil
+T.fail_write = "^client_files/%.hailstone%-admin%-.*%.tmp$"
+management_save(gm, token, 4, { "assets", "player", "off" })
+T.fail_write = nil
+T.fail_chmod = true
+management_save(gm, token, 4, { "assets", "player", "off" })
+T.fail_chmod = nil
+T.fail_replace = true
+management_save(gm, token, 4, { "assets", "player", "off" })
+T.fail_replace = nil
+assert(T.files[management_cfg] == original and not T.dirs[management_lock])
+
+local _, changed = management_save(gm, token, 0,
+  { "scripts", "run", "hud, welcome/init" }, { "scripts", "player_caps", "read, target" },
+  { "plugins", "player", "off" }, { "plugins", "player_caps", "read, ui" },
+  { "assets", "player", "off" }, { "web", "allow", "example.com, [::1]" },
+  { "client", "deny", "off" }, { "abilities", "autoskill", "off" }, { "movement", "solid_ladders", "off" },
+  { "map", "vanilla", "on" },
+  { "socials", "mode", "press" }, { "socials", "press_commands", "10" },
+  { "socials", "caps", "commands, chat" }, { "socials", "faces", "off" },
+  { "addons", "enforce", "on" }, { "addons", "default", "deny" },
+  { "addons", "required", "another/hud:1.0.0-Alpha.1+build.0" }, { "addons", "block", "another/bot" },
+  { "addons", "allow", "some/repo" }, { "addons", "suggest", "example/server-hud@1.0.0, https://github.com/example/other/tree/main" },
+  { "commands", "allow_groups", "command_helpers" }, { "commands", "block_groups", "movement_automation, non_rof2" },
+  { "commands", "allow", "/lua" }, { "commands", "block", "', :, /face, /custom!" },
+  { "commands", "gm", "/nav:200, /custom!:32767, ::150" }, { "commands", "blocked_message", "" },
+  { "management", "min_status", "100" })
+assert(changed == T.files[management_cfg] and changed:find("[::1]", 1, true))
+assert(changed:find("another/hud:1.0.0-Alpha.1+build.0", 1, true))
+assert(changed:find("gm = /nav:200, /custom!:32767, ::150", 1, true))
+assert(changed:find('blocked_message = ""', 1, true) and changed:find("min_status = 100", 1, true))
+assert(changed:find("[map]", 1, true) and changed:find("vanilla = on", 1, true))
+management_backup(changed, original)
+)lua");
+}
+
+TEST_CASE("Server script: management survives long reviews, clears a disconnected or reloaded editor, and bounds snapshots") {
+    check_run(R"lua(
+local original = "[commands]\ngm = /nav:200\n"
+T.files[management_cfg] = original
+management_zone("long_review")
+local gm = client(3, "GM", 200)
+local token = management_open(gm)
+gm.entity = 70
+T.handlers[Event.disconnect]({ self = gm })
+gm.entity = 3
+T.now = T.now + 2 * 60 * 60
+local saved, changed = management_save(gm, token, 0, { "commands", "gm", "/nav:201" })
+assert(changed:find("gm = /nav:201", 1, true))
+management_backup(changed, original)
+
+local edit = { "commands", "gm", "/nav:202" }
+T.handlers[Event.disconnect]({ self = gm })
+local _, reason = management_save(gm, saved, 3, edit)
+assert(reason:find("editor snapshot", 1, true))
+local before_reload = management_open(gm)
+event_encounter_load({ encounter = {} })
+management_save(gm, before_reload, 3, edit)
+assert(T.files[management_cfg] == changed)
+local fresh, snapshot = management_open(gm)
+assert(fresh ~= before_reload and snapshot == changed)
+local _, final = management_save(gm, fresh, 0, edit)
+assert(final == T.files[management_cfg] and final:find("gm = /nav:202", 1, true))
+management_backup(final, changed)
+
+management_zone("capacity")
+local used, unused = client(100, "Used", 250), client(101, "Unused", 250)
+local used_token, unused_token = management_open(used), management_open(unused)
+for id = 102, 163 do management_open(client(id, "Other GM", 250)) end
+T.dirs[management_lock] = true
+management_save(used, used_token, 5, edit)
+T.dirs[management_lock] = nil
+management_open(client(164, "Newest", 250))
+management_save(unused, unused_token, 3, edit)
+local _, unchanged = management_save(used, used_token, 0, edit)
+assert(unchanged == final and T.files[management_cfg] == final)
+)lua");
+}
+
+TEST_CASE("Server script: management finds a renamed cfg and refuses ambiguous case variants") {
+    check_run(R"lua(
+local mixed = "client_files/Hailstone.cfg"
+local original = "[commands]\ndefault = allow\n"
+T.files[management_cfg] = original
+management_zone("mixed_case")
+local gm = client(3, "GM", 200)
+T.files[management_cfg], T.files[mixed] = nil, original
+local token, snapshot = management_open(gm)
+assert(snapshot == original, "an open discovers case changes since listing files")
+local _, changed = management_save(gm, token, 0, { "movement", "passable_ladders", "off" })
+assert(T.files[management_cfg] == nil and T.files[mixed] == changed)
+management_backup(changed, original)
+
+T.files[management_cfg] = "[management]\nmin_status = 1\n"
+management_open(gm, 4)
+T.now = T.now + 301
+local page = assert(list_request(gm, 0))
+assert(page:ReadInt32(20) == 2, "ordinary file delivery still lists both case variants")
+local chunk = assert(chunk_request(gm, page:ReadInt32(8), 0, 0))
+assert(chunk:ReadInt16(6) == 2 and chunk:ReadFixedLengthString(24, #changed) == changed)
+)lua");
+}
+
+TEST_CASE("Server script: management preserves existing malformed command list entries and refuses new ones") {
+    check_run(R"lua(
+local ignored = "gm = /earlier:broken ; ignored duplicate"
+local original = "[commands]\n" .. ignored .. "\nallow = /, /FoL ; comment\n[COMMANDS]\ngm = /NaV:broken, /Stk:150\n"
+T.files[management_cfg] = original
+management_zone("preserve_commands")
+local gm = client(3, "GM", 200)
+local token = management_open(gm)
+management_save(gm, token, 2, { "commands", "gm", "/NaV:broken, /NaV:broken, /Stk:150" })
+management_save(gm, token, 2, { "commands", "gm", "/nav:broken, /Stk:150" })
+management_save(gm, token, 2, { "commands", "gm", "/NaV:broken, /earlier:broken, /Stk:150" })
+management_save(gm, token, 2, { "commands", "block", "/" })
+management_save(gm, token, 2, { "commands", "allow", "/, /, /FoL" })
+assert(T.files[management_cfg] == original)
+local _, cfg = management_save(gm, token, 0,
+  { "commands", "allow", "/, /FoL, /target" }, { "commands", "gm", "/NaV:broken, /Stk:151" })
+assert(cfg:find("allow = /, /FoL, /target ; comment", 1, true))
+assert(cfg:find(ignored, 1, true))
+assert(cfg:find("gm = /NaV:broken, /Stk:151", 1, true))
+management_backup(cfg, original)
+)lua");
+}
+
+TEST_CASE("Server script: management uses the Windows atomic replacement and keeps its backup") {
+    check_run(R"lua(
+package.config = "\\\n;\n?\n!\n-\n"
+local original = "[commands]\ndefault = allow\n"
+T.files[management_cfg] = original
+management_zone("windows")
+local gm = client(3, "GM", 200)
+local token, snapshot = management_open(gm)
+assert(snapshot == original)
+local _, changed = management_save(gm, token, 0, { "commands", "default", "deny" })
+assert(T.files[management_cfg] == changed and changed:find("default = deny", 1, true))
+management_backup(changed, original)
+assert(not T.dirs[management_lock] and not T.files[management_lock .. "/owner"])
+)lua");
+}
+
+TEST_CASE("Server script: management reports potentially stale locks and makes history pruning opt-in") {
+    check_run(R"lua(
+for _, separator in ipairs({ "/", "\\" }) do
+  package.config = separator .. "\n;\n?\n!\n-\n"
+  T.files, T.dirs, T.data = {}, {}, {}
+  local original = "[commands]\ndefault = allow\n"
+  T.files[management_cfg] = original
+  management_zone("history")
+  local gm = client(3, "GM", 200)
+  local token = management_open(gm)
+  local owner_file = management_lock .. "/owner"
+  local owner = (T.now - 901) .. " suspended-zone\n"
+  T.dirs[management_lock], T.files[owner_file] = true, owner
+  local _, busy = management_save(gm, token, 5, { "commands", "default", "deny" })
+  assert(busy:find("may be stale", 1, true))
+  assert(T.files[management_cfg] == original and T.files[owner_file] == owner and T.dirs[management_lock])
+  T.files[owner_file], T.dirs[management_lock] = nil, nil
+
+  local cfg, first, second
+  token, cfg = management_save(gm, token, 0, { "commands", "default", "deny" })
+  first = management_backup(cfg, original)
+  local first_cfg = cfg
+  token, cfg = management_save(gm, token, 0, { "commands", "default", "allow" })
+  second = management_backup(cfg, first_cfg)
+  local second_cfg = cfg
+  local function backup_path(revision, suffix) return management_history .. "/" .. revision .. "." .. suffix end
+  assert(T.files[backup_path(first, "cfg")] and T.files[backup_path(second, "cfg")], "history is retained by default")
+  T.files[management_history .. "/notes.txt"] = "operator notes"
+  T.files[management_history .. "/20000101T000000Z-0001.cfg"] = "unpaired user backup"
+  T.data["hailstone:server_management_history"] = "1"
+  T.now = T.now + 11
+
+  T.fail_replace = true
+  management_save(gm, token, 4, { "commands", "default", "deny" })
+  T.fail_replace = nil
+  assert(T.files[backup_path(second, "cfg")], "a failed save does not prune history")
+  local changed
+  token, changed = management_save(gm, token, 0, { "commands", "default", "deny" })
+  local newest = management_backup(changed, second_cfg)
+  assert(not T.files[backup_path(second, "cfg")] and not T.files[backup_path(second, "txt")])
+  assert(T.files[backup_path(first, "cfg")] == original, "an unmarked previous policy is retained")
+  assert(T.files[backup_path(newest, "cfg")] == second_cfg)
+  assert(T.files[management_history .. "/notes.txt"] == "operator notes")
+  assert(T.files[management_history .. "/20000101T000000Z-0001.cfg"] == "unpaired user backup")
+  assert(not T.dirs[management_lock] and not T.files[owner_file])
+
+  local same_second, used = T.now, { [newest] = true }
+  for _, value in ipairs({ "allow", "deny", "allow" }) do
+    T.now = same_second - 1 -- Each request advances the fixture clock by one second.
+    local previous = changed
+    token, changed = management_save(gm, token, 0, { "commands", "default", value })
+    local revision = management_backup(changed, previous)
+    assert(not used[revision], "retention must not reuse a pruned revision ID")
+    used[revision] = true
+  end
 end
 )lua");
 }

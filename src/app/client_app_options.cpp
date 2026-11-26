@@ -423,6 +423,7 @@ std::optional<int> ClientApp::option_value(std::string_view o) const {
     if (o == "cast_animation_fallback") return config_.get_bool("game.cast_animation_fallback", true) ? 1 : 0;
     // Hailstone: the right-click menu on other players (game::opens_player_menu), on by default.
     if (o == "player_menu") return player_menu_ ? 1 : 0;
+    if (o == "right_click_consider") return right_click_consider_ ? 1 : 0;
     if (o == "font_face") {
         // The face's place in option_choices("font_face"): 0 the default, -1 one not in the list.
         std::string face = config_.get_string("ui.font_face", "");
@@ -685,6 +686,12 @@ void ClientApp::set_option_value(std::string_view o, int v) {
         config_.save(config_path_);
         return;
     }
+    if (o == "right_click_consider") {
+        right_click_consider_ = v != 0;
+        config_.set_bool("mouse.right_click_consider", right_click_consider_);
+        config_.save(config_path_);
+        return;
+    }
     if (o == "mouse_invert_y" || o == "mouse_wheel_zoom") {
         (o == "mouse_invert_y" ? mouse_invert_y_ : mouse_wheel_zoom_) = v != 0;
         config_.set_bool(o == "mouse_invert_y" ? "mouse.invert_y" : "mouse.wheel_zoom", v != 0);
@@ -797,6 +804,7 @@ void ClientApp::apply_settings() {
     target_plate_through_walls_ = config_.get_bool("display.target_plate_through_walls", false);
     own_name_ = config_.get_bool("display.own_name", true);
     player_menu_ = config_.get_bool("mouse.player_menu", true);
+    right_click_consider_ = config_.get_bool("mouse.right_click_consider", true);
     // CEverQuest's constructor: ShowNamesLevel 0..6, anything else 4; ShowSpellEffects 0 / 1, else 1.
     show_names_ = config_.get_int("display.show_names", 4);
     if (show_names_ < 0 || show_names_ > 6) show_names_ = 4;

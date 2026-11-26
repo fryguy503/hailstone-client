@@ -20,6 +20,7 @@ local textselect = dofile("lib/textselect.lua")
 local T = hud.T
 local C = T.color
 stml.LINK = C.chatLink -- (this copy of stml: chat links in the colour made for the chat's page)
+local CHAT_GROUP_LINK = 1003
 
 local chats = {} -- by visible window slot
 
@@ -38,9 +39,13 @@ local function state(slot)
   if not c then
     c = { version = -1, lines = {}, input = "", focus = 0, follow = false, links = {} }
     -- (what the window's widgets take, made once and not every frame)
-    c.onLink = function(link) API.chat.Link(slot, link[1], link[2]) end
+    c.onLink = function(link)
+      if link[1] == CHAT_GROUP_LINK then c.groupClickFrame = ui.GetFrameCount() end
+      API.chat.Link(slot, link[1], link[2])
+    end
     c.inputOpts = {
       moveToEnd = false,
+      colorSpans = function(text) return chatlinks.ColorSpans(c.links, text, stml.LINK) end,
       history = function(older)
         local line = API.chat.History(slot, older)
         if line then c.links = {}; line = collapseLinks(c, line) end
@@ -67,7 +72,7 @@ end
 local function update(slot, c)
   -- (players' names as links: a click opens a tell; with Timestamps each line's time first; only the lines that
   -- came since the last look, unless the window's lines changed otherwise)
-  local version, lines, reset, count = API.chat.Text(slot, c.version, true, ui.GetSetting("chat.timestamps"), true)
+  local version, lines, reset, count = API.chat.Text(slot, c.version, true, ui.GetSetting("chat.timestamps"), true, true)
   if version == c.version or not lines then return end
   c.version = version
   if reset then stml.UpdateLines(c, lines, C.chatText) else stml.AppendLines(c, lines, count, C.chatText) end
@@ -207,7 +212,8 @@ local function body(slot, c, w, x, y, width, height, s)
   sel.active, sel.lineH = outHovered or sel.dragging or sel.s ~= nil, rowH
   stml.DrawLines(c, lw, viewH, c.key, c.onLink, sel)
   local page = API.chat.Page(slot) -- the PAGEUP / PAGEDOWN keys: a page less 8 up or down
-  ui.ScrollChatTab(slot, c.tab, page, viewH - 8 * s, c.follow)
+  local keepScroll = c.groupClickFrame and ui.GetFrameCount() - c.groupClickFrame <= 1
+  ui.ScrollChatTab(slot, c.tab, page, viewH - 8 * s, c.follow, keepScroll)
   c.follow = false
   -- (after ScrollChatTab, which keeps an output scrolled to its end there: a drag scrolls it from there)
   selectWithMouse(c, outHovered, top, top + viewH, s)

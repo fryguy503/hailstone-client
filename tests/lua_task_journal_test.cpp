@@ -23,6 +23,7 @@ local opened, historyClicks, nativeAbandon, linked = {}, 0, 0, nil
 local previewRequests = {}
 local roster, memberSelected, leader = { {"Aster","Leader"}, {"Beryl",""}, {"Cyra",""} }, -1, false
 local sharedActions, popup, pushedRow = {}, nil, nil
+local asked, begun = nil, {}
 local buttonIds, headers = {}, {}
 local disabled, disabledStack = false, {}
 local draw, tableRows
@@ -99,9 +100,18 @@ ui = {
   PushID=function(row) pushedRow=row end,
   PopID=function() pushedRow=nil end,
   TableSetupColumn=function(label) headers[label:match("^(.-)##") or label]=true end,
-  OpenPopup=function(id) popup=id end,
-  BeginPopup=function(id) return popup==id end,
-  CloseCurrentPopup=function() popup=nil end,
+  -- (one popup, and one question asked inside it: a button's opts.ask)
+  OpenPopup=function(id) if popup and id~=popup then asked=id else popup=id end end,
+  BeginPopup=function(id)
+    local open=popup==id or (asked~=nil and asked==id)
+    if open then begun[#begun+1]=id end
+    return open
+  end,
+  EndPopup=function() begun[#begun]=nil end,
+  CloseCurrentPopup=function()
+    if begun[#begun]==asked then asked=nil else popup=nil end
+  end,
+  Key={Escape=1}, IsKeyPressed=function() return false end,
   BeginDisabled=function(on) disabledStack[#disabledStack+1]=disabled;disabled=disabled or on end,
   EndDisabled=function() disabled=disabledStack[#disabledStack];disabledStack[#disabledStack]=nil end,
   BeginTable=function() tableRows=0;return true end,
@@ -112,7 +122,7 @@ for _,name in ipairs({"PushStyleColor","PopStyleColor","PushStyleVar","PopStyleV
   "PushTextWrapPos","PopTextWrapPos","SameLine","SetCursorScreenPos","SetCursorPos","SetNextItemAllowOverlap",
   "SetNextItemWidth","DrawRectFilled","DrawRect","DrawCircleFilled","DrawCircle","DrawLine","DrawText",
   "Dummy","Separator","BeginChild","EndChild","TableHeadersRow","TableNextColumn","TableSetupScrollFreeze",
-  "EndTable","SetTooltip","EndPopup","SetNextWindowSize"}) do ui[name]=noop end
+  "EndTable","SetTooltip","SetNextWindowSize"}) do ui[name]=noop end
 
 hs = {
   InGame=function() return inGame end,
@@ -333,9 +343,14 @@ roster={ {"Cyra",""}, {"Beryl",""}, {"Aster","Leader"} }
 render("STASK_RemovePlayerButton")
 assert(#sharedActions==beforeRemoval,"A returning name is not selected automatically")
 render("member.Cyra")
+local beforeLeader=#sharedActions
 render("STASK_MakeLeaderButton")
+assert(#sharedActions==beforeLeader and texts["Make Cyra the shared task leader?"],
+  "Make leader asks first, naming the member")
+render("askyesSTASK_MakeLeaderButton")
 assert(sharedActions[#sharedActions].id=="STASK_MakeLeaderButton" and sharedActions[#sharedActions].member=="Cyra",
   "Make leader uses an explicitly selected member")
+assert(asked==nil and popup=="##sharedMembers","The answered question goes; the roster stays")
 render("closeSharedMembers")
 assert(popup==nil,"Close dismisses the roster")
 

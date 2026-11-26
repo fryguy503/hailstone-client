@@ -710,6 +710,47 @@ TEST_CASE("raid state") {
     CHECK(!r.remove("Alice"));
 }
 
+TEST_CASE("raid state: the name index keeps lookups right through adds, removes and direct writes") {
+    game::RaidState r;
+    for (int i = 0; i < 100; ++i) CHECK(r.add({"Member" + std::to_string(i), static_cast<std::uint32_t>(i % 12)}));
+    CHECK(r.index.size() == 100);
+    // Removing from the middle moves the later members down; each is still found where it now is.
+    CHECK(r.remove("member50"));
+    CHECK_FALSE(r.is_member("Member50"));
+    for (int i : {0, 49, 51, 99}) {
+        const game::RaidMember* m = r.find("MEMBER" + std::to_string(i));
+        REQUIRE(m);
+        CHECK(m->name == "Member" + std::to_string(i));
+    }
+    CHECK(r.members[50].name == "Member51");
+    // Written directly, past the index: still found (by the walk), and indexed again by the next change.
+    r.members.push_back({"Direct"});
+    CHECK(r.is_member("direct"));
+    r.members[0].name = "Renamed";
+    CHECK(r.is_member("Renamed"));
+    CHECK_FALSE(r.is_member("Member0"));
+    CHECK(r.find("renamed") == &r.members[0]);
+    CHECK(r.index.size() == r.members.size());
+    // A name twice (only by a direct write) is found as the first.
+    r.members.push_back({"renamed", 7});
+    CHECK(r.find("RENAMED")->group == 0);
+    r.clear();
+    CHECK(r.index.empty());
+    CHECK_FALSE(r.is_member("Direct"));
+}
+
+TEST_CASE("raid state: more members than RoF2's 72, up to kRaidMembersKept") {
+    game::RaidState r;
+    for (std::size_t i = 0; i < game::kRaidMembersKept + 50; ++i) r.add({"M" + std::to_string(i)});
+    CHECK(r.members.size() == game::kRaidMembersKept);
+    CHECK(r.is_member("M72"));
+    CHECK_FALSE(r.add({"Late"}));
+    CHECK_FALSE(r.is_member("Late"));
+    // A member already there is still updated at the cap.
+    CHECK_FALSE(r.add({"m5", 3}));
+    CHECK(r.find("M5")->group == 3);
+}
+
 TEST_CASE("chat server: login, commands and events (EQEmu UCS)") {
     ChatServerInfo info;
     info.server_short_name = "nms";

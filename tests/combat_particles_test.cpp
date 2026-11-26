@@ -30,6 +30,7 @@
 #include "game/spells.h"
 #include "mock_server/harness.h"
 #include "net/movement_packets.h"
+#include "net/rename_packets.h"
 #include "net/spell_packets.h"
 #include "net/zone_packets.h"
 
@@ -989,6 +990,77 @@ TEST_CASE("Local sharp-weapon damage produces asset-backed blood only at a suppo
     CHECK(rig.conn.take_blood_spurts().empty());
 }
 
+TEST_CASE("Spell, effect-timer and nimbus emitters stop with their spawn, and do not move to a new one under its id") {
+    using namespace net;
+    using namespace test;
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    rig.server.add_spawn(make_spawn("FixtureReused", 334, 1, 1, 80, 90, 8));
+    rig.server.add_spawn(make_spawn("FixtureGone", 335, 1, 1, 20, 30, 8));
+    REQUIRE(rig.until([&] { return rig.conn.world().spawns.contains(334) && rig.conn.world().spawns.contains(335); }));
+    auto table = std::make_shared<game::SpellTable>();
+    REQUIRE(table->parse(spell_line(600)) == 1);
+    rig.conn.set_spell_table_for_test(table);
+    assets::SpellEffect effect;
+    effect.stages[0].slots[0] = {1, 0, 1, 8}; // the cast stage on the caster
+    effect.stages[2].slots[0] = {1, 0, 1, 8}; // the impact stage on the caster (a nimbus, a timer's last stage)
+    app::SpellParticles particles({assets::EmitterDefinition{}, dot()}, {assets::SpellEffect{}, effect});
+    const std::uint32_t me = rig.conn.world().player_id;
+    std::vector<SpellEffectCue> casts(3);
+    casts[0].caster = 334;
+    casts[1].caster = 335;
+    casts[2].caster = me;
+    for (auto& c : casts) {
+        c.spell = 600;
+        c.duration_ms = 5000;
+    }
+    std::vector<EffectPacketCue> packets(3);
+    packets[0].kind = EffectPacketCue::Kind::Add; // a timed effect: its impact stage plays 200 ms on
+    packets[0].effect = 1;
+    packets[0].caster = packets[0].target = 334;
+    packets[0].stage1_ms = 100;
+    packets[0].stage1_length_ms = 100;
+    packets[0].stage2_length_ms = 1000;
+    packets[1] = packets[0];
+    packets[1].caster = packets[1].target = 335;
+    packets[2].kind = EffectPacketCue::Kind::AddNimbus;
+    packets[2].effect = 1;
+    packets[2].caster = 334;
+    particles.update(rig.conn, casts, packets, nullptr, 0.01f);
+    const auto& emitters = particles.simulation().emitters();
+    auto on = [&](std::uint32_t id) {
+        return std::count_if(emitters.begin(), emitters.end(), [&](const game::Emitter& e) { return e.actor == id; });
+    };
+    REQUIRE(on(334) >= 3); // the cast, the timer's cast stage and the nimbus
+    REQUIRE(on(335) >= 2);
+    REQUIRE(on(me) == 1);
+    // 335 despawns; 334 despawns and another spawn takes its id within the frame.
+    auto& spawns = rig.conn.world_for_test().spawns;
+    spawns.erase(335);
+    game::Spawn reused = spawns.at(334);
+    spawns.erase(334);
+    reused.incarnation = core::next_process_identity();
+    spawns[334] = reused;
+    particles.update(rig.conn, {}, {}, nullptr, 0.01f);
+    CHECK(on(334) == 0);
+    CHECK(on(335) == 0);
+    CHECK(on(me) == 1);
+    // The timers went with them: their impact stage plays on neither the new spawn nor a spawn that comes back.
+    game::Spawn back = reused;
+    back.id = 335;
+    back.incarnation = core::next_process_identity();
+    rig.conn.world_for_test().spawns[335] = back;
+    particles.update(rig.conn, {}, {}, nullptr, 0.3f);
+    particles.update(rig.conn, {}, {}, nullptr, 0.01f);
+    CHECK(on(334) == 0);
+    CHECK(on(335) == 0);
+    // An emitter made on the new spawn stays.
+    casts[0].caster = 334;
+    particles.update(rig.conn, std::span(&casts[0], 1), {}, nullptr, 0.01f);
+    particles.update(rig.conn, {}, {}, nullptr, 0.01f);
+    CHECK(on(334) == 1);
+}
+
 TEST_CASE("A valid spell missile packet creates its stage at the missile and releases missile-owned emitters") {
     using namespace net;
     using namespace test;
@@ -1343,4 +1415,83 @@ TEST_CASE("Actor emitters out of view emit nothing, ask for no pose and start no
         CHECK(particles.simulation().emitters()[0].particles.size() <= 3u);
         CHECK_FALSE(particles.simulation().emitters()[0].particles.empty());
     }
+}
+
+TEST_CASE("Spell and level-up effect cues not yet taken do not survive a zone change") {
+    // The new zone reuses spawn ids for other spawns: an old zone's cue would play on one of them.
+    using namespace net;
+    using namespace test;
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    rig.server.add_spawn(make_spawn("FixtureCaster", 333, 1, 1, 50, 60, 7));
+    rig.server.add_spawn(make_spawn("FixtureTarget", 334, 1, 1, 80, 90, 8));
+    REQUIRE(rig.until([&] { return rig.conn.world().spawns.contains(333) && rig.conn.world().spawns.contains(334); }));
+    auto table = std::make_shared<game::SpellTable>();
+    REQUIRE(table->parse(spell_line(600)) == 1);
+    rig.conn.set_spell_table_for_test(table);
+    rig.conn.take_spell_effect_cues();
+    rig.conn.take_level_effect_cues();
+    Action hit;
+    hit.source = 333;
+    hit.target = 334;
+    hit.type = 231;
+    hit.spell_id = 600;
+    hit.spell_level = 50;
+    hit.effect_flag = 4;
+    rig.conn.receive_zone_packet_for_test(encode(hit));
+    LevelAppearance level;
+    level.spawn_id = 334;
+    level.groups[0] = {0x4d, 1, 0};
+    rig.conn.receive_zone_packet_for_test(encode(level));
+    // Both make cues; the same again is left untaken when the zone changes.
+    REQUIRE_FALSE(rig.conn.take_spell_effect_cues().empty());
+    REQUIRE(rig.conn.take_level_effect_cues().size() == 1);
+    rig.conn.receive_zone_packet_for_test(encode(hit));
+    rig.conn.receive_zone_packet_for_test(encode(level));
+    const auto entries = rig.server.zone_entries;
+    rig.server.request_zone_change(2, 0.0f, 0.0f, 3.0f);
+    REQUIRE(rig.until([&] { return rig.server.zone_entries == entries + 1 && rig.conn.state() == ConnectionState::InZone; }));
+    CHECK(rig.conn.take_spell_effect_cues().empty());
+    CHECK(rig.conn.take_level_effect_cues().empty());
+}
+
+TEST_CASE("Sound cues tied to the old zone's spawns do not survive a zone change") {
+    // A spell's landing sound plays at its target: a cue left untaken at a zone change would play at whichever
+    // spawn of the new zone reuses the id. The level-up sound names no spawn and stays.
+    using namespace net;
+    using namespace test;
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    rig.server.add_spawn(make_spawn("FixtureCaster", 333, 1, 1, 50, 60, 7));
+    rig.server.add_spawn(make_spawn("FixtureTarget", 334, 1, 1, 80, 90, 8));
+    REQUIRE(rig.until([&] { return rig.conn.world().spawns.contains(333) && rig.conn.world().spawns.contains(334); }));
+    auto table = std::make_shared<game::SpellTable>();
+    REQUIRE(table->parse(spell_line(600)) == 1);
+    rig.conn.set_spell_table_for_test(table);
+    REQUIRE(rig.until([&] { return rig.conn.player_status().level != 0; }));
+    (void)rig.conn.take_sound_cues();
+    Action hit;
+    hit.source = 333;
+    hit.target = 334;
+    hit.type = 231;
+    hit.spell_id = 600;
+    hit.spell_level = 50;
+    hit.effect_flag = 4;
+    LevelUpdate level;
+    level.level = rig.conn.player_status().level + 1u;
+    level.old_level = rig.conn.player_status().level;
+    const auto has = [](const std::vector<SoundCue>& cues, SoundCue::Kind kind) {
+        return std::any_of(cues.begin(), cues.end(), [&](const SoundCue& c) { return c.kind == kind; });
+    };
+    rig.conn.receive_zone_packet_for_test(encode(hit));
+    REQUIRE(has(rig.conn.take_sound_cues(), SoundCue::Kind::SpellLanded));
+    // The same again, and a level gained, are left untaken when the zone changes.
+    rig.conn.receive_zone_packet_for_test(encode(hit));
+    rig.conn.receive_zone_packet_for_test(encode(level));
+    const auto entries = rig.server.zone_entries;
+    rig.server.request_zone_change(2, 0.0f, 0.0f, 3.0f);
+    REQUIRE(rig.until([&] { return rig.server.zone_entries == entries + 1 && rig.conn.state() == ConnectionState::InZone; }));
+    const auto cues = rig.conn.take_sound_cues();
+    CHECK_FALSE(has(cues, SoundCue::Kind::SpellLanded));
+    CHECK(has(cues, SoundCue::Kind::LevelUp));
 }

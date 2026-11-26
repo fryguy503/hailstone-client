@@ -15,6 +15,14 @@ UiHost& host(lua_State* L) { return *static_cast<UiHost*>(lua_touserdata(L, lua_
 void text(lua_State* L, const char* key, std::string_view value) {
     lua_pushlstring(L, value.data(), value.size()); lua_setfield(L, -2, key);
 }
+// A number's decimal text, made without the heap: a std::string made for a push would be alive across it, and a push
+// that raises skips its destructor (Lua is built as C: core/lua_keep.h).
+struct Decimal {
+    char buf[24];
+    std::size_t n = 0;
+    explicit Decimal(std::uint64_t v) { n = static_cast<std::size_t>(std::to_chars(buf, buf + sizeof buf, v).ptr - buf); }
+    std::string_view view() const { return {buf, n}; }
+};
 void integer(lua_State* L, const char* key, std::uint64_t value) {
     lua_pushinteger(L, static_cast<lua_Integer>(value)); lua_setfield(L, -2, key);
 }
@@ -75,7 +83,7 @@ void push_components(lua_State* L, const net::AchievementDefinition& definition,
             boolean(L, "count_known", count_known);
             if (count_known) {
                 integer(L, "count", *state->counts[type][i]);
-                text(L, "count_text", std::to_string(*state->counts[type][i]));
+                text(L, "count_text", Decimal(*state->counts[type][i]).view());
             }
             lua_rawseti(L, -2, ++row);
         }
@@ -137,8 +145,8 @@ int Achievements(lua_State* L) {
     boolean(L, "ready", model.primary_ready()); boolean(L, "progress_ready", model.progress_ready());
     boolean(L, "refresh_pending", c->achievement_refresh_pending());
     record::text(L, "message", c->achievement_message());
-    record::text(L, "catalog_token", std::to_string(model.catalog_token()));
-    record::text(L, "state_revision", std::to_string(model.revision()));
+    record::text(L, "catalog_token", Decimal(model.catalog_token()).view());
+    record::text(L, "state_revision", Decimal(model.revision()).view());
     boolean(L, "catalog_unchanged", catalog_unchanged); boolean(L, "states_unchanged", states_unchanged);
     const auto& selection = model.selection();
     if (selection) integer(L, "selected_index", selection->definition_index);
@@ -177,8 +185,8 @@ int Achievement(lua_State* L) {
         selected->definition_index >= model.catalog()->definitions.size()) { lua_pushnil(L); return 1; }
     const auto& definition = model.catalog()->definitions[selected->definition_index];
     lua_createtable(L, 0, 16);
-    boolean(L, "shown", model.detail_shown()); text(L, "revision", std::to_string(model.detail_revision()));
-    text(L, "catalog_token", std::to_string(model.catalog_token())); integer(L, "definition_index", selected->definition_index);
+    boolean(L, "shown", model.detail_shown()); text(L, "revision", Decimal(model.detail_revision()).view());
+    text(L, "catalog_token", Decimal(model.catalog_token()).view()); integer(L, "definition_index", selected->definition_index);
     const bool linked = selected->source == game::AchievementDetailSource::Link;
     text(L, "source", linked ? "link" : "own");
     text(L, "player_name", linked && model.detail_link() ? model.detail_link()->player_name : c->character_name());

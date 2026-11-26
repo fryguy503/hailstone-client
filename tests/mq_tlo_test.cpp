@@ -1,8 +1,12 @@
 // mq/tlo.h, mq/spawn_search.h and mq/parse.h: MacroQuest's TLOs over a small world (tests/mq_test_world.h).
 #include <doctest/doctest.h>
 
+#include "core/build_info.h"
 #include "manual_clock.h"
+#include "game/doors.h"
+#include "mq/commands.h"
 #include "mq/parse.h"
+#include "plugin/hooks.h"
 #include "mq/spawn_search.h"
 #include "mq/tlo.h"
 #include "mq_test_world.h"
@@ -115,6 +119,8 @@ TEST_CASE("TLO: spells, gems and buffs") {
     CHECK(f.p("${Me.Buff[2]}") == "NULL");           // the song is not a buff
     CHECK(f.p("${Me.Song[1]}") == "Selo's Accelerando");
     CHECK(f.p("${Me.CountBuffs} ${Me.CountSongs}") == "1 1");
+    // The buff and song windows' slots (RoF2's 42 and 20), and the buff slots one long buff leaves.
+    CHECK(f.p("${Me.MaxBuffSlots} ${Me.MaxSongSlots} ${Me.FreeBuffSlots}") == "42 20 41");
     // 10 ticks = 60 s, counted from when it arrived.
     auto secs = std::stoi(f.p("${Me.Buff[1].Duration.TotalSeconds}"));
     CHECK(secs >= 59);
@@ -490,6 +496,26 @@ TEST_CASE("TLO: Group, items, Zone and the rest") {
     CHECK(f.p("${Cursor}") == "NULL");
     CHECK(f.p("${Window[InventoryWindow].Open} ${Window[BankWnd].Open}") == "TRUE FALSE");
     CHECK(f.p("${EverQuest.GameState} ${EverQuest.Server}") == "INGAME TestServer");
+    // MacroQuest.Path[config] is the scripts' settings folder; MQ's other names stay NULL until settled.
+    CHECK(f.p("${MacroQuest.Path[config]}") == "NULL"); // no folder given
+    f.ctx.config_path = "/data/scripts/config";
+    CHECK(f.p("${MacroQuest.Path[config]} ${MacroQuest.Path[CONFIG]}") == "/data/scripts/config /data/scripts/config");
+    CHECK(f.p("${MacroQuest.Path[macros]} ${MacroQuest.Path}") == "NULL NULL");
+    // Hailstone.Path is the same member under the client's name (TLO names take any case).
+    CHECK(f.p("${Hailstone.Path[config]} ${HailStone.Path[Config]}") == "/data/scripts/config /data/scripts/config");
+    CHECK(f.p("${Hailstone.Path[macros]} ${Hailstone.Path}") == "NULL NULL");
+    // Their other members are EverQuest's, as in MQ: the server's name, the game state.
+    CHECK(f.p("${MacroQuest.Server} ${Hailstone.Server}") == "TestServer TestServer");
+    CHECK(f.p("${MacroQuest.Server.Equal[testserver]} ${MacroQuest.GameState}") == "TRUE INGAME");
+    // Build is MQ's build target (4, Emu), a number E3 casts; BuildDate the build's yyyymmdd, Version Hailstone's.
+    CHECK(f.p("${MacroQuest.Build} ${Hailstone.Build}") == "4 4");
+    const std::string date = std::to_string(build_date());
+    CHECK(date.size() == 8);
+    CHECK(build_date() >= 20260101);
+    CHECK(f.p("${MacroQuest.BuildDate}") == date);
+    CHECK(f.p("${Hailstone.BuildDate}") == date);
+    CHECK(f.p("${MacroQuest.Version}") == release_version());
+    CHECK(f.p("${Hailstone.Version}") == release_version());
     CHECK(f.p("${Int[7.9]} ${Float[2].Deci} ${Bool[0]} ${Bool[yes]}") == "7 2.0 FALSE TRUE");
     // No whole number for NaN, an infinity or one past int64 (the cast would be undefined); in range is cut as before.
     CHECK(f.p("${Int[nan]} ${Int[inf]} ${Int[-inf]} ${Int[1e300]} ${Int[-1e300]}") == "NULL NULL NULL NULL NULL");
@@ -498,6 +524,26 @@ TEST_CASE("TLO: Group, items, Zone and the rest") {
     CHECK(f.p("${Select[b,a,b,c]}") == "2");
     CHECK(f.p("${Heading[90].ShortName}") == "E");
     CHECK(f.p("${Heading[0].ShortName}") == "N");
+}
+
+TEST_CASE("TLO: an index past the type it names is none, not the one it wraps to") {
+    Fixture f;
+    // Each wraps to something the fixture has: spell 200, spawn 1, General1 (slot 23), bag sub 0, member 0, gem 1.
+    CHECK(f.p("${Spell[200]}") == "Minor Healing");
+    CHECK(f.p("${Spell[4294967496]}") == "NULL");
+    CHECK(f.p("${Spawn[1]}") == "Tester");
+    CHECK(f.p("${Spawn[4294967297]}") == "NULL");
+    CHECK(f.p("${Me.Inventory[23]}") == "Healing Potion");
+    CHECK(f.p("${Me.Inventory[65559]}") == "NULL");
+    CHECK(f.p("${Me.Inventory[-1]}") == "NULL");
+    CHECK(f.p("${Me.Inventory[pack2].Item[1]}") == "Healing Potion");
+    CHECK(f.p("${Me.Inventory[pack2].Item[65537]}") == "NULL");
+    CHECK(f.p("${Group.Member[0]}") == "Tester");
+    CHECK(f.p("${Group.Member[4294967296]}") == "NULL");
+    CHECK(f.p("${Me.SpellReady[1]}") == "TRUE");
+    CHECK(f.p("${Me.SpellReady[4294967297]}") == "FALSE");
+    CHECK(f.p("${Me.SpellReady[2147483648]}") == "FALSE"); // (once INT_MIN - 1)
+    CHECK(f.p("${Me.SpellReady[-2147483648]}") == "FALSE");
 }
 
 TEST_CASE("TLO: an item's TimerReady, its own and its recast type's click reuse, as MQ's") {
@@ -753,4 +799,560 @@ TEST_CASE("spawn search: random text parses and searches without fault") {
         auto q = mq::parse_spawn_search(text, &f.world.conn->guild());
         CHECK_NOTHROW(mq::search_spawns(q, f.world.conn->world(), mq::sources_of(*f.world.conn)));
     }
+}
+
+TEST_CASE("TLO: Me.Bandolier[name|#] and .Active, .Index, .Name, .Item[n]") {
+    Fixture f;
+    using A = net::GameConnectionTestAccess;
+    auto& sets = A::bandolier(*f.world.conn);
+    sets.assign(game::kBandolierSets, {});
+    auto belt = [](std::uint32_t id, const char* name) {
+        game::BeltItem b;
+        b.id = id;
+        b.icon = id + 1;
+        b.name = name;
+        return b;
+    };
+    sets[0].name = "Melee";
+    sets[0].items = {belt(5101, "Cudgel"), belt(5102, "Buckler"), belt(0, ""), belt(0, "")};
+    sets[2].name = "Bow";
+    sets[2].items = {belt(0, ""), belt(0, ""), belt(5103, "Longbow"), belt(5104, "Arrow")};
+    auto wear = [&](std::int16_t slot, std::uint32_t id) {
+        net::Item it;
+        it.id = id;
+        it.name = "worn";
+        A::inventory(*f.world.conn).put(net::ItemSlot::possessions(slot), it);
+    };
+
+    // By name (any case) or number; a name no set has is NULL.
+    CHECK(f.p("${Me.Bandolier[melee]} ${Me.Bandolier[MELEE].Index} ${Me.Bandolier[Bow].Index}") == "Melee 1 3");
+    CHECK(f.p("${Me.Bandolier[1].Name} ${Me.Bandolier[3].Name}") == "Melee Bow");
+    CHECK(f.p("${Me.Bandolier[Caster]}") == "NULL");
+    CHECK(f.p("${Me.Bandolier[Caster].Active}") == "NULL");
+    // A set without a name answers NULL; numbers are clamped to 1..20.
+    CHECK(f.p("${Me.Bandolier[2].Active} ${Me.Bandolier[2].Name}") == "NULL NULL");
+    CHECK(f.p("${Me.Bandolier[0].Name} ${Me.Bandolier[99].Name}") == "Melee NULL");
+
+    // Active: each of the four slots holds the set's item, an empty one an empty slot.
+    CHECK(f.p("${Me.Bandolier[Melee].Active} ${Me.Bandolier[Bow].Active}") == "FALSE FALSE");
+    wear(net::kSlotPrimary, 5101);
+    CHECK(f.p("${Me.Bandolier[Melee].Active}") == "FALSE"); // the Buckler is not on
+    wear(net::kSlotSecondary, 5102);
+    CHECK(f.p("${Me.Bandolier[Melee].Active} ${Me.Bandolier[Bow].Active}") == "TRUE FALSE");
+    wear(net::kSlotAmmo, 5104); // an item in a slot the set leaves empty
+    CHECK(f.p("${Me.Bandolier[Melee].Active}") == "FALSE");
+    (void)A::inventory(*f.world.conn).take(net::ItemSlot::possessions(net::kSlotPrimary));
+    (void)A::inventory(*f.world.conn).take(net::ItemSlot::possessions(net::kSlotSecondary));
+    wear(net::kSlotRange, 5103);
+    CHECK(f.p("${Me.Bandolier[Melee].Active} ${Me.Bandolier[Bow].Active}") == "FALSE TRUE");
+
+    // Item[n]: the set's items (1 primary .. 4 ammo, clamped).
+    CHECK(f.p("${Me.Bandolier[Melee].Item[1]} ${Me.Bandolier[Melee].Item[2].ID}") == "Cudgel 5102");
+    CHECK(f.p("${Me.Bandolier[Bow].Item[4].Name} ${Me.Bandolier[Bow].Item[4].IconID}") == "Arrow 5105");
+    CHECK(f.p("${Me.Bandolier[Bow].Item[9].Name} ${Me.Bandolier[Bow].Item[0].ID}") == "Arrow 0");
+    CHECK(f.p("${Me.Bandolier[Bow].Item}") == "NULL");
+}
+
+TEST_CASE("TLO: the aggro meter's readings (Me, Target, XTarget, Group members)") {
+    Fixture f;
+    using A = net::GameConnectionTestAccess;
+    CHECK(f.p("${Me.PctAggro} ${Target.PctAggro} ${Target.SecondaryPctAggro}") == "0 0 0");
+    CHECK(f.p("${Target.SecondaryAggroPlayer}") == "NULL");
+    auto& ag = A::aggro(*f.world.conn);
+    ag.pct[net::kAggroPlayer] = 45;
+    ag.pct[net::kAggroSecondary] = 30;
+    ag.pct[net::kAggroGroup1] = 12;
+    ag.pct[net::kAggroXTarget1 + 1] = 88;
+    ag.secondary_id = 12;
+    CHECK(f.p("${Me.PctAggro} ${Target.PctAggro} ${Target.SecondaryPctAggro} ${Me.SecondaryPctAggro}") == "45 45 30 30");
+    CHECK(f.p("${Target.SecondaryAggroPlayer.Name}") == "Groupie");
+    // Target is still a spawn: its members and plain value are a spawn's.
+    CHECK(f.p("${Target} ${Target.ID}") == "a rat 10");
+    // The group's members by index: 0 the player, then the group's entries.
+    CHECK(f.p("${Group.Member[0].PctAggro} ${Group.Member[1].PctAggro}") == "45 12");
+    // Me.XTarget[n] is the slot's spawn, with the slot's own reading.
+    auto& xt = A::xtargets(*f.world.conn);
+    xt.slots.resize(5);
+    xt.slots[1].spawn_id = 11;
+    CHECK(f.p("${Me.XTargetSlots}") == "5");
+    CHECK(f.p("${Me.XTarget[2]} ${Me.XTarget[2].ID} ${Me.XTarget[2].PctAggro}") == "Fippy Darkpaw 11 88");
+    CHECK(f.p("${Me.XTarget[1]}") == "NULL");
+}
+
+TEST_CASE("TLO: Me's endurance, AA points, auto fire, cast and gem timers, disciplines") {
+    Fixture f;
+    using A = net::GameConnectionTestAccess;
+    CHECK(f.p("${Me.Endurance}") == "50");
+    CHECK(f.p("${Me.AutoFire}") == "FALSE");
+    A::profile(*f.world.conn)->aa_points_spent = 20;
+    A::alt_adv(*f.world.conn).assigned[0] = 20;
+    CHECK(f.p("${Me.AAPointsTotal} ${Me.AAPointsAssigned}") == "27 20");
+    // Nothing being cast: no time left.
+    CHECK(f.p("${Me.CastTimeLeft}") == "0");
+    auto& sp = A::spells(*f.world.conn);
+    sp.casting.spell = 200;
+    sp.casting.eta_ms = net::GameConnection::now_ms() + 2500;
+    const int cast_left = std::stoi(f.p("${Me.CastTimeLeft}"));
+    CHECK(cast_left > 2000);
+    CHECK(cast_left <= 2500);
+    sp.casting = {};
+    // A gem's recast: by number or by the spell's name; NULL for an empty gem.
+    CHECK(f.p("${Me.GemTimer[1]}") == "0");
+    sp.gems[0].ready = net::GameConnection::eq_time() + 5000;
+    const int gem_left = std::stoi(f.p("${Me.GemTimer[Minor Healing]}"));
+    CHECK(gem_left > 4000);
+    CHECK(gem_left <= 5000);
+    CHECK(f.p("${Me.GemTimer[1].TotalSeconds}") == std::to_string(gem_left / 1000));
+    CHECK(f.p("${Me.GemTimer[5]}") == "NULL");
+    // Past int: no gem, not the one it wraps to (gem 1), nor INT_MIN - 1.
+    CHECK(f.p("${Me.GemTimer[4294967297]}") == "NULL");
+    CHECK(f.p("${Me.GemTimer[2147483648]}") == "NULL");
+    // The active discipline: the last buff slot's.
+    CHECK(f.p("${Me.ActiveDisc}") == "NULL");
+    CHECK(f.p("${Bool[${Me.ActiveDisc.ID}]}") == "FALSE");
+    sp.buffs[game::kBuffSlots - 1].spell = 4498;
+    sp.buffs[game::kBuffSlots - 1].tics = 10;
+    CHECK(f.p("${Me.ActiveDisc} ${Me.ActiveDisc.ID}") == "Test Discipline 4498");
+    // Combat abilities: the n-th one's spell, or a name's number.
+    A::profile(*f.world.conn)->disciplines = {0, 4498};
+    CHECK(f.p("${Me.CombatAbility[2]} ${Me.CombatAbility[Test Discipline]}") == "Test Discipline 2");
+    CHECK(f.p("${Me.CombatAbility[1]} ${Me.CombatAbility[Holy Armor]}") == "NULL NULL");
+    // No ability source in this fixture: no skill.
+    CHECK(f.p("${Me.Ability[Kick]}") == "FALSE");
+}
+
+TEST_CASE("TLO: Me.AltAbility by name or ability id, with its rank, reuse and spell") {
+    Fixture f;
+    auto& aa = net::GameConnectionTestAccess::alt_adv(*f.world.conn);
+    game::AltAbility a;
+    a.id = 1003;
+    a.group = 5;
+    a.rank = 3;
+    a.max_rank = 5;
+    a.title_sid = 9001; // Innate Strength
+    a.spell = 200;
+    a.refresh = 600;
+    aa.add(a);
+    aa.owned = {{1003, 3, 0}};
+    CHECK(f.p("${Me.AltAbility[Innate Strength]}") == "5");
+    CHECK(f.p("${Me.AltAbility[5].Name}") == "Innate Strength");
+    CHECK(f.p("${Me.AltAbility[4294967301]}") == "NULL"); // 5 + 2^32: no group, not group 5
+    CHECK(f.p("${Me.AltAbility[innate strength].ID} ${Me.AltAbility[5].Rank} ${Me.AltAbility[5].MaxRank}") == "5 3 5");
+    CHECK(f.p("${Me.AltAbility[5].ReuseTime} ${Me.AltAbility[5].Passive}") == "600 FALSE");
+    CHECK(f.p("${Me.AltAbility[5].Spell} ${Me.AltAbility[5].Spell.ID} ${Me.AltAbility[5].Spell.Mana}") ==
+          "Minor Healing 200 10");
+    CHECK(f.p("${Bool[${Me.AltAbility[Innate Strength].Spell}]}") == "TRUE");
+    CHECK(f.p("${Me.AltAbility[Mystical Shielding]} ${Me.AltAbility[6]}") == "NULL NULL"); // not owned
+}
+
+TEST_CASE("TLO: item members E3 reads (ItemReady, Timer, Clicky, stacks, worn slots, augments, links)") {
+    Fixture f;
+    using A = net::GameConnectionTestAccess;
+    auto& inv = A::inventory(*f.world.conn);
+    net::Item wand;
+    wand.name = "Wand of Testing";
+    wand.id = 6001;
+    wand.equip_slots = (1u << 13) | (1u << 14); // the hands
+    wand.effects[net::kEffectClick].effect = 200;
+    wand.effects[net::kEffectClick].type = 4;
+    wand.tradeskills = 1;
+    wand.no_drop = 0;
+    wand.aug_sockets[0] = {7, 1, 0};
+    wand.aug_sockets[2] = {3, 1, 0};
+    net::Item stone;
+    stone.name = "Aug Stone";
+    stone.id = 6002;
+    wand.contents.push_back({0, stone});
+    inv.put(net::ItemSlot::possessions(net::kSlotGeneral1 + 2), wand);
+    // A click effect without a recast: ready, its timer 0.
+    CHECK(f.p("${Me.ItemReady[Wand of Testing]} ${Me.ItemReady[=wand of testing]} ${Me.ItemReady[6001]}") == "TRUE TRUE TRUE");
+    CHECK(f.p("${FindItem[Wand].Timer} ${FindItem[Wand].Clicky} ${FindItem[Wand].EffectType}") == "0 Minor Healing Click Worn");
+    // An item without a click effect is never ready and has no timer.
+    CHECK(f.p("${Me.ItemReady[Healing Potion]} ${FindItem[Healing Potion].Timer}") == "FALSE NULL");
+    CHECK(f.p("${Me.ItemReady[Nothing Like It]}") == "FALSE");
+    // Past uint32: no item, not the id it wraps to (6001), and -1 is not 0xffffffff.
+    CHECK(f.p("${Me.ItemReady[4294973297]} ${Me.ItemReady[-1]}") == "FALSE FALSE");
+    // Stacks over the packs and their bags (5 + 2 of 20 each).
+    CHECK(f.p("${FindItem[Healing Potion].StackCount} ${FindItem[Healing Potion].FreeStack}") == "7 33");
+    CHECK(f.p("${FindItem[Wand].StackCount} ${FindItem[Wand].FreeStack}") == "0 0");
+    CHECK(f.p("${FindItem[Wand].WornSlot[1]} ${FindItem[Wand].WornSlot[2]} ${FindItem[Wand].WornSlot[3]}") == "13 14 NULL");
+    CHECK(f.p("${FindItem[Wand].WornSlot[mainhand]} ${FindItem[Wand].WornSlot[head]}") == "TRUE FALSE");
+    CHECK(f.p("${FindItem[Wand].NoTrade} ${FindItem[Wand].Tradeskills}") == "TRUE TRUE");
+    net::Item token;
+    token.name = "Trade Token";
+    token.no_drop = 255; // EQEmu's tradeable
+    inv.put(net::ItemSlot::possessions(net::kSlotGeneral1 + 3), token);
+    CHECK(f.p("${FindItem[Trade Token].NoTrade} ${FindItem[Trade Token].Tradeskills}") == "FALSE FALSE");
+    // Augments: two visible sockets, the first holding a stone.
+    CHECK(f.p("${FindItem[Wand].Augs}") == "2");
+    CHECK(f.p("${FindItem[Wand].AugSlot[1]} ${FindItem[Wand].AugSlot[1].Name} ${FindItem[Wand].AugSlot[1].Type}") ==
+          "Aug Stone Aug Stone 7");
+    CHECK(f.p("${FindItem[Wand].AugSlot[1].Item.ID} ${FindItem[Wand].AugSlot[1].Empty}") == "6002 FALSE");
+    CHECK(f.p("${FindItem[Wand].AugSlot[3]} ${FindItem[Wand].AugSlot[3].Empty} ${FindItem[Wand].AugSlot[7]}") ==
+          "NULL TRUE NULL");
+    CHECK(f.p("${Me.Inventory[pack3].AugSlot[1].Name}") == "Aug Stone");
+    // ItemLink: the link's text, with the \x12 tags for CLICKABLE.
+    const std::string link = f.p("${FindItem[Wand].ItemLink}");
+    const std::string clickable = f.p("${FindItem[Wand].ItemLink[CLICKABLE]}");
+    CHECK(link.find("Wand of Testing") != std::string::npos);
+    CHECK(link.front() != '\x12');
+    REQUIRE(clickable.size() == link.size() + 2);
+    CHECK(clickable.front() == '\x12');
+    CHECK(clickable.back() == '\x12');
+}
+
+TEST_CASE("TLO: spell members E3 reads, Spell.Duration in ticks") {
+    Fixture f;
+    CHECK(f.p("${Spell[Selo's Accelerando].DurationWindow} ${Spell[Holy Armor].DurationWindow}") == "1 0");
+    CHECK(f.p("${Spell[Test Slow].Base[1]} ${Spell[Test Slow].Base[13]} ${Spell[Test Slow].SlowPct}") == "70 NULL 30");
+    CHECK(f.p("${Spell[Holy Armor].SlowPct} ${Spell[Holy Armor].Dispellable} ${Spell[Holy Armor].EnduranceCost}") ==
+          "0 TRUE 0");
+    CHECK(f.p("${Spell[Holy Armor].Subcategory} ${Spell[Holy Armor].Description}") == "Unknown NULL");
+    CHECK(f.p("${Spell[Minor Healing].MyRange}") == "100.00");
+    // Duration: a plain value of ticks; the timestamp members on its milliseconds.
+    const int ticks = std::stoi(f.p("${Spell[Holy Armor].Duration}"));
+    CHECK(f.p("${Spell[Holy Armor].Duration.TotalSeconds}") == std::to_string(ticks * 6));
+    // The player holds Holy Armor in buff slot 1: cast again it refreshes that slot, and it stacks with itself.
+    CHECK(f.p("${Spell[Holy Armor].WillLand}") == "1");
+    CHECK(f.p("${Spell[Holy Armor].StacksWith[Holy Armor]}") == "TRUE");
+    CHECK(f.p("${Spell[Holy Armor].StacksWith[No Such Spell]}") == "NULL");
+    // No pet buffs: the first pet slot.
+    CHECK(f.p("${Spell[Holy Armor].WillLandPet}") == "1");
+}
+
+TEST_CASE("TLO: spawns' Aggressive, Primary, Secondary and Body; the group's Present, Injured and LowMana") {
+    Fixture f;
+    using A = net::GameConnectionTestAccess;
+    auto& rat = A::world(*f.world.conn).spawns[10];
+    CHECK(f.p("${Spawn[10].Aggressive}") == "FALSE");
+    rat.player_state = 4;
+    CHECK(f.p("${Spawn[10].Aggressive} ${Target.Aggressive}") == "TRUE TRUE");
+    rat.appearance.material[7] = 10001;
+    rat.appearance.material[8] = 200;
+    CHECK(f.p("${Spawn[10].Primary} ${Spawn[10].Secondary}") == "10001 200");
+    rat.body_type = 1;
+    CHECK(f.p("${Spawn[10].Body} ${Spawn[10].Body.Name} ${Spawn[10].Body.ID}") == "Humanoid Humanoid 1");
+    CHECK(f.p("${Spawn[10].Body.Name.NotEqual[Undead]}") == "TRUE");
+    // Groupie is in the zone.
+    CHECK(f.p("${Group.Present}") == "1");
+    // The player's own HP and mana by percent, the others' as their spawn and the group's mana shows them.
+    const int my_hp = std::stoi(f.p("${Me.PctHPs}"));
+    CHECK(f.p("${Group.Injured[" + std::to_string(my_hp + 1) + "]}") == "1");
+    CHECK(f.p("${Group.Injured[" + std::to_string(my_hp) + "]}") == "0");
+    const int my_mana = std::stoi(f.p("${Me.PctMana}"));
+    A::group(*f.world.conn).mana_percent[12] = 10;
+    CHECK(f.p("${Group.LowMana[" + std::to_string(my_mana + 1) + "]}") == (my_mana + 1 > 10 ? "2" : "1"));
+    CHECK(f.p("${Group.LowMana[5]}") == "0");
+    CHECK(f.p("${Group.Injured}") == "0");
+}
+
+TEST_CASE("TLO: Raid and its members") {
+    Fixture f;
+    using A = net::GameConnectionTestAccess;
+    // No raid: the TLO is there, with no members.
+    CHECK(f.p("${Raid}") == "NULL");
+    CHECK(f.p("${Raid.Members} ${Raid.Member[1]} ${Raid.Leader}") == "0 NULL NULL");
+    auto& raid = A::raid(*f.world.conn);
+    raid.active = true;
+    raid.leader = "Groupie";
+    raid.members = {mq_test::raid_member("Tester", 0, 2, 50, true), mq_test::raid_member("Groupie", 1, 1, 48),
+                    mq_test::raid_member("Faraway", 0xffffffff, 12, 60)};
+    raid.loot_type = 3;
+    raid.looters = {"Faraway"};
+    CHECK(f.p("${Raid.Members} ${Raid.TotalLevels} ${Raid.LootType}") == "3 158 3");
+    CHECK(f.p("${Raid.Member[1]} ${Raid.Member[2].Name} ${Raid.Member[Faraway]}") == "Tester Groupie Faraway");
+    CHECK(f.p("${Raid.Leader} ${Raid.Leader.RaidLeader} ${Raid.Member[1].RaidLeader}") == "Groupie TRUE FALSE");
+    CHECK(f.p("${Raid.Member[1].Group} ${Raid.Member[2].Group} ${Raid.Member[3].Group}") == "1 2 0");
+    CHECK(f.p("${Raid.Member[1].GroupLeader} ${Raid.Member[2].Level} ${Raid.Member[3].Class.ShortName}") == "TRUE 48 WIZ");
+    // Looters: the leader, and with loot type 3 the named looters.
+    CHECK(f.p("${Raid.Member[2].Looter} ${Raid.Member[3].Looter} ${Raid.Member[1].Looter}") == "TRUE TRUE FALSE");
+    // A member's other members are its spawn's, when it is in the zone.
+    CHECK(f.p("${Raid.Member[2].ID} ${Raid.Member[2].Spawn.ID}") == "12 12");
+    CHECK(f.p("${Raid.Member[3].Spawn} ${Raid.Member[3].ID}") == "NULL NULL");
+    CHECK(f.p("${Raid.Member[4]} ${Raid.Member[Nobody]}") == "NULL NULL");
+}
+
+TEST_CASE("TLO: Corpse, the loot window's corpse and its items") {
+    Fixture f;
+    using A = net::GameConnectionTestAccess;
+    CHECK(f.p("${Corpse} ${Corpse.Open}") == "FALSE FALSE");
+    CHECK(f.p("${Corpse.Items} ${Corpse.Item[1]}") == "NULL NULL");
+    auto& loot = A::loot(*f.world.conn);
+    loot.emplace();
+    loot->corpse_id = 13; // a_rat02, a corpse
+    loot->corpse_name = "a_rat02";
+    loot->open = true;
+    net::Item fang;
+    fang.name = "Rat Fang";
+    fang.id = 13069;
+    fang.stack_count = 2;
+    fang.max_stack = 20;
+    fang.tradeskills = 1;
+    fang.no_drop = 255;
+    loot->items[net::kCorpseSlotBegin] = fang;
+    net::Item whisker;
+    whisker.name = "Rat Whisker";
+    whisker.id = 13070;
+    loot->items[net::kCorpseSlotBegin + 1] = whisker;
+    CHECK(f.p("${Corpse} ${Corpse.Open} ${Corpse.Items}") == "TRUE TRUE 2");
+    CHECK(f.p("${Corpse.Item[1]} ${Corpse.Item[1].ID} ${Corpse.Item[1].Stack} ${Corpse.Item[1].Tradeskills}") ==
+          "Rat Fang 13069 2 TRUE");
+    CHECK(f.p("${Corpse.Item[2].NoDrop} ${Corpse.Item[1].NoDrop} ${Corpse.Item[3]}") == "TRUE FALSE NULL");
+    CHECK(f.p("${Corpse.Item[Whisker]} ${Corpse.Item[=rat fang].ID} ${Corpse.Item[=Rat]}") == "Rat Whisker 13069 NULL");
+    CHECK(f.p("${Corpse.Item[1].ItemLink}").find("Rat Fang") != std::string::npos);
+    // Its other members are the corpse spawn's.
+    CHECK(f.p("${Corpse.ID} ${Corpse.Dead}") == "13 TRUE");
+    loot->open = false;
+    CHECK(f.p("${Corpse.Open} ${Corpse.Item[1]} ${Corpse.ID}") == "FALSE NULL NULL");
+}
+
+TEST_CASE("TLO: Me's Invulnerable, Mount, favour, tribute, spell bonuses, PetBuff; spells' counters") {
+    Fixture f;
+    using A = net::GameConnectionTestAccess;
+    auto& sp = A::spells(*f.world.conn);
+    CHECK(f.p("${Me.Invulnerable}") == "NULL");
+    // Spell 3008 (the fixture's Test Aura) has SPA 40: invulnerable.
+    sp.buffs[5].spell = 3008;
+    sp.buffs[5].tics = 3;
+    sp.buffs[5].received_ms = net::GameConnection::now_ms();
+    CHECK(f.p("${Me.Invulnerable} ${Bool[${Me.Invulnerable}]}") == "Test Aura TRUE");
+    // Tribute.
+    auto& tribute = A::tribute(*f.world.conn);
+    tribute.points = 1500;
+    tribute.career = 9000;
+    CHECK(f.p("${Me.CurrentFavor} ${Me.CareerFavor} ${Me.TributeActive}") == "1500 9000 FALSE");
+    tribute.settings.active = true;
+    CHECK(f.p("${Me.TributeActive}") == "TRUE");
+    // The items' spell shielding and spell damage.
+    CHECK(f.p("${Me.SpellShieldBonus} ${Me.SpellDamageBonus}") == "0 0");
+    net::Item robe;
+    robe.name = "Shielding Robe";
+    robe.id = 7001;
+    robe.equip_slots = 1u << net::kSlotChest;
+    robe.races = 0xffffffffu; // every race: an item the character's race may not use adds nothing
+    robe.classes = 0xffff;
+    robe.spell_shield = 12;
+    robe.spell_dmg = 30;
+    A::inventory(*f.world.conn).put(net::ItemSlot::possessions(net::kSlotChest), robe);
+    CHECK(f.p("${Me.SpellShieldBonus} ${Me.SpellDamageBonus}") == "12 30");
+    // Past RoF2's cap of 35: the items' whole total (a server may allow it; MQ caps it).
+    net::Item legs = robe;
+    legs.name = "Shielding Leggings";
+    legs.id = 7002;
+    legs.equip_slots = 1u << net::kSlotLegs;
+    legs.spell_shield = 30;
+    legs.spell_dmg = 0;
+    A::inventory(*f.world.conn).put(net::ItemSlot::possessions(net::kSlotLegs), legs);
+    CHECK(f.p("${Me.SpellShieldBonus}") == "42");
+    // Mount: the spawn it rides.
+    CHECK(f.p("${Me.Mount}") == "NULL");
+    A::world(*f.world.conn).spawns[1].mount_id = 11;
+    CHECK(f.p("${Me.Mount.ID} ${Bool[${Me.Mount.ID}]}") == "11 TRUE");
+    // PetBuff: by slot, or a spell's slot.
+    auto& pet = A::pet_buffs(*f.world.conn);
+    game::BuffSlot b;
+    b.spell = 11; // Holy Armor
+    pet.emplace_back(2, b);
+    CHECK(f.p("${Me.PetBuff[3]} ${Me.PetBuff[Holy Armor]} ${Me.PetBuff[1]} ${Me.PetBuff[Minor Healing]}") ==
+          "Holy Armor 3 NULL NULL");
+    // CounterType and CounterNumber: the spell's (and so a buff's) counters.
+    CHECK(f.p("${Spell[Test Plague].CounterType} ${Spell[Test Plague].CounterNumber}") == "Disease 4");
+    CHECK(f.p("${Spell[Test Venom].CounterType} ${Spell[Test Venom].CounterNumber}") == "Disease 3");
+    CHECK(f.p("${Spell[Holy Armor].CounterType} ${Spell[Holy Armor].CounterNumber}") == "None 0");
+    sp.buffs[6].spell = 3004;
+    sp.buffs[6].tics = 3;
+    sp.buffs[6].received_ms = net::GameConnection::now_ms();
+    CHECK(f.p("${Me.Buff[Test Plague].CounterType} ${Me.Buff[Test Plague].CounterNumber}") == "Disease 4");
+}
+
+TEST_CASE("TLO: Me.Pet and Pet read the pet window's buffs, targeted or not") {
+    Fixture f;
+    using A = net::GameConnectionTestAccess;
+    f.world.add(14, "Tester`s_pet", true, 40, game::server_to_world({5, 5, 0}));
+    A::world(*f.world.conn).spawns[14].pet_owner_id = 1;
+    CHECK(f.p("${Me.Pet} ${Me.Pet.ID} ${Pet.ID} ${Me.Pet.Buff[1]}") == "Tester`s pet 14 14 NULL");
+    auto& pet = A::pet_buffs(*f.world.conn);
+    game::BuffSlot plague;
+    plague.spell = 3004; // Test Plague: 4 disease counters
+    plague.tics = 10;
+    plague.received_ms = net::GameConnection::now_ms();
+    game::BuffSlot armor;
+    armor.spell = 11; // Holy Armor
+    armor.tics = 20;
+    armor.received_ms = net::GameConnection::now_ms();
+    pet.emplace_back(2, armor);
+    pet.emplace_back(0, plague);
+    // Buff[n] is the pet window's slot n; Buff[name] the slot of the first whose name starts so.
+    CHECK(f.p("${Me.Pet.Buff[1]} ${Me.Pet.Buff[2]} ${Me.Pet.Buff[3]}") == "Test Plague NULL Holy Armor");
+    CHECK(f.p("${Me.Pet.Buff[Holy]} ${Me.Pet.Buff[Test Plague]} ${Me.Pet.Buff[Armor]}") == "3 1 NULL");
+    CHECK(f.p("${Me.Pet.Buff[1].CounterType} ${Me.Pet.Buff[1].CounterNumber} ${Me.Pet.Buff[3].ID}") == "Disease 4 3");
+    CHECK(f.p("${Pet.Buff[3]} ${Me.Pet.BuffCount}") == "Holy Armor 2");
+    const int secs = std::stoi(f.p("${Me.Pet.BuffDuration[Holy Armor].TotalSeconds}"));
+    CHECK(secs > 110);
+    CHECK(secs <= 120);
+    CHECK(f.p("${Me.Pet.BuffDuration[2]}") == "NULL");
+    // Targeted, with no target buffs from the server: still the pet window's.
+    A::world(*f.world.conn).target_id = 14;
+    CHECK(f.p("${Me.Pet.Buff[1]} ${Target.Buff[Test Plague]}") == "Test Plague Test Plague");
+}
+
+TEST_CASE("TLO: Me.Bank, the bank's coin, and InvSlot") {
+    Fixture f;
+    using A = net::GameConnectionTestAccess;
+    auto& inv = A::inventory(*f.world.conn);
+    net::Item sword;
+    sword.name = "Banked Sword";
+    sword.id = 8001;
+    inv.put({net::kInvBank, 0, -1, -1, 0, 0}, sword);
+    net::Item chest;
+    chest.name = "Bank Chest";
+    chest.id = 8002;
+    chest.item_class = 1;
+    chest.bag_slots = 8;
+    inv.put({net::kInvBank, 2, -1, -1, 0, 0}, chest);
+    net::Item gem;
+    gem.name = "Banked Gem";
+    gem.id = 8003;
+    gem.stack_count = 3;
+    inv.put({net::kInvBank, 2, 4, -1, 0, 0}, gem);
+    net::Item shared;
+    shared.name = "Shared Ring";
+    shared.id = 8004;
+    inv.put({net::kInvSharedBank, 1, -1, -1, 0, 0}, shared);
+    // Bank[n]: the bank's slot n; past the 24 bank slots, the shared bank's.
+    CHECK(f.p("${Me.Bank[1]} ${Me.Bank[1].ID} ${Me.Bank[2]}") == "Banked Sword 8001 NULL");
+    CHECK(f.p("${Me.Bank[3]} ${Me.Bank[3].Container} ${Me.Bank[3].Item[5]} ${Me.Bank[3].Item[5].Stack}") ==
+          "Bank Chest 8 Banked Gem 3");
+    CHECK(f.p("${Me.Bank[26]} ${Me.SharedBank[2].ID} ${Me.Bank[0]} ${Me.Bank[20]}") == "Shared Ring 8004 NULL NULL");
+    CHECK(f.p("${Me.Bank[1].ItemLink}").find("Banked Sword") != std::string::npos);
+    // The bank's coin.
+    auto& coins = A::bank_coins(*f.world.conn);
+    coins.platinum = 1234;
+    coins.gold = 5;
+    coins.silver = 6;
+    coins.copper = 7;
+    coins.shared_platinum = 50;
+    CHECK(f.p("${Me.PlatinumBank} ${Me.GoldBank} ${Me.SilverBank} ${Me.CopperBank} ${Me.PlatinumShared}") ==
+          "1234 5 6 7 50");
+    CHECK(f.p("${Me.CashBank}") == "1234567");
+    // InvSlot: by MQ's number or name; .Item the item there.
+    CHECK(f.p("${InvSlot[pack1]} ${InvSlot[pack1].Item} ${InvSlot[23].Item.ID}") == "23 Healing Potion 5001");
+    CHECK(f.p("${InvSlot[pack2].Item.Items} ${InvSlot[pack2].Item.Container}") == "1 4");
+    CHECK(f.p("${InvSlot[272].Item} ${InvSlot[272].Pack} ${InvSlot[272].Slot}") == "Healing Potion 24 0"); // pack2, slot 1
+    CHECK(f.p("${InvSlot[bank1].Item} ${InvSlot[2000].Name} ${InvSlot[2002].Item}") == "Banked Sword bank1 Bank Chest");
+    CHECK(f.p("${InvSlot[2056].Item} ${InvSlot[2056].Pack} ${InvSlot[2056].Slot}") == "Banked Gem 2002 4");
+    CHECK(f.p("${InvSlot[sharedbank2].Item} ${InvSlot[2501].Name}") == "Shared Ring sharedbank2");
+    CHECK(f.p("${InvSlot[chest].Name} ${InvSlot[chest].Item} ${InvSlot[nowhere]}") == "chest NULL 0");
+}
+
+TEST_CASE("TLO: Merchant, its stock and ItemsReceived") {
+    Fixture f;
+    using A = net::GameConnectionTestAccess;
+    CHECK(f.p("${Merchant} ${Merchant.Open} ${Merchant.ItemsReceived} ${Merchant.Items}") == "FALSE FALSE FALSE NULL");
+    auto& m = A::merchant(*f.world.conn);
+    m.emplace();
+    m->npc_id = 11;
+    m->open = true;
+    m->rate = 1.25f;
+    // Open, its stock not come yet.
+    CHECK(f.p("${Merchant} ${Merchant.ItemsReceived} ${Merchant.Items}") == "TRUE FALSE 0");
+    net::Item bread;
+    bread.name = "Loaf of Bread";
+    bread.id = 13010;
+    m->items[3] = bread;
+    net::Item water;
+    water.name = "Water Flask";
+    water.id = 13006;
+    m->items[7] = water;
+    CHECK(f.p("${Merchant.ItemsReceived} ${Merchant.Items} ${Merchant.Markup}") == "TRUE 2 1.25");
+    CHECK(f.p("${Merchant.Item[1]} ${Merchant.Item[2].ID} ${Merchant.Item[3]}") == "Loaf of Bread 13006 NULL");
+    CHECK(f.p("${Merchant.Item[Flask]} ${Merchant.Item[=loaf of bread].ID}") == "Water Flask 13010");
+    // Its other members are the merchant's spawn's.
+    CHECK(f.p("${Merchant.ID} ${Merchant.CleanName}") == "11 Fippy Darkpaw");
+    m->open = false;
+    CHECK(f.p("${Merchant.Open} ${Merchant.ItemsReceived} ${Merchant.Item[1]}") == "FALSE FALSE NULL");
+}
+
+TEST_CASE("TLO: /doortarget and DoorTarget") {
+    Fixture f;
+    using A = net::GameConnectionTestAccess;
+    auto& doors = A::doors(*f.world.conn);
+    game::Door near;
+    near.id = 3;
+    near.name = "POKCABDOOR";
+    near.x = 10; // the server's x and y, as a spawn's X and Y
+    near.y = 0;
+    near.z = 1;
+    game::Door far;
+    far.id = 7;
+    far.name = "POKCABDOOR2";
+    far.x = 0;
+    far.y = 40;
+    doors = {near, far};
+    plugin::Hooks hooks;
+    std::vector<std::string> said;
+    mq::CommandEnv ce;
+    ce.hooks = &hooks;
+    ce.registry = &f.reg;
+    ce.context = [&f]() -> const mq::Context& { return f.ctx; };
+    ce.echo = [&said](const std::string& s) { said.push_back(s); };
+    ce.set_door_target = [&f](std::optional<std::uint8_t> id) { f.world.conn->set_door_target(id); };
+    mq::Commands commands(ce);
+    auto run = [&](std::string line) { hooks.command(line); };
+    CHECK(f.p("${DoorTarget}") == "NULL");
+    // By name: the nearest whose name holds the text.
+    run("/doortarget cabdoor");
+    CHECK(said.back() == "Switch 3 'POKCABDOOR' targeted.");
+    CHECK(f.p("${DoorTarget} ${DoorTarget.ID} ${DoorTarget.Name} ${DoorTarget.IsTargeted}") == "3 3 POKCABDOOR TRUE");
+    CHECK(f.p("${DoorTarget.X} ${DoorTarget.Y} ${DoorTarget.Z}") == "10.00 0.00 1.00");
+    // On the flat, less half its size (scale 1.0); in 3D the height too.
+    CHECK(f.p("${DoorTarget.Distance}") == "9.50");
+    CHECK(f.p("${DoorTarget.Distance3D}").substr(0, 4) == "9.55");
+    run("/doortarget id 7");
+    CHECK(f.p("${DoorTarget.ID} ${DoorTarget.Distance}") == "7 39.50");
+    run("/doortarget id");
+    CHECK(said.back() == "[MQ] DoorTarget: id specified but no number provided.");
+    CHECK(f.p("${DoorTarget}") == "NULL");
+    run("/doortarget nosuchdoor");
+    CHECK(said.back() == "[MQ] Couldn't find switch 'nosuchdoor' to target.");
+    run("/doortarget");
+    CHECK(f.p("${DoorTarget}") == "3"); // no text: the nearest door
+    run("/doortarget clear");
+    CHECK(said.back() == "Switch target cleared.");
+    CHECK(f.p("${DoorTarget}") == "NULL");
+    // The zone's doors going take the target with them.
+    run("/doortarget id 3");
+    doors.clear();
+    CHECK(f.p("${DoorTarget}") == "NULL");
+}
+
+TEST_CASE("TLO: Me.TargetOfTarget and Instance, EverQuest.Foreground and Ping, Mercenary") {
+    Fixture f;
+    using A = net::GameConnectionTestAccess;
+    CHECK(f.p("${Me.TargetOfTarget}") == "NULL");
+    A::target_of_target(*f.world.conn) = 12;
+    CHECK(f.p("${Me.TargetOfTarget} ${Me.TargetOfTarget.ID}") == "Groupie 12");
+    CHECK(f.p("${Me.Instance}") == "0");
+    // No window to have the focus in the test; the app answers with its window's.
+    CHECK(f.p("${EverQuest.Foreground}") == "FALSE");
+    bool focused = true;
+    f.ctx.foreground = [&focused] { return focused; };
+    CHECK(f.p("${EverQuest.Foreground}") == "TRUE");
+    CHECK(f.p("${EverQuest.Ping}") == "0"); // no session: no round trips yet
+    // Mercenary: NONE without one; its other members its spawn's.
+    CHECK(f.p("${Mercenary} ${Mercenary.State} ${Mercenary.Name}") == "NONE NONE NONE");
+    f.world.add(15, "Tanker", true, 50, game::server_to_world({8, 8, 0}));
+    A::world(*f.world.conn).spawns[15].mercenary = true;
+    auto& grp = A::group(*f.world.conn);
+    grp.slots[2].name = "Tanker";
+    grp.slots[2].merc = true;
+    grp.slots[2].owner_name = "Tester";
+    auto& merc = A::merc(*f.world.conn);
+    merc.has_mercenary = 1;
+    merc.state = game::kMercActive;
+    merc.current_index = 0;
+    CHECK(f.p("${Mercenary} ${Mercenary.State} ${Mercenary.StateID} ${Mercenary.Index}") == "ACTIVE ACTIVE 5 1");
+    CHECK(f.p("${Mercenary.Name} ${Mercenary.CleanName} ${Mercenary.ID}") == "Tanker Tanker 15");
+    merc.state = game::kMercSuspended;
+    CHECK(f.p("${Mercenary.State}") == "SUSPENDED");
 }

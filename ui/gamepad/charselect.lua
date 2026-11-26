@@ -46,18 +46,19 @@ local function chosen(i)
   end
 end
 
+-- (the focus starts on Cancel, the pack's rule for a question (dialogs.lua): an A carried over must not answer it)
 local function askDelete(v)
   st.confirm, st.home = v.selected, false
-  F:want("##delyes")
+  F:want("##delno")
 end
 
 local function askHome(v)
   st.confirm, st.home = v.selected, true
-  F:want("##delyes")
+  F:want("##delno")
 end
 
--- The question before a delete (or a Return Home), over the window: Delete (Return Home) has the focus (A), B or
--- Cancel keeps the character as it is.
+-- The question before a delete (or a Return Home), over the window: Cancel has the focus; Delete (Return Home)
+-- answers it, B or Cancel keeps the character as it is.
 local function drawConfirm(v, wx0, wy0, wx1, wy1)
   local c = v.characters[st.confirm]
   if not c or v.busy or (st.home and not c.canGoHome) then

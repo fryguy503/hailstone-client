@@ -3,11 +3,18 @@
 // platform/gamepad.h; bars, buttons, sets and slots are 1-based.
 
 #include <algorithm>
+#include <cfloat>
+#include <climits>
+#include <cmath>
+#include <limits>
+#include <optional>
+#include <string>
 
 #include <lua.hpp>
 
 #include "app/gamepad.h"
 #include "app/lua_ui.h"
+#include "core/lua_keep.h"
 #include "net/game_connection.h"
 #include "ui/lua/lua_host.h"
 
@@ -28,6 +35,22 @@ const platform::GamepadState& state(lua_State* L) {
 
 // With the interface locked (/safelock) the buttons reach only the chat input's windows (pad_chat_window): the rest of
 // the UI has no mouse then (__ProcessMouseEvents), and the pad stands in for it.
+// An integer argument as an int: one past int's range is -1 (every set, slot, bar and button here is small and
+// non-negative, so -1 is out of range for each), not truncated into range.
+int int_arg(lua_State* L, int i) {
+    const lua_Integer v = luaL_checkinteger(L, i);
+    return v < INT_MIN || v > INT_MAX ? -1 : static_cast<int>(v);
+}
+
+// A number as a float without the undefined cast of a double past float's range: such a number is an infinity (and
+// NaN stays NaN), which the setters refuse.
+float float_of(double v) {
+    if (std::isnan(v)) return std::numeric_limits<float>::quiet_NaN();
+    if (v > FLT_MAX) return std::numeric_limits<float>::infinity();
+    if (v < -FLT_MAX) return -std::numeric_limits<float>::infinity();
+    return static_cast<float>(v);
+}
+
 bool buttons_locked(lua_State* L) {
     auto* host = static_cast<UiHost*>(lua_touserdata(L, lua_upvalueindex(1)));
     return host && host->conn && host->in_game && host->conn->interface_locked() &&
@@ -102,8 +125,8 @@ int CrossSet(lua_State* L) {
 int CrossSlot(lua_State* L) {
     Gamepad* g = pad(L);
     if (!g) return 0;
-    game::CrossSlot c = g->bindings().cross(static_cast<int>(luaL_checkinteger(L, 1)),
-                                            static_cast<int>(luaL_checkinteger(L, 2)));
+    const int set = int_arg(L, 1), slot = int_arg(L, 2);
+    game::CrossSlot c = g->bindings().cross(set, slot);
     if (c.bar == 0) {
         lua_pushnil(L);
         return 1;
@@ -116,8 +139,8 @@ int CrossSlot(lua_State* L) {
 // ok = hs.gamepad.set_cross_slot(set, slot, bar, button) (an addition for the Options page: the gamepad.cross keys)
 int SetCrossSlot(lua_State* L) {
     Gamepad* g = pad(L);
-    auto n = [&](int i) { return static_cast<int>(luaL_checkinteger(L, i)); };
-    lua_pushboolean(L, g && g->set_cross_slot(n(1), n(2), n(3), n(4)));
+    const int set = int_arg(L, 1), slot = int_arg(L, 2), bar = int_arg(L, 3), button = int_arg(L, 4);
+    lua_pushboolean(L, g && g->set_cross_slot(set, slot, bar, button));
     return 1;
 }
 
@@ -132,12 +155,15 @@ int Glyph(lua_State* L) {
 // plain button applies); nil for an unknown input.
 int Binding(lua_State* L) {
     Gamepad* g = pad(L);
-    auto text = g ? g->binding_text(luaL_checkstring(L, 1)) : std::nullopt;
+    const char* input = luaL_checkstring(L, 1);
+    // (the text in a box the state owns: the push can raise, lua_keep.h)
+    auto& text = core::lua_keep<std::optional<std::string>>(L);
+    if (g) core::cxx_guard(L, [&] { text = g->binding_text(input); });
     if (!text) {
         lua_pushnil(L);
         return 1;
     }
-    lua_pushstring(L, text->c_str());
+    lua_pushlstring(L, text->data(), text->size());
     return 1;
 }
 
@@ -164,8 +190,11 @@ int Setting(lua_State* L) {
 // NaN or an infinity (GamepadSettings::set).
 int SetSetting(lua_State* L) {
     Gamepad* g = pad(L);
-    float v = lua_isboolean(L, 2) ? (lua_toboolean(L, 2) ? 1.0f : 0.0f) : static_cast<float>(luaL_checknumber(L, 2));
-    lua_pushboolean(L, g && g->set_setting(luaL_checkstring(L, 1), v));
+    float v = lua_isboolean(L, 2) ? (lua_toboolean(L, 2) ? 1.0f : 0.0f) : float_of(luaL_checknumber(L, 2));
+    const char* name = luaL_checkstring(L, 1);
+    bool ok = false;
+    if (g) core::cxx_guard(L, [&] { ok = g->set_setting(name, v); });
+    lua_pushboolean(L, ok);
     return 1;
 }
 
@@ -174,8 +203,8 @@ int SetSetting(lua_State* L) {
 int Rumble(lua_State* L) {
     Gamepad* g = pad(L);
     const lua_Integer ms = std::clamp<lua_Integer>(luaL_optinteger(L, 3, 200), 0, Gamepad::kMaxRumbleMs);
-    lua_pushboolean(L, g && g->rumble(static_cast<float>(luaL_optnumber(L, 1, 0.5)),
-                                      static_cast<float>(luaL_optnumber(L, 2, 0.5)), static_cast<int>(ms)));
+    const float low = float_of(luaL_optnumber(L, 1, 0.5)), high = float_of(luaL_optnumber(L, 2, 0.5));
+    lua_pushboolean(L, g && g->rumble(low, high, static_cast<int>(ms)));
     return 1;
 }
 

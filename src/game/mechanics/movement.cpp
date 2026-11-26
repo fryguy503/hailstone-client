@@ -646,7 +646,10 @@ ControlEvents MovementController::controls(const ControlInput& in, const Charact
     ControlsState& s = controls_;
     // The held keys are the key handlers' (command()); the drivers' keys add to them for this frame.
     const ControlKeys held = s.keys;
-    s.keys.forward = held.forward || in.forward;
+    const auto swim = b.body_wet >= 5 ? in.follow_swim : std::nullopt;
+    // In-place correction uses one step of thrust, so ending follow cannot leave autorun on.
+    s.keys.forward = held.forward || in.forward || (swim && swim->vertical_only);
+    s.swim_jump = swim ? std::optional{!swim->vertical_only && swim->pitch > 0.0f} : std::nullopt;
     s.keys.backward = held.backward || in.back;
     s.keys.turn_left = held.turn_left || in.turn_left;
     s.keys.turn_right = held.turn_right || in.turn_right;
@@ -736,9 +739,9 @@ glm::vec2 MovementController::strafe_push(const CharacterInput& ch) const {
 }
 
 glm::vec3 MovementController::step(const Environment& env, float elapsed_ms, const CharacterInput& ch,
-                                   float hover_floor) {
+                                   float hover_floor, std::optional<SwimSteering> swim) {
     step_scale_ = elapsed_ms * 0.02f;
-    return mechanics::step(body, env, elapsed_ms, strafe_push(ch), hover_floor);
+    return mechanics::step(body, env, elapsed_ms, strafe_push(ch), hover_floor, swim);
 }
 
 namespace {

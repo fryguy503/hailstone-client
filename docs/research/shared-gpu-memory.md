@@ -48,8 +48,11 @@ other renderers' textures, per-frame buffers, render targets, shadows, swapchain
   128 MiB per texture.
 - Handles go over a Windows named pipe: current user and local peers only, the first instance owns the name, a
   128-bit random name and a 256-bit token compared in constant time, at most 16 connections.
-- The broker duplicates an NT handle into the client, which imports it and closes its copy. The imported memory keeps
-  its own reference, so an import stays valid when the broker lets go or exits.
+- The client duplicates an NT handle from the broker (transport version 2), imports it and closes its copy. The broker
+  sends its own handle's number and keeps it open until the client's next request; the client opens the broker's
+  process with `PROCESS_DUP_HANDLE` and never adopts a number as a handle, so a broker cannot make it close a handle it
+  holds for something else. The imported memory keeps its own reference, so an import stays valid when the broker
+  lets go or exits.
   [Win32 import](https://docs.vulkan.org/refpages/latest/refpages/source/VkImportMemoryWin32HandleInfoKHR.html)
 - Imports sit in `SHADER_READ_ONLY_OPTIMAL`; each shared frame acquires and releases every live import around its
   command buffer, under the lease, and waits for its fence before releasing the lease.

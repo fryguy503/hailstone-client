@@ -6,6 +6,7 @@
 // names in dbstr_us.txt (9001 Innate Strength, 9002 Mystical Shielding).
 
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -18,6 +19,7 @@
 #include "game/coords.h"
 #include "game/mechanics/tables.h"
 #include "net/game_connection.h"
+#include "net/world_packets.h"
 #include "scratch_dir.h"
 
 namespace hailstone::net {
@@ -51,6 +53,7 @@ struct GameConnectionTestAccess {
     static game::RaidState& raid(GameConnection& c) { return c.raid_; }
     static GameConnection::Leadership& leadership(GameConnection& c) { return c.leadership_; }
     static std::vector<std::pair<std::uint32_t, game::BuffSlot>>& pet_buffs(GameConnection& c) { return c.pet_buffs_; }
+    static std::vector<game::BandolierSet>& bandolier(GameConnection& c) { return c.bandolier_; }
     static game::Inventory& inventory(GameConnection& c) { return c.inventory_; }
     static void refresh_instrument_state(GameConnection& c) { c.refresh_instrument_state(); }
     static void move_item(GameConnection& c, const ItemSlot& from, const ItemSlot& to, std::uint32_t count) {
@@ -58,6 +61,13 @@ struct GameConnectionTestAccess {
     }
     static std::optional<MerchantSession>& merchant(GameConnection& c) { return c.merchant_; }
     static std::optional<BankSession>& bank(GameConnection& c) { return c.bank_; }
+    static std::optional<GameConnection::LootSession>& loot(GameConnection& c) { return c.loot_; }
+    static GameConnection::Tribute& tribute(GameConnection& c) { return c.tribute_; }
+    static game::BankCoins& bank_coins(GameConnection& c) { return c.bank_coins_; }
+    static game::MercManager& merc(GameConnection& c) { return c.merc_; }
+    static std::vector<AuraUpdate>& auras(GameConnection& c) { return c.auras_; }
+    static std::uint32_t& target_of_target(GameConnection& c) { return c.target_of_target_; }
+    static glm::vec3& velocity(GameConnection& c) { return c.velocity_; }
     static bool item_command(GameConnection& c, const std::string& command, const std::string& args) {
         return c.item_command(command, args);
     }
@@ -74,9 +84,15 @@ struct GameConnectionTestAccess {
     static std::string& character(GameConnection& c) { return c.character_; }
     static bool& auto_attack(GameConnection& c) { return c.auto_attack_; }
     static ConnectionState& state(GameConnection& c) { return c.state_; }
+    // A zone hand-off as world makes it: the zone's address in answer to OP_EnterWorld (the only state that takes it).
+    static void zone_hand_off(GameConnection& c, std::uint16_t port = 9000) {
+        c.state_ = ConnectionState::EnteringWorld;
+        c.receive_world_packet_for_test(encode(ZoneServerInfo{"127.0.0.1", port}));
+    }
     static std::optional<NewZone>& new_zone(GameConnection& c) { return c.new_zone_; }
     static std::vector<ZonePoint>& zone_points(GameConnection& c) { return c.zone_points_; }
     static std::vector<game::Door>& doors(GameConnection& c) { return c.doors_; }
+    static std::vector<game::GroundObject>& ground_objects(GameConnection& c) { return c.ground_objects_; }
     static void handle_zone(GameConnection& c, const AppPacket& p) { c.handle_zone(p); }
     static void finish_zone_in(GameConnection& c) { c.finish_zone_in(); }
     static game::AltAdvState& alt_adv(GameConnection& c) { return c.alt_adv_; }
@@ -90,7 +106,13 @@ struct GameConnectionTestAccess {
     static game::ClientOptions& client_options(GameConnection& c) { return c.client_options_; }
     static void open_chat_log(GameConnection& c, const std::string& name) { c.open_chat_log(name); }
     static void log_command(GameConnection& c, const std::string& args) { c.log_command(args); }
-    static std::ofstream* chat_log_stream(GameConnection& c) { return c.chat_log_.get(); }
+    static std::FILE* chat_log_stream(GameConnection& c) { return c.chat_log_.get(); }
+    // Puts the chat log's stream in error the same way on every C runtime: a write to a stream opened for reading
+    // only fails and sets the error (the Microsoft runtime sets none for a read from an append-only stream).
+    static void fail_chat_log(GameConnection& c) {
+        c.chat_log_.reset(std::fopen(c.chat_log_open_path_.string().c_str(), "rb"));
+        if (c.chat_log_) std::fputc('x', c.chat_log_.get());
+    }
     static void chat(GameConnection& c, std::string text) { c.chat(ChatEvent::Kind::System, std::move(text)); }
     static std::string& safelock(GameConnection& c) { return c.safelock_; }
     static WorldTicket& ticket(GameConnection& c) { return c.ticket_; }
@@ -167,6 +189,16 @@ struct World {
             f << spell_line({{0, "3004"}, {1, "Test Plague"}, {17, "10"}, {20, "-10"}, {21, "4"}, {83, "0"}, {86, "0"},
                              {87, "35"}})
               << "\n";
+            // A silence (SPA 96).
+            f << spell_line({{0, "3005"}, {1, "Test Silence"}, {17, "5"}, {20, "1"}, {83, "0"}, {86, "96"}}) << "\n";
+            // Poison (SPA 36, 3) and curse (116, 2) counters, and a disease effect with a negative base (a cure's).
+            f << spell_line({{0, "3006"}, {1, "Test Venom"}, {17, "10"}, {20, "3"}, {21, "2"}, {22, "-5"}, {83, "0"},
+                             {86, "36"}, {87, "116"}, {88, "35"}})
+              << "\n";
+            // A beneficial buff with a corruption counter effect (SPA 369, 1): no debuff.
+            f << spell_line({{0, "3007"}, {1, "Test Ward"}, {17, "10"}, {20, "1"}, {83, "1"}, {86, "369"}}) << "\n";
+            // An invulnerability (SPA 40), beneficial.
+            f << spell_line({{0, "3008"}, {1, "Test Aura"}, {17, "3"}, {20, "1"}, {83, "1"}, {86, "40"}}) << "\n";
             // A bard song (the Bard level, column 111, 1).
             f << spell_line({{0, "3373"}, {1, "Test Chant"}, {13, "1000"}, {17, "3"}, {83, "0"}, {111, "1"}}) << "\n";
         }

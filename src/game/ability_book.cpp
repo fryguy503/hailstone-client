@@ -88,7 +88,7 @@ std::string_view skill_description(std::uint32_t skill) {
     case s::kTaunt: return "Goads your target into attacking you instead of others.";
     case s::kFrenzy: return "A wild flurry of strikes against your target.";
     case s::kRemoveTraps: return "Attempts to remove a trap.";
-    case s::kSlam: return "Slams your body into your target. Can interrupt spell casting.";
+    case s::kSlam: return "Slams your body into your target; no shield needed. Can interrupt spell casting.";
     default: return {};
     }
 }

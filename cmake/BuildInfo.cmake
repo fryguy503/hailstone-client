@@ -1,6 +1,6 @@
 # Run at every build (the hailstone_build_info target): writes OUT, the build's version line for core/build_info.cpp
-# ("0.1.0-alpha (f6a07d7)", "-dirty" with uncommitted changes), the release version, and the display version used
-# in the login UI. The display version can carry a different label without affecting update comparisons.
+# ("0.1.0-alpha (f6a07d7)", "-dirty" with uncommitted changes), the release and display versions, and the build
+# date (20261123, local time; SOURCE_DATE_EPOCH when set). The display version does not affect update comparisons.
 set(display "${VERSION}")
 if(NOT "${DISPLAY_VERSION}" STREQUAL "")
   string(REGEX REPLACE "-.*$" "" version_core "${VERSION}")
@@ -22,10 +22,12 @@ else()
   endif()
   set(line "${display} (${hash})")
 endif()
+string(TIMESTAMP date "%Y%m%d")
 string(CONCAT text
   "#define HAILSTONE_BUILD_VERSION \"${line}\"\n"
   "#define HAILSTONE_RELEASE_VERSION \"${VERSION}\"\n"
-  "#define HAILSTONE_DISPLAY_VERSION \"${display}\"\n")
+  "#define HAILSTONE_DISPLAY_VERSION \"${display}\"\n"
+  "#define HAILSTONE_BUILD_DATE ${date}\n")
 if(EXISTS "${OUT}")
   file(READ "${OUT}" old)
 endif()

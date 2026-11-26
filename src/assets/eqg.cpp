@@ -651,26 +651,44 @@ std::uint8_t eco_color(std::uint8_t value, std::uint8_t cover, std::uint8_t mask
 
 std::optional<std::size_t> nearest_painted_tile(std::int32_t lng, std::int32_t lat,
                                                 const std::map<std::pair<std::int32_t, std::int32_t>, std::size_t>& painted,
-                                                std::int32_t reach) {
+                                                std::int32_t reach, std::uint64_t* budget) {
     for (std::int32_t ring = 1; ring <= reach; ++ring) {
         std::optional<std::size_t> best;
         std::int64_t best_d2 = 0;
-        for (std::int32_t dy = -ring; dy <= ring; ++dy)
-            for (std::int32_t dx = -ring; dx <= ring; ++dx) {
-                if (std::max(std::abs(dx), std::abs(dy)) != ring) continue;
-                // In 64 bits: a corrupt tile's index lies near INT32_MIN or INT32_MAX, and a neighbour past it is none.
-                const std::int64_t x = std::int64_t{lng} + dx, y = std::int64_t{lat} + dy;
-                if (x < std::numeric_limits<std::int32_t>::min() || x > std::numeric_limits<std::int32_t>::max() ||
-                    y < std::numeric_limits<std::int32_t>::min() || y > std::numeric_limits<std::int32_t>::max())
-                    continue;
-                auto it = painted.find({static_cast<std::int32_t>(x), static_cast<std::int32_t>(y)});
-                if (it == painted.end()) continue;
-                const std::int64_t d2 = std::int64_t{dx} * dx + std::int64_t{dy} * dy;
-                if (!best || d2 < best_d2) {
-                    best = it->second;
-                    best_d2 = d2;
+        bool spent = false;
+        auto visit = [&](std::int32_t dx, std::int32_t dy) {
+            if (spent) return;
+            // In 64 bits: a corrupt tile's index lies near INT32_MIN or INT32_MAX, and a neighbour past it is none.
+            const std::int64_t x = std::int64_t{lng} + dx, y = std::int64_t{lat} + dy;
+            if (x < std::numeric_limits<std::int32_t>::min() || x > std::numeric_limits<std::int32_t>::max() ||
+                y < std::numeric_limits<std::int32_t>::min() || y > std::numeric_limits<std::int32_t>::max())
+                return;
+            if (budget) {
+                if (*budget == 0) {
+                    spent = true;
+                    return;
                 }
+                --*budget;
             }
+            auto it = painted.find({static_cast<std::int32_t>(x), static_cast<std::int32_t>(y)});
+            if (it == painted.end()) return;
+            const std::int64_t d2 = std::int64_t{dx} * dx + std::int64_t{dy} * dy;
+            if (!best || d2 < best_d2) {
+                best = it->second;
+                best_d2 = d2;
+            }
+        };
+        // The ring's cells only, row by row and left to right in each row (the order ties are settled in): the
+        // whole top and bottom rows, the two ends of the rows between.
+        for (std::int32_t dy = -ring; dy <= ring; ++dy) {
+            if (dy == -ring || dy == ring) {
+                for (std::int32_t dx = -ring; dx <= ring; ++dx) visit(dx, dy);
+            } else {
+                visit(-ring, dy);
+                visit(ring, dy);
+            }
+        }
+        if (spent) return std::nullopt;
         if (best) return best;
     }
     return std::nullopt;

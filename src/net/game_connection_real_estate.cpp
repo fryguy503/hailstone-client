@@ -469,11 +469,17 @@ bool GameConnection::re_can_transfer(bool verbose) {
     return false;
 }
 
-void GameConnection::re_transfer() {
+void GameConnection::re_transfer(std::uint32_t target, const std::string& name) {
     // RealEstate_SendTransferPlot @0x5b1470: 0x507f {the current estate, the target's name at +0x6c}.
     if (state_ != ConnectionState::InZone || !re_can_transfer(true)) return;
     auto t = world_.spawns.find(world_.target_id);
     if (t == world_.spawns.end()) return;
+    // Hailstone: only to the player the question named. The original reads the target at the Yes, so a target
+    // changed while the question was up (10 s) would get the plot instead.
+    if (world_.target_id != target || t->second.name != name) {
+        log::info("real estate: the target changed while the transfer was asked; nothing sent");
+        return;
+    }
     send_zone(encode_re_transfer(real_estate_.occupancy().current, t->second.name));
 }
 

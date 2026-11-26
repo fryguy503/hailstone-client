@@ -26,7 +26,9 @@ local listState = {}
 local kb = K.new()
 local side = {} -- W.toSide
 local asked, askedAt = nil, 0 -- the who_count when the search went out
-local selected
+-- The picked row, and the player's name and the reply it was picked from: a new reply (this window's search, the
+-- Friends window's Who, a /who typed in the chat) finds the player again in it, else the pick and the scroll go.
+local selected, selectedName, selectedFrom
 
 local function myLevel()
   return tonumber(API.character.Label(2) or "") -- EQType 2: the player's level
@@ -92,7 +94,7 @@ local function run(line)
   say(line)
   asked, askedAt = API.character.WhoResults(), ui.GetTime()
   whoAt = nil -- (read again next frame)
-  selected = nil
+  selected, selectedName, selectedFrom = nil, nil, nil
   listState.offset = 0
 end
 
@@ -121,6 +123,7 @@ ui.window("Who", function()
   if not API.session.InGame() then
     GPSTATE.whoOpen = false
     whoCount, whoPlayers, whoAt = nil, nil, nil
+    selected, selectedName, selectedFrom = nil, nil, nil
     return
   end
   if not GPSTATE.whoOpen then
@@ -130,6 +133,15 @@ ui.window("Who", function()
   end
   T.frame()
   local count, players = results()
+  if selected and count ~= selectedFrom then
+    -- another reply: the same player in it, else nothing picked and the list from its top
+    local found = nil
+    for i, p in ipairs(players or {}) do
+      if p.name == selectedName then found = i break end
+    end
+    selected, selectedFrom = found, found and count or nil
+    if not found then selectedName, listState.offset = nil, 0 end
+  end
   local waiting = asked ~= nil and count == asked and ui.GetTime() - askedAt < 5
   if count ~= asked then asked = nil end
   local sub = count == 0 and "Search for players" or (#players .. (#players == 1 and " player" or " players"))
@@ -170,7 +182,7 @@ ui.window("Who", function()
       T.draw(x0, ly + T.px(10), count == 0 and "Pick the filters, then Search." or "No players matched those filters.", C.dim)
       ui.Dummy(1, 1)
     else
-      if selected and selected > #players then selected = nil end
+      if selected and selected > #players then selected, selectedName, selectedFrom = nil, nil, nil end
       listState.selected = selected
       local visible = math.max(1, math.floor((y1 - ly + T.px(10)) / (T.px(64) + T.px(10))))
       listState.shown = visible
@@ -184,7 +196,7 @@ ui.window("Who", function()
         T.font(19)
         T.textIn(rx0 + w * 0.29, ry0, rx1 - T.px(14), ry1, T.fit(infoOf(p), w * 0.7), C.dim, 0)
         T.unfont()
-      end, function(i) selected = i end)
+      end, function(i) selected, selectedName, selectedFrom = i, players[i].name, count end)
       W.toSide(side, focusedRow)
       -- the picked player: their line as the chat printed it, and what to do
       local rx0 = x0 + listW + T.px(30)

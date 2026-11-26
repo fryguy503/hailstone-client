@@ -36,6 +36,9 @@ private:
 };
 
 enum class FileLockMode { Shared, Exclusive };
+// Private: the cache's own lock, in a folder only this user may enter, owned by this user and closed to others.
+// Ordinary: a lock in a folder others may see (the install's update/), checked only to be a real file.
+enum class LockFolder { Private, Ordinary };
 
 class ScopedFileLock {
 public:
@@ -46,9 +49,11 @@ public:
     ScopedFileLock(const ScopedFileLock&) = delete;
     ScopedFileLock& operator=(const ScopedFileLock&) = delete;
 
-    // Nonblocking. A missing regular lock file is created privately; failures, including contention, return nullopt.
-    // The stable lock file is never unlinked. Closing the owner (or process termination) releases its native lock.
-    static std::optional<ScopedFileLock> try_acquire(const std::filesystem::path& path, FileLockMode mode);
+    // Nonblocking. A missing regular lock file is created (privately for LockFolder::Private); failures, including
+    // contention, return nullopt. The stable lock file is never unlinked. Closing the owner (or process termination)
+    // releases its native lock.
+    static std::optional<ScopedFileLock> try_acquire(const std::filesystem::path& path, FileLockMode mode,
+                                                     LockFolder folder = LockFolder::Private);
 
 private:
     void reset() noexcept;

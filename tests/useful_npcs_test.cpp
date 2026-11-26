@@ -149,7 +149,7 @@ TEST_CASE("Find: OP_SendFindableNPCs reads as Handle_OP_SendFindableNPCs does, a
     REQUIRE(conn.findable_npcs().size() == 1);
     CHECK(conn.findable_npcs().contains(321));
     // zoning forgets the old zone's ids
-    conn.receive_world_packet_for_test(net::encode(net::ZoneServerInfo{"127.0.0.1", 7001}));
+    net::GameConnectionTestAccess::zone_hand_off(conn, 7001);
     CHECK(conn.findable_npcs().empty());
 }
 
@@ -270,6 +270,6 @@ TEST_CASE("Find: quest givers come from the server script's list, matched by the
     REQUIRE(conn.quest_npcs().size() == 2);
     CHECK(conn.quest_npcs().at("guard gehnus") == 3);
     CHECK(conn.quest_npcs().at("old man") == 2);
-    conn.receive_world_packet_for_test(net::encode(net::ZoneServerInfo{"127.0.0.1", 7001}));
+    net::GameConnectionTestAccess::zone_hand_off(conn, 7001);
     CHECK(conn.quest_npcs().empty());
 }

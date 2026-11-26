@@ -266,19 +266,34 @@ int LuaSocialDryRun(lua_State* L) {
             lua_pop(L, 1);
         }
     }
-    mq::ButtonPress p;
-    p.social = n;
-    p.name = s.name.empty() ? "new" : s.name;
-    p.lua = s.lua;
-    if (edited) {
-        p.lua = {string_at(L, base + 1), string_at(L, base + 2)};
-        p.state = kEditorState + n; // unsaved code: not the social's own state
-    }
-    lua_settop(L, base);
-    p.shift = mods[0];
-    p.ctrl = mods[1];
-    p.alt = mods[2];
-    mq::ButtonDryRun d = h.scripts->dry_run_button(p);
+    // The press and the answer in a box the state owns, made inside cxx_guard: the pushes below could raise with them
+    // alive in this frame (plugin/lua_keep.h).
+    struct Run {
+        mq::ButtonPress p;
+        mq::ButtonDryRun d;
+    };
+    Run& run = plugin::lua_keep<Run>(L);
+    // (the fields' text, as string_at reads it: still on the stack under the box)
+    std::size_t press_n = 0, face_n = 0;
+    const char* press = edited && lua_type(L, base + 1) == LUA_TSTRING ? lua_tolstring(L, base + 1, &press_n) : nullptr;
+    const char* face = edited && lua_type(L, base + 2) == LUA_TSTRING ? lua_tolstring(L, base + 2, &face_n) : nullptr;
+    plugin::cxx_guard(L, [&] {
+        mq::ButtonPress& p = run.p;
+        p.social = n;
+        p.name = s.name.empty() ? "new" : s.name;
+        p.lua = s.lua;
+        if (edited) {
+            p.lua = {press ? std::string(press, press_n) : std::string(), face ? std::string(face, face_n) : std::string()};
+            p.state = kEditorState + n; // unsaved code: not the social's own state
+        }
+        p.shift = mods[0];
+        p.ctrl = mods[1];
+        p.alt = mods[2];
+    });
+    if (edited) lua_replace(L, base + 1); // (the box in the first field's place; the fields' text is copied)
+    lua_settop(L, base + 1);
+    plugin::cxx_guard(L, [&] { run.d = h.scripts->dry_run_button(run.p); });
+    const mq::ButtonDryRun& d = run.d;
     lua_createtable(L, 0, 4);
     set_bool(L, "ok", d.ok);
     set_str(L, "error", d.error);

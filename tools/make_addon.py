@@ -289,6 +289,10 @@ def main():
             plat, _, folder = p.partition("=")
             if not PLATFORM.match(plat) or plat == "any" or not folder:
                 sys.exit(f"--platform {p}: PLATFORM=FOLDER, as linux-x64=build/MQ2Hud")
+            # One package a platform: a second would write the same zip over the first and leave two package lines,
+            # the first with the overwritten zip's hash.
+            if any(plat == seen for seen, _ in builds):
+                sys.exit(f"--platform {plat}: given twice (one folder a platform)")
             builds.append((plat, folder))
     for _, folder in builds:
         if within(a.out, folder):

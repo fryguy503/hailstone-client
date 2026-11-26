@@ -270,10 +270,11 @@ int ScrollChatTab(lua_State* L) {
     const float y = ImGui::GetScrollY();
     const bool at_bottom = y >= ImGui::GetScrollMaxY() - 2;
     const bool follow = lua_toboolean(L, 5);
+    const bool keep_scroll = lua_toboolean(L, 6);
     if (lua_isnumber(L, 3)) {
         const float delta = static_cast<float>(lua_tonumber(L, 3) * luaL_checknumber(L, 4));
         if (std::isfinite(delta)) ImGui::SetScrollY(std::max(0.0f, (returning ? view.y : y) + delta));
-    } else if (follow || (returning ? view.follow : at_bottom)) {
+    } else if (!keep_scroll && (follow || (returning ? view.follow : at_bottom))) {
         ImGui::SetScrollHereY(1.0f);
     } else if (returning) {
         ImGui::SetScrollY(view.y);

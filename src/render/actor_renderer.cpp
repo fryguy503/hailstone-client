@@ -1682,7 +1682,8 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
         const bool new_style = model->eqg && rm && (rm->flags & game::kNewStyleModel);
         // A tunic-point model plays its holding variants while the spawn holds anything (CharacterModel::clip).
         const bool holding = game::holds_item(s.appearance);
-        auto has_clip = [&](std::string_view c) { return model->clip(c, holding) != nullptr; };
+        auto find_clip = [&](std::string_view c) { return model->clip(c, holding); };
+        auto has_clip = [&](std::string_view c) { return find_clip(c) != nullptr; };
         auto rand_int = [this] { return static_cast<int>(rng_() & 0x7fff); }; // the C rand()'s range
         const game::Spawn* mount = nullptr;
         if (auto m = s.mount_id ? world.spawns.find(s.mount_id) : world.spawns.end(); m != world.spawns.end())
@@ -1743,11 +1744,11 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
         // the movement choice starts this frame.
         const std::uint8_t playing_before = st.anim.anim;
         game::SpawnAnimChoice choice = game::choose_spawn_animation(
-            st.anim, in, has_clip, done, [this] { return 1 + static_cast<int>(rng_() % 100); }, rand_int);
+            st.anim, in, find_clip, done, [this] { return 1 + static_cast<int>(rng_() % 100); }, rand_int);
         if (choice.restart && !s.is_npc) // players only: NPCs would flood the log
             log::debug("animation: {} ({}) plays {} (rate {:.3f}{}{})", s.name, id, choice.clip, choice.rate,
                        choice.reverse ? ", reversed" : "", choice.loop ? "" : ", once");
-        const assets::AnimationClip* motion = choice.clip.empty() ? nullptr : model->clip(choice.clip, holding);
+        const assets::AnimationClip* motion = choice.clip.empty() ? nullptr : find_clip(choice.clip);
         if (!motion) motion = &model->first_clip({"P01", "O01", "L01"}, holding);
         st.motion_clip = motion;
         // A stand request that played P08 from +0x10c4 leaves 0x20 or 0x47 there (0x4b15b0's idle path).

@@ -44,6 +44,112 @@ void frame(ui::lua::LuaUi& lua) {
 
 } // namespace
 
+TEST_CASE("Chat input: colored spans follow native editing and horizontal scrolling") {
+    test::ScratchDir scratch("chat_input_colors");
+    const auto pack = scratch.path() / "pack";
+    fs::create_directories(pack);
+    std::ofstream(pack / "chat.lua") << R"(
+input = 'Say ' .. utf8.char(233) .. ' Hat Prize'
+local itemColor = { 1, 0, 0, 1 }
+local colors = { Hat = itemColor, Prize = { 0, 0, 1, 1 }, Gem = itemColor }
+local options = {
+  history = function(older)
+    if older then return 'Hat ' .. string.rep('w', 60) .. ' Prize' end
+  end,
+  colorSpans = function(edited)
+    painted = edited
+    local spans = {}
+    for _, name in ipairs({ 'Hat', 'Prize', 'Gem' }) do
+      local first, last = edited:find(name, 1, true)
+      if first then spans[#spans + 1] = { first, last, colors[name] } end
+    end
+    return spans
+  end,
+}
+ui.window('Chat Input Colors', function()
+  ui.SetNextWindowSize(300, 120)
+  if ui.Begin('Chat Input Colors') then
+    if focus then ui.SetKeyboardFocusHere(); focus = nil end
+    options.moveToEnd, moveToEnd = moveToEnd, nil
+    ui.SetNextItemWidth(160)
+    ui.PushStyleColor(ui.Col.Text, 0, 1, 0, 1)
+    input = ui.InputText('##chat', input, 2048, ui.InputTextFlags.EnterReturnsTrue, options)
+    ui.PopStyleColor()
+  end
+  ui.End()
+end)
+)";
+
+    std::unique_ptr<ImGuiContext, decltype(&ImGui::DestroyContext)> ctx(ImGui::CreateContext(), ImGui::DestroyContext);
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+    io.ConfigInputTextCursorBlink = false;
+    constexpr ImU32 plain = IM_COL32(0, 255, 0, 255);
+    constexpr ImU32 item = IM_COL32(255, 0, 0, 255);
+    constexpr ImU32 achievement = IM_COL32(0, 0, 255, 255);
+    constexpr ImU32 cursor = IM_COL32(255, 255, 0, 255);
+    constexpr ImU32 selection = IM_COL32(255, 0, 255, 255);
+    ctx->Style.Colors[ImGuiCol_InputTextCursor] = ImGui::ColorConvertU32ToFloat4(cursor);
+    ctx->Style.Colors[ImGuiCol_TextSelectedBg] = ImGui::ColorConvertU32ToFloat4(selection);
+
+    ui::lua::LuaUi lua(pack, scratch.path() / "settings.txt");
+    frame(lua);
+    frame(lua);
+    ImGuiWindow* window = ImGui::FindWindowByName("Chat Input Colors");
+    REQUIRE(window);
+    const auto& vertices = window->DrawList->VtxBuffer;
+    auto count = [&](ImU32 color) { return std::ranges::count(vertices, color, &ImDrawVert::col); };
+    CHECK(count(plain) == 4 * 4); // 'Say' and one UTF-8 glyph
+    CHECK(count(item) == 4 * 3);
+    CHECK(count(achievement) == 4 * 5);
+
+    REQUIRE(lua.run_for_test("", "focus = true; return true") == "true");
+    frame(lua);
+    frame(lua);
+    const ImGuiID id = window->GetID("##chat");
+    REQUIRE(ctx->ActiveId == id);
+    CHECK(count(selection) > 0);
+    CHECK(count(cursor) > 0);
+    CHECK(ctx->PlatformImeData.WantTextInput);
+
+    auto press = [&](ImGuiKey key) {
+        io.AddKeyEvent(key, true);
+        frame(lua);
+        io.AddKeyEvent(key, false);
+    };
+    press(ImGuiKey_Home);
+    frame(lua); // Process Home's release before queuing text through ImGui's input trickling.
+    io.AddInputCharactersUTF8("x");
+    frame(lua);
+    CHECK(lua.run_for_test("", "return painted == input and input:sub(1, 4) == 'xSay'") == "true");
+    CHECK(count(plain) == 4 * 5);
+    CHECK(count(item) == 4 * 3);
+    CHECK(count(achievement) == 4 * 5);
+    CHECK(count(selection) == 0);
+
+    REQUIRE(lua.run_for_test("", "input = input .. ' Gem'; moveToEnd = true; return true") == "true");
+    frame(lua);
+    REQUIRE(ctx->ActiveId == id);
+    const auto* state = ImGui::GetInputTextState(id);
+    REQUIRE(state);
+    CHECK(state->GetCursorPos() == state->TextLen);
+    CHECK(lua.run_for_test("", "return painted == input and input:sub(-4) == ' Gem'") == "true");
+    CHECK(count(item) == 4 * 6);
+    CHECK(count(achievement) == 4 * 5);
+
+    press(ImGuiKey_UpArrow);
+    CHECK(lua.run_for_test("", "return painted == input and #input > 60") == "true");
+    press(ImGuiKey_End);
+    CHECK(state->Scroll.x > 0);
+    CHECK(count(item) == 0);
+    CHECK(count(achievement) == 4 * 5);
+    CHECK(count(cursor) > 0);
+    CHECK(count(plain) > 0);
+    CHECK(count(plain) < 4 * 60);
+    CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+}
+
 TEST_CASE("Chat window script: new windows and tabs draw without script errors") {
     fs::path src = ui_dir() / "modern";
     REQUIRE(fs::exists(src / "chat.lua"));

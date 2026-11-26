@@ -243,7 +243,7 @@ The mesh has the water surfaces (above) as well as the bottoms, marked Water. Th
 crosses them with `/nav option water off`.
 
 Forward swims along the look pitch, so while swimming (BodyWet 5 and up) the walk sets the pitch each frame
-(`Navigator::swim_pitch`; /follow does the same):
+(`Navigator::swim_pitch`). The same rules apply to /follow on mesh detours, near the shore, or when surfacing for air:
 
 - The head under water and the air below 35% of the most: straight up, whatever the corner.
 - A corner out of the water within 12: up, so the original's swim jump (DoSwimJump) climbs out onto the shore.
@@ -268,7 +268,8 @@ followed spawn and runs straight at it, so a corner loses it, and it gives up pa
 - The follow keeps on to 400 away. The original's "too far" message still ends it past 400 or when the spawn dies.
 - The help's own strafes do not end the follow (the player's turn and strafe keys still do). If the help gets stuck
   it hands back to the original's step for 5 s, then tries again.
-- Off the mesh (levitating, swimming, a ledge it left out) the original's step steers alone.
+- Off the mesh (levitating, swimming, a ledge it left out), follow steers directly. A swimmer with a clear line to
+  the leader can match the leader's depth with or without mesh help.
 - `/nav ui` draws the follow's path in cyan.
 - A `/nav` walk and /follow do not run together: either one started ends the other.
 
@@ -309,8 +310,26 @@ jumps) when the floor 4 to either side is more than 5 under the feet, so it neve
 
 Not yet: `/nav item`, waypoints (`/nav waypoint`, `/nav recordwaypoint`).
 
-`/moveto` (MQ2MoveUtils' straight walk, no mesh): `/moveto loc <y> <x> [z]` (or `y,x`), `/moveto id [#]` (the target
-without a number), `/moveto mdist <n>` (where it stops, default 10), `/moveto off`.
+`/moveto` (MQ2MoveUtils' straight walk, no mesh) turns the player to the spot and holds forward until it arrives,
+`/moveto off`, or the player's own movement keys:
+
+- `/moveto loc <y> <x> [z]` (or `y,x`). Without a Z only Y and X count: it arrives within the distance on the flat,
+  whatever the height. With a Z it must also be within 8 of that height, as a `/nav` walk's end.
+- `/moveto id [#]`: the spawn's place (the target without a number). Only Y and X count, as for a `loc` without a
+  Z: a spawn levitating or on a ledge above is reached from under it. Each second the walk takes the spawn's place
+  again: it turns after a spawn that moves, and looks up or down at it (out of the water the view alone, from the
+  player's own height, at most 1.4 radians; swimming, the swim's pitch towards it). A spawn gone leaves the last
+  place, and the walk goes on to it.
+- `/moveto dist <n>` (or MQ2MoveUtils' `mdist`): how near, on the flat, the walks after it count as arrived. 10 until
+  set, as in MQ2MoveUtils, for the session.
+- `mdist <n>` (or `dist <n>`) may also come inline, as in MQ2MoveUtils: after `loc <y> <x> [z]` or `id [#]`, or before
+  `id`. It sets the distance for that walk and the ones after it. E3 sends `/moveto loc <y> <x> mdist <n>`.
+- `/moveto off`.
+
+`${MoveTo}` (MQ2MoveUtils' TLO): `ON`, `PAUSED` or `OFF` as its text; `.Moving` (a `/moveto` is walking),
+`.Stopped` (the last `/moveto` arrived; the next `/moveto` clears it, `/moveto off` and the movement keys do not set
+it), `.ArrivalDist` (the distance above), `.Broken` (always FALSE: MQ2MoveUtils' walk ended by aggro or a hit, which
+Hailstone's never is). Not yet: `.UseWalk`, `.ArrivalDistY`, `.ArrivalDistX`, `.CampStopped`.
 
 **/stick** (MQ2MoveUtils' words; Hailstone's own walk, `NavControl::stick`) keeps to the target until `/stick off`, the
 player's own movement keys, or the spawn dying or leaving. Near enough it holds still and faces the spawn. Further, it
@@ -326,11 +345,52 @@ off it).
 - It keeps to the spawn it was given, whatever is targeted later (MQ2MoveUtils' `hold`). `/stick` again moves it to
   the new target.
 - A `/nav` or `/moveto` walk ends a stick, and a stick ends a walk.
+- `/stick pause` holds the stick (and any walk) where it is, `/stick unpause` lets it go on; a new `/stick` starts
+  unpaused. `pause lock` is taken as `pause`.
 
-Not yet: MQ2MoveUtils' `pin`, `!front`, `moveback`, `uw` and percent distances.
+MQ2MoveUtils' other words that E3 sends are taken, so its lines stick:
+
+- `hold`: what Hailstone's stick always does.
+- `snaproll` (or `snaproll rear`): taken as `behind`. MQ2MoveUtils runs round to the spawn's back once and faces it;
+  E3 sends it only to get there before its own stick. `snaproll left`, `right` and `face` are not taken.
+- `imsafe`: lifts MQ2MoveUtils' lock after a GM or summon break, which Hailstone has none of; it does nothing.
+- `uw` (`underwater`), `delaystrafe` and `moveback` are accepted but change nothing yet: looking up and down at the
+  spawn, a pause before strafing back into place, backing off a spawn that comes nearer than the distance.
+
+Not yet: `front`, `!front`, `pin` and `behindonce` (each says so and does not stick), and percent distances.
 
 `${Stick}` (ON / OFF), `.Active`, `.Status` (ON, PAUSED, OFF), `.Distance`, `.StickTarget` (the spawn's id, 0 none),
-`.StickTargetName`.
+`.StickTargetName`, `.Stopped` and `.Behind`. These two are about the stick's spawn, or the target without a stick,
+as in MQ2MoveUtils:
+
+- `.Stopped`: within the stick's distance on the flat (without a stick, the target's `MaxRangeTo`).
+- `.Behind`: `.Stopped`, and the player within 45 degrees of the spawn's back, by where the player stands (the arc
+  `behind` holds to). MQ2MoveUtils compares the player's and the spawn's headings instead.
+
+**/afollow** (MQ2AdvPath's words; Hailstone's own walk, `NavControl::afollow`) follows the target, or a spawn, along
+the way it walks rather than straight at it: the spawn leaves a trail, a point each 5 units it moves, and the player
+walks the trail, so it goes round the corners the spawn went round, up its ramps, through its doors and into the zone
+line it took.
+
+- It holds still once the trail left, and the gap to the spawn, is within the distance, and walks on as the spawn
+  moves away. A point near the player further along the trail (the spawn came back past) cuts off the loop before it.
+- The trail is walked on the flat: a levitating spawn's points are reached from under it.
+- The spawn gone (dead, zoned, out of range): the trail is walked to its end, zone lines included, then the follow
+  ends with a chat line.
+- The spawn warped (it moved more than 100 at once: a gate, a summon, a teleporter): the trail is walked to where it
+  warped, and the player waits there until it warps too (moves more than 100 at once) or the spawn comes within 100.
+- `/afollow off`, the player's own movement keys, a `/nav`, `/moveto` or `/stick`, or a zone change end it.
+- These are Hailstone's choices: MQ2AdvPath was the guide, not the source.
+
+`/afollow` alone stops a follow, else follows the target. `/afollow on` follows the target, `/afollow spawn <id>` a
+spawn, `/afollow off` stops, `/afollow pause` and `unpause` hold and release it. A distance (at least 1; 10 at first)
+and `door` / `nodoor` (whether it opens doors in its way; `door` at first) are kept for the follows after them, and
+each also starts a follow of the target (E3 sends `/afollow on nodoor <distance>`). `/afollow help` lists them.
+
+`${AdvPath}` (TRUE), `.Active` (TRUE), `.State` (1 following, else 0), `.Status` (0 off, 1 on, 2 paused),
+`.Following`, `.Paused`, `.WaitingWarp`, `.Waypoints` (the trail's points left), `.Length` (its flat length, with the
+gap to the spawn), `.Monitor` (the spawn followed); `.Playing` and `.Recording` are FALSE. Not yet: MQ2AdvPath's
+`/play` and `/record` paths, and its path members (`.Path`, `.CheckPoint`, `.X`/`.Y`/`.Z`, `.Flag1`-`9` ...).
 
 ### The Navigation TLO
 

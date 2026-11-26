@@ -70,7 +70,7 @@ end
 ui.window("Friends", function()
   testOpen()
   if not W.shown(FW) then
-    kb.open, state.confirm = false, nil
+    kb.open, state.confirm, state.note = false, nil, nil
     return
   end
   T.frame()
@@ -153,7 +153,12 @@ ui.window("Friends", function()
         W.sideAfter(side, 2, page == 1 and 5 or 3, lists[page])
         y = y + bh + T.px(24)
         T.font(18)
-        T.draw(rx0, y, (sel and sel ~= "") and ("SELECTED: " .. sel:upper()) or "SELECT A NAME ON THE LEFT", C.dim)
+        if state.note and ui.GetTime() - state.noteAt < 6 then
+          T.draw(rx0, y, state.note, C.gold)
+        else
+          state.note = nil
+          T.draw(rx0, y, (sel and sel ~= "") and ("SELECTED: " .. sel:upper()) or "SELECT A NAME ON THE LEFT", C.dim)
+        end
         T.unfont()
         y = y + T.px(34)
         local none = not sel or sel == ""
@@ -180,12 +185,22 @@ ui.window("Friends", function()
               disabled = none, align = 0 }, pad) then
           local who, list_, button = sel, p.list, p.remove
           state.confirm = { "Remove " .. who .. " from your " .. (page == 1 and "friends" or "ignore") .. " list?", function()
-            -- the stock Remove acts on its selected row: select the name again (the list may have changed)
+            -- the stock Remove acts on its selected row: select the name again (the list may have changed), and
+            -- press Remove only when that row is the one selected (else it would remove whoever is selected now)
             local again = names(p)
+            local row = nil
             for i, n in ipairs(again) do
-              if n == who then API.windows.ListClick(FW, list_, i - 1, "left") end
+              if n == who then row = i break end
             end
-            API.windows.ClickChild(FW, button, "left")
+            if row then
+              API.windows.ListClick(FW, list_, row - 1, "left")
+              local _, picked = names(p)
+              if picked == row then
+                API.windows.ClickChild(FW, button, "left")
+                return
+              end
+            end
+            state.note, state.noteAt = who .. " is no longer on the list.", ui.GetTime()
           end }
         end
         W.sideAfter(side, (page == 1 and 5 or 3), page == 1 and 5 or 3, lists[page])

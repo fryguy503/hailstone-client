@@ -37,6 +37,17 @@ using PhaseTimes = std::array<float, kFramePhases>;
 
 // A frame that took this long against the typical frame time (`typical_ms`, 0 while unknown) is a hitch.
 bool is_hitch(float frame_ms, float typical_ms);
+// The typical frame time hitches are measured against: a running average of the frames that were not hitches. A run
+// of kHitchRunReset hitches in a row means the frame time itself changed (a heavier zone, a slower power state, a
+// lower refresh): the average starts again from the frame that ends the run, so it does not call every frame a hitch
+// for good.
+inline constexpr int kHitchRunReset = 30;
+struct HitchBaseline {
+    float typical_ms = 0.0f; // 0 while unknown
+    int run = 0;             // hitches in a row
+    // Takes a frame's time; true when it was a hitch.
+    bool add(float frame_ms);
+};
 // The log line for a hitch: its time, the typical time, then the phases that took 1 ms or more, longest first
 // ("other" is the time no phase was charged with: events, the window system).
 // `sections` (core/frame_sections.h) of 1 ms or more follow, longest first.
@@ -145,7 +156,7 @@ private:
     bool open_ = false;
     bool paused_ = false;
     bool log_hitches_ = false;
-    float typical_ms_ = 0.0f; // a running average of the frames that were not hitches
+    HitchBaseline baseline_;
     Clock::time_point frame_start_{}, last_mark_{};
     std::uint64_t frames_ = 0;
     Clock::time_point started_ = Clock::now();

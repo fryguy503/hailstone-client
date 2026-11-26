@@ -240,10 +240,11 @@ std::uint8_t eco_accumulate(float weight, std::int32_t& acc, std::int32_t parent
 std::uint8_t eco_color(std::uint8_t value, std::uint8_t cover, std::uint8_t mask, bool base);
 std::vector<EcoLayer> parse_eco(std::span<const std::byte> data);
 // The painted tile (one with DAT layers) nearest to (lng, lat) by grid distance, searched ring by ring out to
-// `reach` tiles; ties go to the first in the map's order. This client's own fill for unpainted tiles.
+// `reach` tiles; ties in a ring go to the lowest lat, then the lowest lng. This client's own fill for unpainted
+// tiles. Each cell looked up takes one from `budget` when given; when it runs out the answer is none.
 std::optional<std::size_t> nearest_painted_tile(std::int32_t lng, std::int32_t lat,
                                                 const std::map<std::pair<std::int32_t, std::int32_t>, std::size_t>& painted,
-                                                std::int32_t reach = 16);
+                                                std::int32_t reach = 16, std::uint64_t* budget = nullptr);
 
 // An animated EQG texture's sidecar, `<texture>.txt`: the frame count, the time
 // a frame shows in ms, then the frames' file names, the first being the texture itself. bloodfalls' blood01_c.txt is

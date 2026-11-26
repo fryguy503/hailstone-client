@@ -200,7 +200,7 @@ float Controls::forward(float s0) {
     if (swim) {
         v = swimming_speed(static_cast<float>(v), q_.swimming_skill(), f_);
         s0 = static_cast<float>(v);
-        if (0.0f < p.pitch) {
+        if (s_.swim_jump.value_or(0.0f < p.pitch)) {
             q_.do_swim_jump();
             v = st(s0);
         }

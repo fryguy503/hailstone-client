@@ -46,7 +46,8 @@ int hex_digit(char c) {
 }
 
 constexpr std::uint32_t kMagic = 0x50494748; // HGIP, assembled by ByteReader/ByteWriter.
-constexpr std::uint16_t kVersion = 1;
+// 2: a reply's handle is the broker's own, which the client duplicates from it (1: one the broker put in the client).
+constexpr std::uint16_t kVersion = 2;
 
 #if defined(_WIN32)
 bool transfer(HANDLE pipe, std::span<std::byte> bytes, bool write, HANDLE stop, HANDLE peer, Deadline deadline) {
@@ -268,7 +269,9 @@ std::unique_ptr<GpuIpcClient> GpuIpcClient::connect(const GpuIpcSession& session
     ULONG server_id = 0;
     if (!::GetNamedPipeServerProcessId(impl->pipe.get(), &server_id) || !server_id ||
         (session.server_process_id && server_id != session.server_process_id)) transport_failure();
-    impl->peer_process = WinHandle(::OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, server_id));
+    // PROCESS_DUP_HANDLE: a reply's handle is taken from the broker by this process (call), never adopted by number.
+    impl->peer_process =
+        WinHandle(::OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_DUP_HANDLE, FALSE, server_id));
     if (!impl->peer_process || ::GetProcessId(impl->peer_process.get()) != server_id) transport_failure();
     const auto token = token_bytes(session.token);
     write_header(impl->pipe.get(), {gpu_ipc_wire::Kind::Authenticate, 32, 0, false}, impl->stop_event.get(),
@@ -303,7 +306,15 @@ GpuIpcResult GpuIpcClient::call(std::span<const std::byte> body, int timeout_ms)
             read_bytes(impl_->pipe.get(), bytes, impl_->stop_event.get(), impl_->peer_process.get(), deadline);
             const auto value = ByteReader(bytes).le<std::uint64_t>();
             if (!value || value > std::numeric_limits<std::uintptr_t>::max()) invalid_frame();
-            result.handle = TypedGpuIpcHandle::adopt(reinterpret_cast<void*>(static_cast<std::uintptr_t>(value)));
+            // The number names a handle in the broker, which keeps it open until this connection's next request.
+            // Duplicated from there, the handle is always a new one of this process's own: a number the broker
+            // made up, or one naming a handle this process already holds (which adopting would close later), gives
+            // at worst one of the broker's own objects, or nothing.
+            HANDLE own = nullptr;
+            if (!::DuplicateHandle(impl_->peer_process.get(), reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(value)),
+                                   ::GetCurrentProcess(), &own, 0, FALSE, DUPLICATE_SAME_ACCESS) || !own)
+                invalid_frame();
+            result.handle = TypedGpuIpcHandle::adopt(own);
         }
         result.body.resize(response.body_size);
         read_bytes(impl_->pipe.get(), result.body, impl_->stop_event.get(), impl_->peer_process.get(), deadline);

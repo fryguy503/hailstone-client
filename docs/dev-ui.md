@@ -42,7 +42,7 @@ build/hailstone/hailstone --ui-demo chars --frames 20 --screenshot chars.png   #
 build/hailstone/hailstone --ui-demo login --ui-scale 1.5 # override the display scale
 ```
 
-The screens are `login`, `servers`, `chars`, `nochars`, `loading`, `game` and `items` (a fake inventory and corpse). F1 to F7 switch screens; the buttons walk a fake flow (any username and password log in); typed chat is echoed.
+F1 to F7 switch between `login`, `servers`, `chars`, `nochars`, `loading`, `game` and `items` (a fake inventory and corpse). The buttons walk a fake flow (any username and password log in), and typed chat is echoed. `--ui-demo client-chat` and `--ui-demo client-chat-expanded` load the bundled Modern Lua chat window with a sample zone transfer and its notice group closed or open. Use `--zone skyfire --ui-scale 1` to see it over Skyfire.
 
 While the UI has keyboard or mouse focus, the camera ignores that input; holding the right mouse button still turns it.
 
@@ -65,6 +65,8 @@ while (window.poll_events()) {
 
 ### Modern chat tabs
 
+After changing zones, routine Lua and compiled plug-in lifecycle notices appear in a gold **Client System Messages [n]** row in the window that receives those system messages. Select the row to expand it, and select it again to collapse it. The initial entry after signing in shows the notices individually. Only stops that a restart cancels go in the row: a script or plug-in the new zone stops and nothing starts again shows its stop notice as a line of its own. Server messages, add-on errors, and manual command responses still appear individually. Add-ons can post groups with their own titles through the Lua module or compiled plug-in SDK.
+
 Right-click any tab or the chat output for the chat menu: create, rename and close tabs and windows, detach, move
 or reorder a tab, and combine windows into the one you clicked. **Switch Tab** lists that window's tabs, **Chat
 Windows** every window's IDs and tabs. The menu also has the tab's scrollbar and highlight settings, chat routing and
@@ -76,6 +78,10 @@ tab during its highlighted phase. **Highlight New Messages** defaults to on in r
 the strip and overflow button visually unchanged when that tab receives new messages. Each tab can hide its
 scrollbar. Groups, names, order, selection and tab settings are saved per character. The native model is shared by
 the Modern controls, [`hs.UI.chat`](ui-api.md#chat-tabs-and-windows) and [`/chattabs`](commands.md).
+
+Any active UI pack replacement for `Chat1` through `Chat32` suppresses the built-in fallback chat. Chat works
+in the remaining frames when moves or combines leave frame 1 empty. The fallback is available when the pack
+provides no chat, and `ui.cpp_windows=1` can show it alongside the pack for debugging.
 
 The menu's first rows are the original's, in its order (Window, Scrollbar, New Chat Window, Rename Window, Always
 Chat Here, the tell menus, Filters, Channel, Language, Hit Modes); the tab rows, highlight settings, Font Size, Use
@@ -132,7 +138,7 @@ TaskSelectWnd has Preview Reward in both packs (`TSEL_PreviewRewardButton`, the 
 
 #### Shared tasks
 
-The header's Shared members control shows the roster count and opens a management popup over the native `STASK_MemberList` (Member, Role). Add target, Remove member, Make leader, Invite raid and Invite expedition use the native controls and their permission checks.
+The header's Shared members control shows the roster count and opens a management popup over the native `STASK_MemberList` (Member, Role). Add target, Remove member, Make leader, Invite raid and Invite expedition use the native controls and their permission checks. Make leader asks first, naming the member (Hailstone).
 
 #### The tracker
 
@@ -266,6 +272,8 @@ The CLOSE_TOP_WINDOW key (Escape unless rebound) closes one ticked window per pr
 
 Controls (`lib/widgets.lua`): buttons, check boxes, button rows, edit and combo boxes, sliders, gauges, lists, STML text, item slots and grids, tabs and coins. A list is a virtual table over `hs.ListInfo` / `hs.ListRow`, sortable and filterable.
 
+A button with `opts.ask` (a function giving the question) opens a Yes / Cancel question on a click, and only its Yes clicks the child. The question goes away when `ask` gives a different question (another member selected), or the child is disabled or hidden.
+
 Each control is bound to a game window's child by its ScreenID (the layout's `id`, not `name`): it reads what the child shows and hands clicks to it (`hs.ClickChild`, `hs.ListClick`, `hs.SetWindowText`, `hs.ComboSelect`, `hs.SetSlider`, `hs.SetTabPage`, `hs.PickUp`), so the window's own handler runs.
 
 ImGui bindings they add beyond the first set: `InputTextWithHint`, `PushTextWrapPos` / `PopTextWrapPos`, `SetCursorScreenPos`, `TableSetupScrollFreeze`, `TableGetSortSpecs` and the `Sortable`, `BordersInner*`, `Hideable`, `Reorderable` table flags.
@@ -291,7 +299,10 @@ Each entry names the window and what is particular to it; the `hs.*` calls behin
   - Turn on **Allow window resizing** to drag the left edge and change the width. A horizontal tray wraps to fit. For vertical icons without names, drag the bottom edge to change how many icons fit in each column. The grip shows on hover. Turning resizing off keeps the size. **Reset size** restores automatic sizing. **Icons per row** also returns horizontal trays to fitting their contents.
   - The `hud.*` settings are saved per tray and character (`lib/bufftray.lua`).
 
-- **CastSpellWnd**: gem tiles in a row or column, refresh shading, the spell book.
+- **CastSpellWnd** (Modern Spell Gems): gem tiles with refresh shading and a spell book button after the last gem. The default is a single row with the window background and the original icon size. The **Vertical** setting fills down first.
+  - Alt-right-click the bar for **Show spell names**, **Show window background**, **Show resize bar**, and **Icon size**. Spell names appear beside their gems. Hover a gem for its full name.
+  - With **Show resize bar** on, drag the right edge, bottom edge, or bottom-right corner to wrap the tiles into rows and columns. Hiding the grip keeps the chosen wrap. **Reset size** clears the wrap and restores the default icon size and frame scale.
+  - The options are saved per character with the Modern layout. Gem clicks and drags keep their usual actions in every layout.
 
 - **HotButtonWnd**..10, **CastingWindow**, **EQMainWnd**; **CompassWindow** (a heading band).
 
@@ -318,6 +329,7 @@ Each entry names the window and what is particular to it; the `hs.*` calls behin
   - Fit / Follow / Labels / Auto Z, and your own markers per zone in `map.markers.<zone>`;
   - right click: Find a path here (`hs.FindMapLocation`), the cursor's /loc and distance; Edit opens the map toolbar;
   - the side panel's Find page is Hailstone's Find window (`app/lua_ui_find.cpp`, docs/navigation.md "Find"); its NPCs button marks the listed NPCs on the map.
+  - `/mapfilter` draws MQ2Map-style spawn and ground marks directly in the shared C++ map view, on the large map and minimap; there are no pack-owned filter controls.
 
 - **Bag1..36** (`bags.lua`): rows of up to five. Resizable (Hailstone's): a set size (`hud.size.Bag<n>`) fits as many slots to a row as its width holds.
 
@@ -361,7 +373,7 @@ The groups below are redone too, each window a resizable dialog (or frame) over 
 
 Helper: `lib/trade_common.lua`.
 
-- **MerchantWnd**: sortable goods table with search, "Usable only" (MW_UsableButton) and "Affordable only"; coin prices dimmed when unaffordable; Buy or Sell and Inspect; Recover and Parcels pages.
+- **MerchantWnd**: sortable goods table with search, "Usable only" (MW_UsableButton) and "Affordable only"; coin prices dimmed when unaffordable; Buy or Sell and Inspect; Recover and Parcels pages. Right-click an incoming parcel to inspect its item before retrieving it.
 - **TradeWnd**: both offers side by side (stacked when narrow); accepted sides framed, status from `hs.TradeState()`.
 - **GiveWnd**. The native shortcut for offering the cursor item to the target is hidden for service NPCs that
   refuse direct hand-ins, including personal and guild tribute masters. Use Donate in the tribute master's window.
@@ -379,7 +391,14 @@ Testing: `HAILSTONE_COMMERCE_TEST=merchant|bank|give:<item id>` near the NPC.
 Helper: `lib/dialogs_kit.lua`.
 
 - **ConfirmationDialogBox**: Yes is primary; Enter does not accept.
-- **LargeDialogWindow**: the server's text, scrolled.
+- **LargeDialogWindow**: the server's STML text, scrolled. Both shipped interfaces display `<table>`, `<tr>` and
+  `<td>` as aligned columns and rows. Cell text keeps its colours and wraps to fit the column.
+  - The tables read (`lib/stml_blocks.lua`, an identical copy in each pack) are a subset of what RoF2's
+    `CStmlWnd::ParseSTMLTable` @0x8826a0 reads: `<th>` is read as `<td>`, attributes on `<table>`, `<tr>` and the
+    cells are ignored, and `<thead>`, `<tbody>` and `<tfoot>` are skipped (EQEmu's `#npcstats` sends `<tbody>`).
+  - Not read yet: `<caption>`, `<colgroup>`, `<col>`, `rowspan` and `colspan` (docs/todo.md).
+  - A table outside the subset, or malformed (an unclosed cell or row, text between cells, a nested table, more than
+    64 cells in a row), stays in the surrounding text, so its contents still show. The text is read in one pass.
 - **TextEntryWnd**, **EditLabelWnd**, **TipWindow** (earlier tips).
 - **NoteWindow** and **BookWindow**: paper-toned pages, side by side or stacked.
 - **AlarmWnd**, **BreathWindow** (a frame; the air bar pulses in its last quarter), **RespawnWnd**.
@@ -423,15 +442,15 @@ Testing: `test.open.<screen>=<seconds>`, `test.select.<window>.<list>=<row>`.
 Helper: `lib/social.lua`.
 
 - **FriendsWindow**: friends and ignored, add, Who / Remove.
-- **RaidWindow**: twelve reflowing group cards, ungrouped players above, roles, search, the invitation banner.
+- **RaidWindow**: twelve reflowing group cards, ungrouped players above, roles, search, the invitation banner. Leave and Make Leader ask first, Make Leader naming the selected member (Hailstone, as the gamepad pack).
   - A member dropped on a card, or "Move here", is selected in the game's list and that group's button pressed. The game enables those buttons only in a locked raid, so an unlocked raid's leader gets it locked first. A full group refuses the drop.
 - **RaidOptionsWindow**, **LFGuildWnd**.
-- **GuildManagementWnd**: roster, notes, message of the day, ranks.
+- **GuildManagementWnd**: roster, notes, message of the day, ranks. Promote, Demote, Make Leader and Remove ask first, naming the selected member; selecting another member puts the question away (Hailstone, as the gamepad pack).
 - **InspectWnd**: worn grid and gear by name.
 - **MailWindow**, **MailAddressBookWindow** and **MailCompositionWindow**.
 - **GroupSearchWnd**: your post (as player or group) beside sortable, searchable results; a group's members and wanted classes under it.
 - **GroupSearchFiltersWnd**, **GroupMentorWindow**.
-- **FellowshipWnd**: members and campsite pages. Its tab box is the script's own (the model keeps no page): `test.tab.FellowshipWnd.Subwindows=n`.
+- **FellowshipWnd**: members and campsite pages. Make Leader, Remove, Leave, End Fellowship and Destroy Camp ask first through the confirmation dialog (the shared model's question, naming the member); the packs add no question of their own. Its tab box is the script's own (the model keeps no page): `test.tab.FellowshipWnd.Subwindows=n`.
 - **SocialEditWnd**:
   - button preview, colour swatches;
   - each line's command with a kind badge, a wait box for its `/pause`, move / empty buttons;
@@ -569,6 +588,7 @@ Spell sets (`game/spell_sets.h`, `net/game_connection_spell_sets.cpp`) are the c
 The bindings (`lua_imgui.cpp`) take only ImGui's public window flags, refuse calls ImGui would only assert on, and draw images only from live client textures (`src/ui/texture_ids.h`). Additions:
 
 - `ui.CodeEditor` (`lua_code_editor.cpp`): a Lua editor with colours from `src/ui/code_syntax.h`, an error line and completion. An editor not drawn for about a minute, or any not drawn last frame once more than 256 exist, is forgotten.
+- A hidden-label, single-line `ui.InputText` can take `options.colorSpans(editedText)` to color parts of the edited text. Return a sorted list of disjoint `{firstByte, lastByte, {r, g, b, a}}` ranges with inclusive, 1-based UTF-8 byte offsets. The field retains its native selection, cursor, and scrolling.
 - `ui.SetClipboardText` / `GetClipboardText`; MQ scripts get them only with every capability (docs/plugins.md).
 - `ui.EdgeButton(id, x0, y0, x1, y1)`: an invisible button reaching the window's outer edge.
 - `ui.FindWindowRect(name)`: a window's place and size by name (nothing for one never drawn).
@@ -739,7 +759,7 @@ AchievementsWnd and AchievementWnd (`achievements.lua`, both packs; `lib/achieve
 
 **Closing and ownership.** Close with `hs.ShowWindow("AchievementsWnd", false)` / `hs.ShowWindow("AchievementWnd", false)`. Only an explicit main-window open may request a refresh; drawing or reading never does. A reopened detail keeps its source. Catalog or connection replacement invalidates indices and detail ownership. Comparisons and linked snapshots never replace own state, and linked details have no reward/share buttons. Acceptance means local selection or request admission, not a server grant.
 
-**Chat composition** (`lib/chatlinks.lua`, both packs): item and achievement tags are stored intact while the editor shows readable labels; the expanded prefix goes back to `hs.ChatTakeFocus`, and Send restores the exact tags. Malformed achievement envelopes show a generic label. A tagged line expanding past ten tags or 512 raw bytes (the gamepad channel prefix included) is rejected intact with a visible error, so the network never truncates through a tag; untagged chat keeps its longer limit. The gamepad edit field holds the same 2048-byte buffer as Modern.
+**Chat composition** (`lib/chatlinks.lua`, both packs) stores item, say, and achievement tags intact while the editor shows their labels in the current chat link color. The draft and chat history use the same palette color. The editor expands the highlighted spans for `hs.ChatTakeFocus` and Send. Malformed achievement envelopes show a generic label. A tagged line expanding past ten tags or 512 raw bytes (the gamepad channel prefix included) is rejected intact with a visible error, so the network never truncates through a tag. Untagged chat keeps its longer limit. The gamepad edit field holds the same 2048-byte buffer as Modern.
 
 #### `lua_ui_map.cpp`
 
@@ -796,6 +816,8 @@ Hailstone's own login, server select, character select and creation screens, dra
 
 - **Revisions**: the first three views carry `view.revision`. Passing it back gives `true` while nothing changed, so a window keeps its table; a script that writes into its held view must read the whole view next frame.
 - **Actions** (`hs.LoginSet`, `hs.LoginDo`, `hs.ServerSelectDo`, `hs.CharacterSelectDo`, `hs.CharacterCreateDo`; lists 1-based; the file's comments list them) do what the ImGui screens do. The login view has `view.version` (`build_version()`, shown at the foot) and the updater's `view.update` with `"updateDownload"`, `"updateRestart"`, `"updateSkip"` and `"updateNotes"` (docs/updater.md).
+- **Deleting a character** is the client's call to confirm. The shipped packs (Modern, Gamepad) ask first in their own look, naming the character, and their own code's `hs.CharacterSelectDo("delete")` then deletes. From any other caller that call asks the client's question ("Delete <name> permanently? This cannot be undone.") and deletes only on Yes, and only while the same character is still picked. The client draws that question in an ImGui window of its own (`UiHost::client_confirm`, `draw_client_confirm`), under any pack, which no Lua code sees or answers: it appears even when an interface Hailstone does not ship draws no ConfirmationDialogBox, and a script cannot press its Yes as it could the box's. The Advanced Inventory's bulk destroy asks the same way (docs/mechanics.md).
+- **A destroy's question in ConfirmationDialogBox** (an item's destroy, a guild's disband) is answered Yes only by the pack's own code, which passes on the player's click: `hs.ClickChild`, `hs.WindowButton` and `hs.ClickChildAt` on its `Yes_Button` from a script, a plugin window or another Lua state return false and log a warning (`destructive_confirmation_up`). Its No, and every other question (a rez, a trade's), stay open to scripts.
 - Worlds are sorted favourites first, then by name ignoring case (`ui::server_list_order`), a Hailstone difference (the original keeps the login server's order). `"favorite", i` toggles one, kept as hailstone.ini `login.favorite_worlds.<profile>`, names joined by `|`.
 - Creation's rules are shared with the ImGui screen (`ui::create_normalize`, `create_set_deity`, `create_stat_up` and the rest in `src/ui/dev_screens.h`). `hs.CharacterCreateDo("randomName")` asks OP_RandomNameGenerator. `hs.CharacterCreateHelp(kind, id)` gives dbstr_us.txt's description (types 8, 9, 14, 15 and 10) and name.
 - Reading a view in a frame replaces the client's screen (`UiApi::replaces("LoginScreen" | "serverselect" | "CharacterListWnd" | "CharacterCreateScreen")`); actions return next frame via `UiHost::login_action`, `server_select_action`, `char_select_action` and `char_create_action`.
@@ -879,7 +901,7 @@ Ctrl+Shift+P, `/perf`, or `ui.perf_window=1`. It shows frame times, the main loo
 
 **With frame generation** (docs/graphics.md "Frame generation"): the headline shows rendered and displayed rates (`app::frame_rates`); a section adds the share of frames with an in-between frame, totals and skip reasons (a cut or resize; no free swapchain image), present mode and image count, the last wait for the second image, and frame generation's GPU time where the device can time it. The graph and phases stay per real frame.
 
-**Log hitches** (`ui.perf_log_hitches=1`) logs every frame over 2.5 times the typical frame time (20 ms at least) as `perf: hitch ...`, phases longest first, then sections of 1 ms or more (`; in it: ...`).
+**Log hitches** (`ui.perf_log_hitches=1`) logs every frame over 2.5 times the typical frame time (20 ms at least) as `perf: hitch ...`, phases longest first, then sections of 1 ms or more (`; in it: ...`). The typical frame time is a running average of the frames that were not hitches; after 30 hitches in a row it starts again from the latest frame, so a lasting drop in frame rate (a heavier zone, a slower power state) is not logged as a hitch every frame.
 
 **Frame sections** are laps marked by the main loop and `LuaUi::frame` (`core/frame_sections.h`): the Update, UI and Record phases' main calls (Update: connection, automation, world objects, player, spawn smoothing), the Record phase's cover and water maps, each Lua window and the map views' parts, the script scan and Lua GC. The "Frame sections" table shows each one's 60-frame average and slowest frame, with a filter (`app::SectionAverages`).
 

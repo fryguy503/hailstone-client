@@ -488,14 +488,17 @@ public:
     const net::Item* bag_item(UiHost& host, int index) override {
         if (index < 0) return bag(host); // the container itself
         const net::ItemSlot* s = slot(host);
-        if (!s) return nullptr;
+        const net::Item* b = bag(host);
+        if (!s || !b || index >= b->bag_slots) return nullptr; // (past the bag: no slot of it, nor one aliased by int16)
         net::ItemSlot in = *s;
         in.sub = static_cast<std::int16_t>(index);
         return host.conn->inventory().at(in);
     }
     bool bag_click(UiHost& host, int index, std::string_view button, bool outside) override {
         const net::ItemSlot* s = slot(host);
-        if (!s) return false;
+        const net::Item* b = bag(host);
+        // Only the bag's own slots: -1 (sub -1) would be the bag itself, and 65536 + k would alias slot k as an int16.
+        if (!s || !b || index < 0 || index >= b->bag_slots) return false;
         net::ItemSlot in = *s;
         in.sub = static_cast<std::int16_t>(index);
         if (button == "leftheld") return item_left_held(host, in);
@@ -722,12 +725,23 @@ public:
         return &data_;
     }
 
-    // Hailstone: "ItemList:<row>", the merchant's item on that row of the list as last read (hs.SlotItem,
-    // hs.CompareSlotItem: the item comparison of a row under the mouse).
+    // Hailstone: "ItemList:<row>" refers to a goods row as last read. "ParcelList:<slot>" uses the parcel's
+    // server slot so a change in the order of the visible rows cannot change the item being inspected.
     const net::Item* slot_item(UiHost& host, std::string_view id) override {
         const auto* m = session(host);
+        if (!m) return nullptr;
+        constexpr std::string_view parcel_prefix = "ParcelList:";
+        if (id.starts_with(parcel_prefix)) {
+            if (page_ != 2) return nullptr;
+            const auto key = id.substr(parcel_prefix.size());
+            std::uint32_t slot = 0;
+            auto [end, ec] = std::from_chars(key.data(), key.data() + key.size(), slot);
+            if (ec != std::errc() || end != key.data() + key.size()) return nullptr;
+            const auto it = m->parcels.find(slot);
+            return it == m->parcels.end() ? nullptr : &it->second.item;
+        }
         const int row = index_after(id, "ItemList:");
-        if (!m || row < 0 || row >= static_cast<int>(slots_.size())) return nullptr;
+        if (row < 0 || row >= static_cast<int>(slots_.size())) return nullptr;
         auto it = m->items.find(slots_[static_cast<std::size_t>(row)]);
         return it == m->items.end() ? nullptr : &it->second;
     }
@@ -1113,10 +1127,14 @@ void open_container(UiHost& host, const net::ItemSlot& s) {
 // closes its container, a book is read, a common item is used (OP_ItemVerifyRequest: clickies, food and drink,
 // scrolls and tomes on servers that scribe them). The item display is the held button's (inspect_held).
 void item_right_click(UiHost& host, const net::ItemSlot& slot) {
-    if (!host.conn) return;
     const ImGuiIO& io = ImGui::GetIO();
+    item_right_click(host, slot, {io.KeyShift, io.KeyCtrl, io.KeyAlt});
+}
+
+void item_right_click(UiHost& host, const net::ItemSlot& slot, net::SlotClickKeys keys) {
+    if (!host.conn) return;
     using R = net::GameConnection::SlotRightClick;
-    switch (host.conn->right_click_item(slot, {io.KeyShift, io.KeyCtrl, io.KeyAlt})) {
+    switch (host.conn->right_click_item(slot, keys)) {
     case R::ToggleContainer: toggle_container(host, slot); break;
     default: break; // the item preview went out (GameConnection::preview_item); the trader's selection is not built
     }

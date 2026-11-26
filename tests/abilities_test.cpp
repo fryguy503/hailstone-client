@@ -10,6 +10,7 @@
 
 #include "core/config.h"
 #include "core/ini_file.h"
+#include "game/eq_strings.h"
 #include "game/hotbuttons.h"
 #include "game/keymap.h"
 #include "game/mechanics/abilities.h"
@@ -325,7 +326,7 @@ TEST_CASE("CanIHit: range and facing with the original's messages") {
 }
 
 TEST_CASE("UseSkill: large player races use shieldless Bash through their innate Slam") {
-    for (std::uint32_t race : {2u, 9u, 10u, 90u, 92u, 93u}) {
+    for (std::uint32_t race : {2u, 9u, 10u}) {
         Fixture f;
         f.sheet.race = race;
         f.sheet.skills[skill::kBash] = 5;
@@ -371,6 +372,7 @@ TEST_CASE("UseSkill: Barbarian illusion grants shieldless Bash and Slam to a Dar
     f.sheet.race = 6; // Profile is Dark Elf; the local spawn is now Barbarian (2).
     f.sheet.class_id = 8;
     SkillContext c = f.context(1000000);
+    c.form_race = 2;
     c.form_slam = slam_innate(2);
     c.target = Fixture::rat(10.0f);
     SkillState st;
@@ -396,8 +398,9 @@ TEST_CASE("UseSkill: Barbarian illusion grants shieldless Bash and Slam to a Dar
 TEST_CASE("UseSkill: each large-race illusion exposes Slam regardless of base race") {
     Fixture f;
     f.sheet.race = 6; // Dark Elf without innate Slam.
-    for (std::uint32_t race : {2u, 9u, 10u, 90u, 92u, 93u}) {
+    for (std::uint32_t race : {2u, 9u, 10u}) {
         SkillContext c = f.context(1000000);
+        c.form_race = race;
         c.form_slam = slam_innate(race);
         c.target = Fixture::rat(10.0f);
         SkillState state;
@@ -410,11 +413,63 @@ TEST_CASE("UseSkill: each large-race illusion exposes Slam regardless of base ra
     }
 }
 
+TEST_CASE("CanUseCombatSkill: Bash without the skill is for races 2, 9 and 10 by GetRace; Slam needs no shield") {
+    Fixture f;
+    f.sheet.race = 6;
+    f.sheet.skills[skill::kBash] = 5;
+    for (std::uint32_t race : {90u, 92u, 93u}) {
+        SkillContext c = f.context(1000000);
+        c.form_race = race;
+        c.form_slam = slam_innate(race);
+        CHECK(c.form_slam != 0xff); // InitInnates still gives the variant its Slam slot
+        CHECK_FALSE(can_use_combat_skill(c, skill::kBash)); // the original's Bash wants a shield here
+        CHECK(can_use_combat_skill(c, skill::kBash, true));   // Hailstone's Slam does not (a deliberate change)
+        const auto skills = usable_skills(f.ch, true, race);
+        CHECK(std::find(skills.begin(), skills.end(), skill::kSlam) != skills.end());
+        c.target = Fixture::rat(10.0f);
+        for (std::uint32_t id : {skill::kBash, skill::kSlam}) { // Bash goes the Slam way under these forms
+            SkillState state;
+            const SkillResult r = use_skill(c, state, id);
+            CHECK(r.messages.empty());
+            REQUIRE(r.sends.size() == 1); // shieldless, with the Bash skill
+            CHECK(r.sends[0].kind == SkillSend::Kind::CombatAbility);
+            CHECK(r.sends[0].skill == skill::kBash);
+        }
+    }
+    // Without the Bash skill nothing is sent: EQEmu bypasses the skill only for races 2, 9 and 10.
+    Fixture bard;
+    bard.sheet.race = 6;
+    bard.sheet.class_id = 8;
+    for (std::uint32_t race : {90u, 92u, 93u}) {
+        SkillContext c = bard.context(1000000);
+        c.form_race = race;
+        c.form_slam = slam_innate(race);
+        CHECK_FALSE(can_use_combat_skill(c, skill::kBash, true));
+        c.target = Fixture::rat(10.0f);
+        for (std::uint32_t id : {skill::kBash, skill::kSlam}) {
+            SkillState state;
+            CHECK(use_skill(c, state, id).sends.empty());
+        }
+    }
+    // The race is the spawn's current one: a Troll illusion on a Dark Elf passes, a Dark Elf one on a Troll does not.
+    SkillContext c = f.context(1000000);
+    c.form_race = 9;
+    CHECK(can_use_combat_skill(c, skill::kBash));
+    Fixture troll;
+    troll.sheet.race = 9;
+    troll.sheet.skills[skill::kBash] = 5;
+    SkillContext t = troll.context(1000000);
+    CHECK(can_use_combat_skill(t, skill::kBash)); // no form race: the profile's
+    t.form_race = 6;
+    CHECK_FALSE(can_use_combat_skill(t, skill::kBash));
+}
+
 TEST_CASE("UseSkill: an illusion into a small race removes innate Slam until it ends") {
     Fixture f;
     f.sheet.race = 2; // Native Barbarian disguised as Dark Elf (6).
     f.sheet.skills[skill::kBash] = 5;
     SkillContext c = f.context(1000000);
+    c.form_race = 6;
     c.form_slam = slam_innate(6);
     c.target = Fixture::rat(10.0f);
     SkillState st;
@@ -459,6 +514,27 @@ TEST_CASE("UseSkill: bash needs a shield, taunt needs an NPC in melee range") {
     REQUIRE(far.messages.size() == 1);
     CHECK(far.messages[0].eqstr == 386);
     CHECK(st2.timers.is_available(skill::kTaunt)); // a failed check gives the skill back at once
+}
+
+TEST_CASE("UseSkill: a target's name is literal text, whatever it starts with") {
+    Fixture f;
+    f.sheet.skills[skill::kTaunt] = 5;
+    EqStrings strings;
+    strings.set(5, "five");
+    strings.set(12397, "You taunt %1 to ignore others and attack you!");
+    for (const char* name : {"@Lurker", "@5 Guard", "@5", "@"}) {
+        SkillState st;
+        SkillContext c = f.context(1000);
+        c.target = Fixture::rat(5.0f);
+        c.target->name = name;
+        SkillResult taunt = use_skill(c, st, skill::kTaunt);
+        REQUIRE(taunt.messages.size() == 1);
+        CHECK(taunt.messages[0].args == std::vector<std::string>{name});
+        CHECK(std::none_of(taunt.messages[0].arg_eqstr.begin(), taunt.messages[0].arg_eqstr.end(),
+                           [](const auto& id) { return id.has_value(); }));
+        CHECK(format_skill_message(strings, taunt.messages[0]) ==
+              std::string("You taunt ") + name + " to ignore others and attack you!");
+    }
 }
 
 TEST_CASE("UseSkill: the hide-moved check on a corrupt position: __ftol2's INT_MIN, a 32-bit z difference") {
@@ -536,7 +612,12 @@ TEST_CASE("UseSkill: sense heading and the no-skill gate") {
     SkillResult r = use_skill(c, st, skill::kSenseHeading);
     REQUIRE(r.messages.size() == 1);
     CHECK(r.messages[0].eqstr == 12435);
-    CHECK(r.messages[0].args == std::vector<std::string>{"@12433"});
+    CHECK(r.messages[0].args.size() == 1);
+    CHECK(r.messages[0].arg_eqstr == std::vector<std::optional<std::uint32_t>>{12433u});
+    EqStrings strings;
+    strings.set(12433, "North");
+    strings.set(12435, "You think you are heading %1.");
+    CHECK(format_skill_message(strings, r.messages[0]) == "You think you are heading North.");
     REQUIRE(r.sends.size() == 1);
     CHECK(r.sends[0].kind == SkillSend::Kind::SenseHeading);
     CHECK(r.compass_reset); // 0x65b650 on the compass window
@@ -548,7 +629,7 @@ TEST_CASE("UseSkill: sense heading and the no-skill gate") {
         SkillState fresh; // (the reuse timer)
         SkillResult h = use_skill(c, fresh, skill::kSenseHeading);
         REQUIRE(h.messages.size() == 1);
-        CHECK(h.messages[0].args == std::vector<std::string>{"@" + std::to_string(id)});
+        CHECK(h.messages[0].arg_eqstr == std::vector<std::optional<std::uint32_t>>{static_cast<std::uint32_t>(id)});
     }
     c.compass_window = false;
     SkillState fresh;

@@ -317,7 +317,8 @@ local PAGES = {
         { "Target skips pets", "tab_skip_pets" }, { "Target through walls and doors", "tab_target_through_walls" },
         { "Target off-screen", "tab_target_offscreen" }, { "Gem replaces spell", "replace_gem_spell" }, { "Buff timers", "show_buff_timer" }, { "Song timers", "show_song_timer" },
         { "Compare items with what you wear", "item_compare" }, { "Upgrade / downgrade verdict", "item_compare_verdict" },
-        { "Context menus", "context_menus" }, { "Player right-click menu", "player_menu" }, { "More hot button states", "hotbutton_extras" },
+        { "Context menus", "context_menus" }, { "Player right-click menu", "player_menu" },
+        { "Right-click to consider", "right_click_consider" }, { "More hot button states", "hotbutton_extras" },
         { "Offer layouts to new characters", "offer_layout_copy" } }) do
       local x = optionRow(o[1], o[2], "bool")
       if x then rows[#rows + 1] = x end

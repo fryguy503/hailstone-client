@@ -493,9 +493,12 @@ private:
     void create_device();
     void create_pipeline_cache();
     void save_pipeline_cache_file();
-    void create_swapchain(VkSwapchainKHR old = VK_NULL_HANDLE);
+    // `caps`: the surface's capabilities when the caller has just asked for them (recreate_swapchain), else asked here.
+    void create_swapchain(VkSwapchainKHR old = VK_NULL_HANDLE, const VkSurfaceCapabilitiesKHR* caps = nullptr);
     void destroy_swapchain();
-    void recreate_swapchain();
+    // False, with nothing let go and resize_pending_ left set, while the surface has no size to make one at
+    // (render/swapchain_size.h surface_extent_empty): the frame is skipped.
+    bool recreate_swapchain();
     void create_frames();
     void localize_shared_textures();
     void create_scene_targets();
@@ -659,8 +662,9 @@ private:
     void destroy_frame_gen();
     void bind_frame_gen();
     // Ends a frame-generation frame: the real frame composited into its image and, when one can be made, the
-    // in-between frame into a second image acquired here. Returns that image's index, or nullopt.
-    std::optional<std::uint32_t> finish_frame_gen(const FrameInfo& frame);
+    // in-between frame into a second image acquired here. Returns that image's index, or nullopt. `readback`: that
+    // image may be copied for a screenshot next (end_frame), so its move to PRESENT_SRC is chained to the copy stage.
+    std::optional<std::uint32_t> finish_frame_gen(const FrameInfo& frame, bool readback);
     void composite_into(VkCommandBuffer cmd, std::uint32_t image_index, VkDescriptorSet set);
     std::chrono::steady_clock::time_point fsr3_last_{}; // the last FSR 3.1 frame's time (its frame time)
     bool fsr3_fallback_logged_ = false;

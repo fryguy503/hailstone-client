@@ -126,6 +126,22 @@ TEST_CASE("UCS login replies require complete counted mailbox lists and expose r
     CHECK_FALSE(refusal->accepted);
 }
 
+TEST_CASE("UCS mail packets keep their stock fields and refuse a flood of empty ones") {
+    // EQEmu's header layout: mailbox, two numbers, id, time, status, "SOE.EQ.<short>.<from>", subject.
+    auto header = decode_chat_server_packet(
+        strings(0x0e, {"0", "0", "3", "17", "1700000000", "1", "SOE.EQ.test.Friend", "hello"}));
+    REQUIRE(header);
+    CHECK(header->kind == ChatServerEvent::Kind::MailHeader);
+    REQUIRE(header->fields.size() == 8);
+    CHECK(header->fields[7] == "hello");
+    for (int op : {0x0d, 0x0e, 0x0f, 0x10, 0x12, 0x14}) {
+        CAPTURE(op);
+        CHECK(decode_chat_server_packet(AppPacket(static_cast<std::uint16_t>(op), std::vector<std::byte>(64))));
+        CHECK_FALSE(decode_chat_server_packet(AppPacket(static_cast<std::uint16_t>(op), std::vector<std::byte>(65))));
+        CHECK_FALSE(decode_chat_server_packet(AppPacket(static_cast<std::uint16_t>(op), std::vector<std::byte>(1u << 20))));
+    }
+}
+
 TEST_CASE("UCS session requests retry at five seconds and an unanswered connection ends at thirty") {
     ManualClock clock;
     clock.hold();
@@ -488,6 +504,45 @@ TEST_CASE("UCS pre-login byte limit rejects one large event independently of its
     CHECK(chat.error().find("before the login") != std::string::npos);
     REQUIRE(chat.poll());
     CHECK_FALSE(chat.poll());
+}
+
+TEST_CASE("UCS events after the login wait in the session while the event queue is full, and none is lost") {
+    for (bool by_bytes : {false, true}) {
+        CAPTURE(by_bytes);
+        ManualClock clock;
+        clock.hold();
+        SoeEndpoint peer(SoeEndpoint::default_params(), 1);
+        auto opt = options(clock);
+        if (by_bytes) opt.max_event_bytes = 1; // one event at a time: the limit is checked before each packet
+        else opt.max_events = 3;
+        const std::size_t per_update = by_bytes ? 1 : 3;
+        ChatServer chat(std::move(opt));
+        chat.connect(identity(peer.port()));
+        auto step = [&] { chat.update(); peer.poll(); };
+        REQUIRE(pump(step, [&] { return !peer.inbox.empty(); }));
+        peer.send_reliable(mailbox_reply());
+        REQUIRE(pump(step, [&] { return chat.connected(); }));
+        while (chat.poll()) {}
+        for (int i = 0; i < 7; ++i)
+            peer.send_reliable(strings(0x03, {"$SOE.EQ.test.Hero", "SOE.EQ.test.Friend", std::to_string(i), "SPAM:0:"}));
+        REQUIRE(pump(step, [&] { return peer.unacked() == 0; }));
+        for (int i = 0; i < 5; ++i) step(); // nothing polled: the queue stays at its limit
+        std::vector<std::string> texts;
+        while (true) {
+            std::size_t got = 0;
+            while (auto e = chat.poll()) {
+                REQUIRE(e->kind == ChatServerEvent::Kind::Message);
+                texts.push_back(e->text);
+                ++got;
+            }
+            CHECK(got <= per_update);
+            if (texts.size() == got) CHECK(got == per_update); // the first round fills the queue to its limit
+            if (texts.size() >= 7 || got == 0) break;
+            step();
+        }
+        CHECK(texts == std::vector<std::string>{"0", "1", "2", "3", "4", "5", "6"});
+        CHECK(chat.connected());
+    }
 }
 
 TEST_CASE("UCS late replies from an abandoned endpoint cannot authenticate its replacement") {

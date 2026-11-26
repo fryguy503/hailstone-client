@@ -194,7 +194,7 @@ Checked: `UniversalChatProxy_Connect` @0x7f0040, `Params::Params(0)` @0x426e70, 
 
 #### UCS login and reconnects
 
-The transport connection does not authenticate UCS. Commands wait for a successful MailLogin reply; friend/ignore events stock EQEmu sends before it are held until it arrives. Pending commands and events are bounded (128 commands / 256 KiB, 256 events / 1 MiB).
+The transport connection does not authenticate UCS. Commands wait for a successful MailLogin reply; friend/ignore events stock EQEmu sends before it are held until it arrives. Pending commands and events are bounded (128 commands / 256 KiB, 256 events / 1 MiB). After the login, events waiting for the owner are bounded too (4096 / 4 MiB, Hailstone's): at the limit the chat owner stops taking packets from the session until the events are polled, so nothing is dropped and the session's own receive limit still ends a flood.
 
 DNS and the transport handshake share a 30 s deadline; the MailLogin reply has its own 30 s deadline (Hailstone's).
 

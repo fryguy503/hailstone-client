@@ -118,6 +118,52 @@ TEST_CASE("radial flora: placement by the mask's cover, density, iterations and 
     CHECK(out.empty());
 }
 
+TEST_CASE("radial flora: a layer mask or DAT mask smaller than the tile places nothing, not read past its end") {
+    constexpr std::uint32_t S = 8;
+    std::vector<float> heights(S * S, 10.0f);
+    std::vector<std::int32_t> slopes(S * S, 5);
+    std::vector<std::string> names = {"grass"};
+    std::vector<std::vector<std::uint8_t>> masks = {std::vector<std::uint8_t>(S * S, 255)};
+    FloraTile tile;
+    tile.tile_size = 128.0f;
+    tile.texels = S;
+    tile.heights = heights;
+    tile.slopes = slopes;
+    tile.layer_names = names;
+    tile.layer_masks = masks;
+    eqg::FloraDefinition def;
+    def.name = "grass";
+    std::vector<eqg::FloraDefinition> defs = {def};
+    eqg::EcoFloraLayer layer;
+    layer.flora = "grass";
+    layer.texture_layer = "grass";
+    layer.density = 10.0f;
+    layer.iterations = 100;
+    MsvcRand rand{7};
+    std::vector<FloraInstance> out;
+    place_flora(tile, std::span(&layer, 1), defs, rand, out);
+    CHECK_FALSE(out.empty()); // whole masks: it grows
+    const std::vector<std::uint8_t> full_dat(S * S, 255), short_dat(S * S - 1, 255);
+    tile.dat_mask = full_dat;
+    out.clear();
+    place_flora(tile, std::span(&layer, 1), defs, rand, out);
+    CHECK_FALSE(out.empty());
+    tile.dat_mask = short_dat;
+    out.clear();
+    place_flora(tile, std::span(&layer, 1), defs, rand, out);
+    CHECK(out.empty());
+    tile.dat_mask = {};
+    masks[0].resize(S * S - 1);
+    tile.layer_masks = masks;
+    out.clear();
+    place_flora(tile, std::span(&layer, 1), defs, rand, out);
+    CHECK(out.empty());
+    masks[0].clear();
+    tile.layer_masks = masks;
+    place_flora(tile, std::span(&layer, 1), defs, rand, out);
+    CHECK(out.empty());
+}
+
 TEST_CASE("radial flora: damaged .eco and .rfd numbers are bounded, not undefined") {
     auto layers = eqg::parse_eco_flora(text(
         "*FLORAPART\n*LAYER a\n*DENSITY 1e30\n*ITERATIONS 3e9\n*MINSLOPE -1e20\n*MAXSLOPE 1e20\n*SLOPETOL 1e20\n"

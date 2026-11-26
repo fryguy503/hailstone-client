@@ -190,6 +190,7 @@ private:
 void add_layout_windows(std::vector<std::unique_ptr<StockWindow>>& out) {
     out.push_back(std::make_unique<LoadskinWindow>());
     out.push_back(std::make_unique<LayoutCopyWindow>());
+    out.push_back(std::make_unique<StockWindow>("LayoutProfilesWindow", false));
 }
 
 } // namespace hailstone::app

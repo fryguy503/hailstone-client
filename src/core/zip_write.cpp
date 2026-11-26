@@ -67,9 +67,7 @@ bool ZipWriter::add_within(std::string_view name, std::span<const std::byte> dat
 
 std::size_t ZipWriter::finished_size() const {
     if (finished_) return out_.size();
-    std::size_t n = out_.size() + kEndRecord;
-    for (const Entry& e : entries_) n += kCentralHeader + e.name.size();
-    return n;
+    return out_.size() + directory_size_ + kEndRecord;
 }
 
 bool ZipWriter::append(std::string_view name, std::span<const std::byte> data, const std::tm& local,
@@ -107,6 +105,7 @@ bool ZipWriter::append(std::string_view name, std::span<const std::byte> data, c
     put_name(out_, name);
     out_.insert(out_.end(), body.begin(), body.end());
     entries_.push_back(std::move(e));
+    directory_size_ += kCentralHeader + name.size();
     return true;
 }
 

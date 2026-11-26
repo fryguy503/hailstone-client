@@ -7,6 +7,7 @@
 #include <cstring>
 #include <ctime>
 
+#include "game/hot_button_menu.h"
 #include "mock_server/harness.h"
 #include "net/ability_packets.h"
 #include "net/item_packets.h"
@@ -228,6 +229,64 @@ TEST_CASE("item use: a poison applies through OP_ApplyPoison (CEverQuest::ApplyP
     CHECK(conn.transact_state().currently_interacting == 0);
     conn.receive_zone_packet_for_test(encode(ApplyPoison{25, -1, -1, 0, 0}));
     CHECK(has_line(drain_chat(conn), "[12906]"));
+}
+
+TEST_CASE("item use: OP_DeleteCharge keeps the item and its hotbutton until the server removes it") {
+    Item bag = make_item(1100, "Backpack", 24);
+    bag.item_class = 1;
+    bag.bag_slots = 4;
+    Item charged = make_item(1101, "Charged Rod", 24);
+    charged.charges = 3;
+    bag.contents.push_back({2, charged});
+    Item rechargeable = make_item(1102, "Rechargeable Rod", 27);
+    rechargeable.charges = 1;
+    Item unlimited = make_item(1103, "Unlimited Rod", 28);
+    Rig rig(with_items({bag, rechargeable, unlimited}));
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+
+    const auto spend_charge = [&](const ItemSlot& slot) {
+        // EQEmu uses the move layout with an invalid destination and a count of -1 for each charge spent.
+        auto packet = encode(MoveItem{slot, ItemSlot::invalid(), 0xffffffffu});
+        packet.opcode = to_wire(Op::DeleteCharge);
+        conn.receive_zone_packet_for_test(packet);
+    };
+    const auto bag_slot = ItemSlot::possessions(24, 2);
+    const Item* item = conn.inventory().at(bag_slot);
+    REQUIRE(item);
+    const auto button = game::inventory_hot_button(bag_slot, item, false);
+    REQUIRE(button);
+
+    for (std::uint32_t charges : {2u, 1u}) {
+        spend_charge(bag_slot);
+        const Item* remaining = conn.inventory().at(bag_slot);
+        REQUIRE(remaining);
+        CHECK(remaining->instance_id == charged.instance_id);
+        CHECK(remaining->charges == charges);
+        const auto hotbar_slot = game::hot_button_item_slot(conn.inventory(), *button);
+        REQUIRE(hotbar_slot);
+        CHECK(hotbar_slot->same(bag_slot));
+        const auto refresh = conn.take_item_refresh();
+        REQUIRE(refresh);
+        CHECK(refresh->instance_id == charged.instance_id);
+        CHECK(refresh->charges == charges);
+    }
+
+    // EQEmu sends OP_MoveItem with the same payload when an expendable item is used up.
+    conn.receive_zone_packet_for_test(encode(MoveItem{bag_slot, ItemSlot::invalid(), 0xffffffffu}));
+    CHECK(conn.inventory().at(bag_slot) == nullptr);
+    CHECK_FALSE(game::hot_button_item_slot(conn.inventory(), *button));
+
+    // The server can keep a rechargeable item at zero. Neither zero nor unlimited charges should underflow.
+    spend_charge(rechargeable.slot);
+    spend_charge(rechargeable.slot);
+    const Item* empty = conn.inventory().at(rechargeable.slot);
+    REQUIRE(empty);
+    CHECK(empty->charges == 0);
+    spend_charge(unlimited.slot);
+    const Item* infinite = conn.inventory().at(unlimited.slot);
+    REQUIRE(infinite);
+    CHECK(infinite->charges == 0xffffffffu);
 }
 
 TEST_CASE("item recast timers: the item's own and the type's (GetItemRecastTimer), OP_ItemRecastDelay") {

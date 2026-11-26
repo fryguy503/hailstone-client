@@ -196,6 +196,37 @@ TEST_CASE("build_mesh resolves runs positionally across empty slots and groups t
     }
 }
 
+TEST_CASE("build_mesh over a palette of millions of slots builds only the slots its runs name") {
+    // The runs name slots by a u16; the palette's own size is bounded only by the fragment. A huge palette must
+    // give the same mesh as the three-slot one, without per-slot work across the whole palette.
+    WldBuilder b;
+    auto opaque = b.add(kMaterialDef, b.str("WATER_MDF"), material(kOpaqueRenderMethod, 0));
+    auto invisible = b.add(kMaterialDef, b.str("BOUND_MDF"), material(0, 0));
+    constexpr std::uint32_t kSlots = 4'000'000;
+    ByteWriter palette;
+    palette.le(std::uint32_t{0});
+    palette.le(kSlots);
+    palette.le(opaque);
+    palette.le(std::int32_t{0});
+    palette.le(invisible);
+    for (std::uint32_t i = 3; i < kSlots; ++i) palette.le(std::int32_t{0});
+    auto list = b.add(kMaterialPalette, b.str("ZONE_MP"), palette);
+    b.add(kMeshDef, b.str("R1_DMSPRITEDEF"), mesh(list, true));
+    auto w = wld::WldFile::parse(b.build(wld::kVersionNew));
+    REQUIRE(w.errors().empty());
+    const auto& frag = w.fragments().back();
+    REQUIRE(w.get<wld::MaterialList>(frag.as<wld::MeshDef>().material_list)->materials.size() == kSlots);
+    auto m = wld::build_mesh(w, frag.as<wld::MeshDef>(), frag.name);
+    REQUIRE(m.materials.size() == 2);
+    CHECK(m.materials[0].name == "WATER_MDF");
+    CHECK(m.materials[1].name == "BOUND_MDF");
+    REQUIRE(m.parts.size() == 2);
+    CHECK(m.parts[0].material == 0);
+    CHECK(m.parts[1].material == 1);
+    CHECK(m.parts[1].index_count == 6);
+    CHECK(m.indices == std::vector<std::uint32_t>{1, 2, 3, 0, 1, 2, 0, 2, 3});
+}
+
 TEST_CASE("WldFile reads a 0x2C mesh as a MeshDef, its centre added, its polygons after the four unused words") {
     auto w = wld::WldFile::parse(mesh_2c_wld());
     REQUIRE(w.errors().empty());

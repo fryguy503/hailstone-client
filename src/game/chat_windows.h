@@ -16,6 +16,7 @@
 
 namespace hailstone::game {
 
+inline constexpr int kChatWindowSlots = 32;
 inline constexpr int kChatChannelCountRoF2 = 57; // ChannelMap's size (SetChannelMap's bound 0x39)
 inline constexpr int kChatChannelCount = 108;    // Hailstone: with the extended channels 57..107
 inline constexpr int kChatUserColorCountRoF2 = 99; // CDisplay's user colours (GetUserDefinedColor's bound 0x62)

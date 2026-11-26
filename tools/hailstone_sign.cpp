@@ -5,7 +5,8 @@
 //   hailstone_sign keygen <secret-key-file>            makes a release key; prints its public half (update-key.pub)
 //   hailstone_sign public <secret-key-file>            prints the public half of a key
 //   hailstone_sign sign <secret-key-file> <manifest>   signs the manifest in place (an old signature is replaced; an
-//                                                      add-on's gets the key's line too)
+//                                                      add-on's gets the key's line too; lines after an old
+//                                                      signature stop it)
 //   hailstone_sign verify <public-key> <manifest>      checks it and lists what it holds; the key is hex or a file
 //   hailstone_sign try <public-key> <feed> <folder> <version> [<platform>]
 //                                                      a release's dry run: the client's updater, as version, takes
@@ -108,6 +109,13 @@ int sign(const fs::path& key_path, const fs::path& manifest) {
     auto text = read_text_file(manifest);
     if (!text) {
         std::fprintf(stderr, "cannot read %s\n", manifest.string().c_str());
+        return 1;
+    }
+    // The old signature line is replaced; anything after it (a line added below it by hand) would be dropped
+    // unseen, so it stops the signing instead.
+    if (update_manifest_after_signature(*text).find_first_not_of(" \t\r\n") != std::string_view::npos) {
+        std::fprintf(stderr, "%s: there are lines after its signature line; move them above it (or remove the old "
+                             "signature line) and sign again\n", manifest.string().c_str());
         return 1;
     }
     std::string body(update_manifest_signed_part(*text));

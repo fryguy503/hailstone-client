@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <format>
+#include <functional>
 #include <fstream>
 #include <sstream>
 
@@ -17,6 +18,7 @@
 #include "game/augments.h"
 #include "game/bag_move.h"
 #include "game/distance.h"
+#include "game/exchange.h"
 #include "game/inventory.h"
 #include "game/item_display.h"
 #include "game/item_options.h"
@@ -69,6 +71,11 @@ std::vector<std::uint32_t> loot_descendants(const Item& root, bool& complete) {
 constexpr int kMergeAll = 0, kMergeNothing = 2;
 
 bool is_worn(const ItemSlot& s) { return s.type == kInvPossessions && s.sub < 0 && s.slot >= 0 && s.slot < kEquipmentSlots; }
+// ItemGlobalIndex_IsWeaponSlot @0x694020: possessions slot 11 (range), 13 (primary) or 14 (secondary), not in a bag.
+bool is_weapon_slot(const ItemSlot& s) {
+    return s.type == kInvPossessions && s.sub < 0 &&
+           (s.slot == kSlotRange || s.slot == kSlotPrimary || s.slot == kSlotSecondary);
+}
 
 } // namespace
 
@@ -289,11 +296,22 @@ void GameConnection::handle_item(Op op, const AppPacket& p) {
         if (auto r = decode_apply_poison(p)) handle_apply_poison(*r);
         break;
     case Op::MoveItem:
-    case Op::DeleteCharge:
         if (auto m = decode_move_item(p)) {
             log::debug("server {}: {}/{}/{} -> {}/{}/{} count {}", op_name(op), m->from.type, m->from.slot, m->from.sub,
                        m->to.type, m->to.slot, m->to.sub, m->count);
             apply_server_move(*m);
+        }
+        break;
+    case Op::DeleteCharge:
+        // EQEmu sends one notification per charge spent on a retained non-stackable item. Only a separate
+        // OP_MoveItem removes an expended item. A rechargeable item can stay in inventory at zero charges.
+        if (auto m = decode_move_item(p)) {
+            if (Item* item = inventory_.at(m->from);
+                item && !item->stackable() && item->charges > 0 && item->charges != 0xffffffffu) {
+                --item->charges;
+                item_refreshes_.push_back(*item);
+                if (item_refreshes_.size() > 16) item_refreshes_.pop_front();
+            }
         }
         break;
     case Op::DeleteItem:
@@ -427,7 +445,7 @@ void GameConnection::handle_item(Op op, const AppPacket& p) {
 void GameConnection::refresh_worn_slot(int slot) {
     // PcClient_RefreshWornSlotVisual: our own model shows what we wear, its
     // ornament included (game::worn_look). The server sends OP_WearChange to
-    // everyone else, not to us.
+    // everyone else, not to us. The held models are DoItemSlot's (do_item_slot).
     int ms = game::material_slot(slot);
     if (ms < 0) return;
     auto it = world_.spawns.find(world_.player_id);
@@ -438,6 +456,28 @@ void GameConnection::refresh_worn_slot(int slot) {
     game::apply_wear_change(it->second.appearance, static_cast<std::uint8_t>(ms), look.material, look.hero_forge,
                             look.tint);
     refresh_instrument_state();
+}
+
+void GameConnection::do_item_slot(int slot) {
+    // PlayerClient::DoItemSlot @0x593680, which CInvSlot calls after a move through a weapon slot
+    // (ItemGlobalIndex_IsWeaponSlot @0x694020: possessions 11, 13 or 14). Each SetHeldModel tells the zone.
+    // - 13 or 14: both hands show the primary and the secondary ("0" for an empty one); with both empty, hand 8
+    //   then shows the range item.
+    // - 11: with a range item, hand 7 is "0" and hand 8 the range item; without one, the primary and secondary.
+    // It returns first for 13 or 14 while the player's Animation (+0x10c0) is 9, which is not modelled
+    // (docs/unknowns.md).
+    const auto holds = [this](std::int16_t s) { return inventory_.at(ItemSlot::possessions(s)) != nullptr; };
+    if (slot == kSlotRange) {
+        const bool range = holds(kSlotRange);
+        set_held_model(game::kSlotPrimary, range ? -1 : kSlotPrimary);
+        set_held_model(game::kSlotSecondary, range ? kSlotRange : kSlotSecondary);
+        return;
+    }
+    if (slot != kSlotPrimary && slot != kSlotSecondary) return;
+    set_held_model(game::kSlotPrimary, kSlotPrimary);
+    set_held_model(game::kSlotSecondary, kSlotSecondary);
+    if (!holds(kSlotPrimary) && !holds(kSlotSecondary) && holds(kSlotRange))
+        set_held_model(game::kSlotSecondary, kSlotRange);
 }
 
 void GameConnection::set_held_model(int held, int item_slot) {
@@ -503,9 +543,13 @@ bool GameConnection::move_item(const ItemSlot& from, const ItemSlot& to, std::ui
     m.from = from;
     m.to = to;
     m.count = count;
-    send_zone(encode(m));
+    const bool sent = send_zone(encode(m));
     if (is_worn(from)) refresh_worn_slot(from.slot);
     if (is_worn(to)) refresh_worn_slot(to.slot);
+    // CInvSlot calls DoItemSlot with the slot clicked (the one that is not the cursor) when it is a weapon slot. A
+    // move the zone was not told of is shown to no one else.
+    if (sent && is_weapon_slot(to)) do_item_slot(to.slot);
+    else if (sent && is_weapon_slot(from)) do_item_slot(from.slot);
     // CTradeWnd_OnTradeItemMoved (game/trade_rules.h): a move into or out of a trade slot clears both ready flags.
     if (trade_) {
         game::TradeFlags f{trade_->their_ready, trade_->my_ready};
@@ -1466,6 +1510,14 @@ bool GameConnection::item_command(const std::string& command, const std::string&
         destroy_held();
         return true;
     }
+    if (command == "/exchange") {
+        exchange_command(args);
+        return true;
+    }
+    if (command == "/unequip") {
+        unequip_command(args);
+        return true;
+    }
     if (command == "/autoinventory" || command == "/autoinv") {
         // cmd_autoinventory @0x4fe8c0: an item still held afterwards (not a Krono, 88888) says "There are no open
         // slots for the held item in your inventory." (0xd); the windows' auto-inventory says nothing.
@@ -1480,6 +1532,159 @@ bool GameConnection::item_command(const std::string& command, const std::string&
         return true;
     }
     return false;
+}
+
+namespace {
+
+void exchange_help(const std::function<void(std::string)>& say) {
+    say("Exchange commands:");
+    say(" /exchange \"<item name|id>\" <slot> - puts the item in that worn slot, the item there into the item's place");
+    say(" /unequip <slot> - takes the item off that worn slot into the inventory");
+    say(" /exchange help - this list; /exchange help list (or /exchange list) - the slot names");
+}
+
+void exchange_slot_list(const std::function<void(std::string)>& say) {
+    say("Exchange slots:");
+    for (std::size_t i = 0; i < game::kExchangeSlotNames.size(); ++i)
+        say(std::format(" {} | {}", game::kExchangeSlotNames[i], i));
+}
+
+} // namespace
+
+void GameConnection::exchange_command(const std::string& args) {
+    // MQ2Exchange's ExchangeCmd: the item (by exact name, any case, or by id) is picked up, put in the worn slot, and
+    // what the slot held goes into the item's old place, as MQ2Exchange's three /itemnotify clicks do. Here they are
+    // the inventory's own clicks, so the original's checks (the slot, 2H against the offhand, class, a bag's fit)
+    // refuse what it would refuse. What cannot go back into the item's place goes into the inventory.
+    auto say = [this](std::string t) { chat(ChatEvent::Kind::System, std::move(t)); };
+    const std::vector<std::string> w = game::exchange_words(args);
+    if (!w.empty() && (iequals(w[0], "list") || (w.size() > 1 && iequals(w[1], "list")))) {
+        exchange_slot_list(say);
+        return;
+    }
+    if (!w.empty() && iequals(w[0], "help")) {
+        exchange_help(say);
+        return;
+    }
+    if (w.size() < 2) {
+        say("Usage: /exchange \"<item name|id>\" <slot> (/exchange help)");
+        return;
+    }
+    if (state_ != ConnectionState::InZone || pstatus_.dead) return;
+    if (inventory_.cursor()) {
+        say("Exchange: Your mouse pointer must be clear to move an item.");
+        return;
+    }
+    if (spells_.casting.spell != game::kNoSpell && !(profile_ && profile_->class_ == 8)) { // 8: Bard
+        say("Exchange: Cannot /exchange while casting");
+        return;
+    }
+    const auto dest = game::exchange_slot(w[1]);
+    if (!dest) {
+        say(std::format("Exchange: {} slot not found", w[1]));
+        return;
+    }
+    // The item: worn slots first, then the general slots and their bags, as MQ2Exchange's ItemFind looks. One only
+    // worn already is refused; a copy in the packs is taken over it.
+    const bool by_id = !w[0].empty() && w[0].find_first_not_of("0123456789") == std::string::npos;
+    auto matches = [&](const Item& it) {
+        if (by_id) return std::to_string(it.id) == w[0];
+        return iequals(it.name, w[0]);
+    };
+    std::optional<ItemSlot> found;
+    bool worn_only = false;
+    for (std::int16_t s = 0; s <= kSlotGeneral10 && !found; ++s) {
+        const Item* it = inventory_.at(ItemSlot::possessions(s));
+        if (!it) continue;
+        if (matches(*it)) {
+            if (s < kEquipmentSlots) worn_only = true;
+            else found = ItemSlot::possessions(s);
+        }
+        if (found || s < kEquipmentSlots || !it->is_bag()) continue;
+        for (const auto& b : it->contents)
+            if (matches(b.item)) {
+                found = ItemSlot::possessions(s, static_cast<std::int16_t>(b.index));
+                break;
+            }
+    }
+    if (!found) {
+        say(worn_only ? std::string("Exchange: Item is already in a worn slot.")
+                      : std::format("Exchange: Couldn't find {} in your inventory", w[0]));
+        return;
+    }
+    const Item* item = inventory_.at(*found);
+    if (item->attuneable && item->attuned == 0) {
+        // The original asks to attune first (eqstr 5912) and moves nothing until the answer: equipping it once by hand
+        // answers that; an exchange does not answer it for the player.
+        say(std::format("Exchange: {} must be attuned first: equip it by hand once.", item->name));
+        return;
+    }
+    const std::uint32_t id = item->id;
+    const std::string name = item->name;
+    const ItemSlot worn = ItemSlot::possessions(*dest);
+    click_slot(*found, true); // picks it up (Shift: a whole stack, without the quantity dialog)
+    const Item* held = inventory_.cursor();
+    if (!held || held->id != id) return; // not picked up (the click said why, if anything)
+    click_slot(worn); // puts it on, the slot's item onto the cursor
+    held = inventory_.cursor();
+    const Item* now_worn = inventory_.at(worn);
+    if (!now_worn || now_worn->id != id) {
+        // Refused, and still on the cursor (a slot it does not fit, a 2H weapon with the offhand full, a class it is
+        // not for: the click said why, or nothing): back where it was.
+        if (held && held->id == id) click_slot(*found);
+        say(std::format("Exchange: {} cannot go in the {} slot.", name, game::kExchangeSlotNames[*dest]));
+        return;
+    }
+    if (!held) return; // the slot was empty: done
+    click_slot(*found); // the slot's old item into the item's place
+    if (inventory_.cursor() && !stow_cursor_in_packs()) // it does not fit there (a bag into a bag, too big for it)
+        say(std::format("Exchange: No room in the inventory for {}; it is on your cursor.", inventory_.cursor()->name));
+}
+
+void GameConnection::unequip_command(const std::string& args) {
+    // MQ2Exchange's UnequipCmd: the worn slot's item into the first free general slot or bag slot.
+    auto say = [this](std::string t) { chat(ChatEvent::Kind::System, std::move(t)); };
+    const std::vector<std::string> w = game::exchange_words(args);
+    if (!w.empty() && (iequals(w[0], "list") || (w.size() > 1 && iequals(w[1], "list")))) {
+        exchange_slot_list(say);
+        return;
+    }
+    if (!w.empty() && iequals(w[0], "help")) {
+        exchange_help(say);
+        return;
+    }
+    if (w.empty()) {
+        say("Usage: /unequip <slot> (/exchange help list)");
+        return;
+    }
+    if (state_ != ConnectionState::InZone || pstatus_.dead) return;
+    if (inventory_.cursor()) {
+        say("Unequip: Your mouse pointer must be clear to move an item.");
+        return;
+    }
+    if (spells_.casting.spell != game::kNoSpell && !(profile_ && profile_->class_ == 8)) { // 8: Bard
+        say("Unequip: Cannot /unequip while casting");
+        return;
+    }
+    const auto slot = game::exchange_slot(w[0]);
+    if (!slot) {
+        say(std::format("Unequip: {} slot not found", w[0]));
+        return;
+    }
+    const ItemSlot worn = ItemSlot::possessions(*slot);
+    const Item* there = inventory_.at(worn);
+    if (!there) {
+        say(std::format("Unequip: There is nothing in the {} slot to unequip", game::kExchangeSlotNames[*slot]));
+        return;
+    }
+    const std::uint32_t id = there->id;
+    click_slot(worn, true); // picks it up (Shift: a whole stack of ammo, without the quantity dialog)
+    const Item* held = inventory_.cursor();
+    if (!held || held->id != id) return;
+    if (!stow_cursor_in_packs()) {
+        click_slot(worn); // back on
+        say("Unequip: No room in any bags to unequip.");
+    }
 }
 
 bool GameConnection::consume(const ItemSlot& slot, bool automatic) {

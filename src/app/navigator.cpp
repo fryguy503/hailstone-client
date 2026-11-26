@@ -117,7 +117,7 @@ void Navigator::start_zone(bool use_cache) {
 }
 
 void Navigator::zone_unloaded() {
-    if (goal_.kind != GoalKind::None || stick_) stop("");
+    if (goal_.kind != GoalKind::None || stick_ || afollow_) stop("");
     end_follow();
     zone_.reset();
     geo_.reset();
@@ -179,7 +179,9 @@ bool Navigator::plan(const glm::vec3& from) {
     goal_.point = *to;
     std::vector<glm::vec3> points;
     if (goal_.straight) {
-        points = {from, *to};
+        points.push_back(from);
+        points.insert(points.end(), goal_.via.begin(), goal_.via.end());
+        points.push_back(*to);
     } else if (zone_ && zone_->mesh().tile_count() > 0) {
         nav::PathResult r = zone_->mesh().find_path(from, *to, options_);
         // While tiles are still coming, a partial path may only mean the rest is not built yet: wait for them.
@@ -194,9 +196,9 @@ bool Navigator::plan(const glm::vec3& from) {
     }
     if (revision != goal_revision_) return false;
     if (follower_.state() == nav::FollowState::Moving || follower_.state() == nav::FollowState::NeedsPath)
-        follower_.replace(std::move(points));
+        follower_.replace(std::move(points), !goal_.flat);
     else
-        follower_.start(std::move(points), goal_.distance);
+        follower_.start(std::move(points), goal_.distance, !goal_.flat);
     retire_server_path(); // a local mesh result supersedes its still-pending server fallback
     return true;
 }
@@ -266,19 +268,38 @@ std::string Navigator::begin(Goal g) {
     return {};
 }
 
-std::string Navigator::go_to_point(const glm::vec3& world, float distance, std::string label, bool straight) {
+std::string Navigator::go_to_point(const glm::vec3& world, float distance, std::string label, bool straight,
+                                   bool flat) {
     stick_.reset();
+    afollow_.reset();
     Goal g;
     g.kind = GoalKind::Point;
     g.point = world;
     g.distance = distance > 0.0f ? distance : 2.0f;
     g.straight = straight;
+    g.flat = flat;
+    g.moveto = straight;
+    if (straight) moveto_arrived_ = false; // a new /moveto: not arrived yet (MQ2MoveUtils clears StoppedMoveto)
     g.label = std::move(label);
     return begin(std::move(g));
 }
 
+std::string Navigator::moveto_spawn(std::uint32_t id, float distance) {
+    const game::Spawn* s = env_.spawn ? env_.spawn(id) : nullptr;
+    if (!s) return "no such spawn";
+    const std::uint64_t incarnation = s->incarnation;
+    std::string err = go_to_point(s->display_valid ? s->display_position : s->position, distance, s->name, true, true);
+    if (!err.empty()) return err;
+    goal_.spawn = id;
+    goal_.incarnation = incarnation;
+    goal_.track_spawn = true;
+    goal_.track_at = now_ + kMoveToTrackSeconds;
+    return {};
+}
+
 std::string Navigator::walk_to_click(const glm::vec3& world, float distance) {
     stick_.reset();
+    afollow_.reset();
     Goal g;
     g.kind = GoalKind::Point;
     g.point = world;
@@ -304,6 +325,7 @@ std::string Navigator::go_to_spawn_guarded(std::uint32_t id, float distance, std
     catch (...) { return "this destination is no longer available to Find"; }
     if (revision != goal_revision_) return "navigation changed while checking the destination";
     stick_.reset();
+    afollow_.reset();
     const game::Spawn* s = env_.spawn ? env_.spawn(id) : nullptr;
     if (!s) return "no such spawn";
     Goal g;
@@ -318,6 +340,7 @@ std::string Navigator::go_to_spawn_guarded(std::uint32_t id, float distance, std
 
 std::string Navigator::go_to_door(std::uint8_t id, bool click) {
     stick_.reset();
+    afollow_.reset();
     const game::Door* d = env_.door ? env_.door(id) : nullptr;
     if (!d) return "no such door";
     Goal g;
@@ -352,10 +375,13 @@ void Navigator::finish(const std::string& message) {
 
 void Navigator::stop(std::string_view why) {
     stick_.reset();
+    afollow_.reset();
     finish(std::string(why));
 }
 
-void Navigator::set_paused(bool paused) { paused_ = paused && (goal_.kind != GoalKind::None || stick_); }
+void Navigator::set_paused(bool paused) {
+    paused_ = paused && (goal_.kind != GoalKind::None || stick_ || afollow_);
+}
 
 std::string Navigator::stick(std::uint32_t id, const nav::StickOptions& options) {
     const game::Spawn* s = env_.spawn ? env_.spawn(id) : nullptr;
@@ -367,6 +393,7 @@ std::string Navigator::stick(std::uint32_t id, const nav::StickOptions& options)
     follower_.stop();
     goal_ = {};
     paused_ = false;
+    afollow_.reset();
     stick_ = std::move(chosen);
     const auto name = stick_->label;
     if (env_.started) env_.started();
@@ -380,11 +407,230 @@ void Navigator::unstick(std::string_view why) {
     retire_server_path();
     ++goal_revision_;
     stick_.reset();
+    afollow_.reset();
     follower_.stop();
     goal_ = {};
     paused_ = false;
     if (!why.empty() && env_.chat) env_.chat(std::string(why));
     log::info("nav: stick off{}{}", why.empty() ? "" : ": ", why);
+}
+
+std::string Navigator::afollow(std::uint32_t id, const nav::AFollowOptions& options) {
+    const game::Spawn* s = env_.spawn ? env_.spawn(id) : nullptr;
+    if (!s || s->is_corpse) return "no such spawn";
+    AFollow chosen;
+    chosen.spawn = id;
+    chosen.incarnation = s->incarnation;
+    chosen.context = env_.interaction_context ? env_.interaction_context() : 0;
+    chosen.options = options;
+    chosen.options.distance = std::max(options.distance, 1.0f);
+    chosen.label = s->name;
+    const glm::vec3 at = s->position - glm::vec3(0.0f, 0.0f, s->heights.avatar_height);
+    chosen.trail.push_back({at, false});
+    chosen.last_leader = at;
+    chosen.dirty = true;
+    if (goal_.live) *goal_.live = false;
+    retire_server_path();
+    ++goal_revision_;
+    follower_.stop();
+    goal_ = {};
+    paused_ = false;
+    stick_.reset();
+    afollow_ = std::move(chosen);
+    if (env_.started) env_.started();
+    log::info("nav: following {} ({:.1f}{})", afollow_->label, afollow_->options.distance,
+              afollow_->options.doors ? "" : ", no doors");
+    return {};
+}
+
+void Navigator::afollow_off(std::string_view why) {
+    if (!afollow_) return;
+    if (goal_.live) *goal_.live = false;
+    retire_server_path();
+    ++goal_revision_;
+    afollow_.reset();
+    follower_.stop();
+    goal_ = {};
+    paused_ = false;
+    if (!why.empty() && env_.chat) env_.chat(std::string(why));
+    log::info("nav: afollow off{}{}", why.empty() ? "" : ": ", why);
+}
+
+bool Navigator::afollow_current() const {
+    if (!afollow_) return false;
+    if (afollow_->context && env_.interaction_context && env_.interaction_context() != afollow_->context) return false;
+    const auto* actor = env_.spawn ? env_.spawn(afollow_->spawn) : nullptr;
+    return actor && !actor->is_corpse && actor->incarnation == afollow_->incarnation;
+}
+
+float Navigator::afollow_left(const glm::vec3& feet) const {
+    if (!afollow_) return 0.0f;
+    float left = 0.0f;
+    glm::vec2 at(feet);
+    for (const TrailPoint& p : afollow_->trail) {
+        if (p.after_warp) return left; // walked to the warp's point only
+        left += glm::length(glm::vec2(p.at) - at);
+        at = glm::vec2(p.at);
+    }
+    if (!afollow_->leader_gone && afollow_->last_leader) left += glm::length(glm::vec2(*afollow_->last_leader) - at);
+    return left;
+}
+
+// /afollow (MQ2AdvPath's follow, Hailstone's own walk): the spawn leaves a trail, a point each kAFollowSpacing it
+// moves, and the player walks the trail rather than straight at it, so it goes where the spawn went (round corners,
+// up ramps, through doors, into a zone line). It holds still once the trail left, and the gap to the spawn, is within
+// the distance, and walks on as the spawn moves away. The spawn gone (dead, zoned, out of range): the trail is
+// walked to its end, then the follow ends. The spawn warped (a jump past kAFollowWarp): the trail is walked to where
+// it warped, and the player waits there until it warps too, or the spawn comes within kAFollowWarp. Hailstone's
+// choices: what MQ2AdvPath does in each case is only a guide.
+nav::SteerOutput Navigator::afollow_frame(const Frame& f) {
+    if (f.player_input) {
+        afollow_off("You are no longer following anything.");
+        return {};
+    }
+    AFollow& a = *afollow_;
+    // The player's own warp: the trail before the spawn's warp is behind it now.
+    if (a.last_feet && glm::length(glm::vec2(f.feet - *a.last_feet)) > kAFollowWarp) {
+        while (!a.trail.empty() && !a.trail.front().after_warp) a.trail.pop_front();
+        for (TrailPoint& p : a.trail) p.after_warp = false;
+        a.waiting_warp = false;
+        a.dirty = true;
+        follower_.stop();
+        goal_ = {};
+    }
+    a.last_feet = f.feet;
+    // The spawn's trail.
+    if (!a.leader_gone) {
+        if (afollow_current()) {
+            const game::Spawn* s = env_.spawn(a.spawn);
+            const glm::vec3 at = s->position - glm::vec3(0.0f, 0.0f, s->heights.avatar_height);
+            const float moved = a.last_leader ? glm::distance(at, *a.last_leader) : kAFollowSpacing;
+            if (moved >= kAFollowSpacing) {
+                const bool warp = moved > kAFollowWarp || (!a.trail.empty() && a.trail.back().after_warp);
+                a.trail.push_back({at, warp});
+                a.last_leader = at;
+                a.dirty = true;
+            }
+        } else {
+            a.leader_gone = true;
+            a.dirty = true;
+        }
+    }
+    if (!f.can_move || paused_) return {};
+    // A point near the feet further along (the spawn came back past the player) cuts off the loop before it; never
+    // across a warp.
+    {
+        std::optional<std::size_t> near;
+        const std::size_t look = std::min<std::size_t>(a.trail.size(), 40);
+        for (std::size_t i = 1; i < look && a.trail[i].after_warp == a.trail.front().after_warp; ++i)
+            if (glm::length(glm::vec2(a.trail[i].at - f.feet)) <= 3.0f) near = i;
+        if (near) {
+            a.trail.erase(a.trail.begin(), a.trail.begin() + static_cast<std::ptrdiff_t>(*near));
+            a.dirty = true;
+        }
+    }
+    // The trail before the spawn's warp walked (its last point within reach): wait where it warped, unless where it
+    // went is near.
+    a.waiting_warp = false;
+    const bool warp_ahead =
+        std::any_of(a.trail.begin(), a.trail.end(), [](const TrailPoint& p) { return p.after_warp; });
+    if (warp_ahead && !a.trail.front().after_warp && afollow_left(f.feet) <= 2.0f) {
+        while (!a.trail.front().after_warp) a.trail.pop_front();
+        a.dirty = true;
+    }
+    if (!a.trail.empty() && a.trail.front().after_warp) {
+        if (glm::length(glm::vec2(a.trail.front().at - f.feet)) <= kAFollowWarp) {
+            for (TrailPoint& p : a.trail) p.after_warp = false;
+            a.dirty = true;
+        } else {
+            a.waiting_warp = true;
+            if (goal_.kind != GoalKind::None) {
+                follower_.stop();
+                goal_ = {};
+            }
+            return {};
+        }
+    }
+    // Near enough: hold. The spawn gone and its trail walked: done. A warp ahead is walked to, not held short of.
+    const float left = afollow_left(f.feet);
+    const float want = a.leader_gone || warp_ahead ? 1.0f : a.options.distance;
+    if (a.trail.empty() || left <= want) {
+        if (a.leader_gone) {
+            afollow_off(std::format("[AFollow] {} is gone.", a.label));
+            return {};
+        }
+        if (goal_.kind != GoalKind::None) {
+            follower_.stop();
+            goal_ = {};
+        }
+        return {};
+    }
+    // The walk: the trail up to a warp, finished where the distance to the spawn is reached (its gap from the trail's
+    // last point taken off).
+    std::vector<glm::vec3> pts;
+    for (const TrailPoint& p : a.trail) {
+        if (p.after_warp) break;
+        pts.push_back(p.at);
+    }
+    const bool to_warp = pts.size() < a.trail.size();
+    float arrive = 1.0f;
+    if (!a.leader_gone && !to_warp && a.last_leader)
+        arrive = std::max(1.0f, a.options.distance - glm::length(glm::vec2(*a.last_leader - pts.back())));
+    if (goal_.kind == GoalKind::None) {
+        Goal g;
+        g.kind = GoalKind::Point;
+        g.straight = true;
+        g.flat = true; // the spawn's heights: a levitating one's trail is in the air
+        g.trail = true;
+        g.no_doors = !a.options.doors;
+        g.label = a.label;
+        g.distance = arrive;
+        g.point = pts.back();
+        g.via.assign(pts.begin(), pts.end() - 1);
+        const std::string err = begin(std::move(g));
+        if (!afollow_) return {};
+        if (!err.empty()) {
+            afollow_off(std::format("[AFollow] {}: {}.", afollow_->label, err));
+            return {};
+        }
+    } else if (a.dirty) {
+        // The trail grew or was cut: the walk's points after its next corner follow the trail as it is now (a grown
+        // trail extends the walk without restarting it, so its stall clock still sees a player that is stuck).
+        const auto& fp = follower_.points();
+        const glm::vec3* next = follower_.next() < fp.size() ? &fp[follower_.next()] : nullptr;
+        auto in_trail = next ? std::find(pts.begin(), pts.end(), *next) : pts.end();
+        const bool grows = in_trail != pts.end() && follower_.state() == nav::FollowState::Moving &&
+                           static_cast<std::size_t>(pts.end() - in_trail) >= fp.size() - follower_.next();
+        if (grows) {
+            const auto have = static_cast<std::ptrdiff_t>(fp.size() - follower_.next());
+            follower_.extend(std::vector<glm::vec3>(in_trail + have, pts.end()));
+        } else {
+            goal_.point = pts.back();
+            goal_.via.assign(pts.begin(), pts.end() - 1);
+            plan(f.feet);
+        }
+        goal_.point = pts.back();
+        goal_.via.assign(pts.begin(), pts.end() - 1);
+    }
+    goal_.distance = arrive;
+    follower_.set_arrive(arrive);
+    a.dirty = false;
+    last_finish_.clear();
+    nav::SteerOutput out = walk_frame(f);
+    if (!afollow_) return out;
+    // Trail points the walk has passed (those before its next corner) are off the trail.
+    if (goal_.kind != GoalKind::None) {
+        const auto& fp = follower_.points();
+        if (follower_.next() < fp.size()) {
+            auto it = std::find_if(afollow_->trail.begin(), afollow_->trail.end(),
+                                   [&](const TrailPoint& p) { return p.at == fp[follower_.next()]; });
+            if (it != afollow_->trail.end() && it != afollow_->trail.begin())
+                afollow_->trail.erase(afollow_->trail.begin(), it);
+        }
+    } else if (!last_finish_.empty()) {
+        afollow_.reset(); // no way on, stuck: said already
+    }
+    return out;
 }
 
 float Navigator::stick_distance() const {
@@ -503,12 +749,21 @@ nav::NavStatus Navigator::status() const {
         s.mesh_loaded = zone_->mesh().tile_count() > 0;
         s.mesh_complete = zone_->complete();
     }
-    s.active = goal_.kind != GoalKind::None && !stick_;
+    s.active = goal_.kind != GoalKind::None && !stick_ && !afollow_;
     if (stick_) {
         s.stick_spawn = stick_->spawn;
         s.stick_distance = stick_distance();
     }
     s.paused = paused_;
+    s.moveto = s.active && goal_.moveto;
+    s.moveto_arrived = moveto_arrived_;
+    if (afollow_) {
+        s.afollow_spawn = afollow_->spawn;
+        s.afollow_distance = afollow_->options.distance;
+        s.afollow_waypoints = afollow_->trail.size();
+        s.afollow_length = afollow_left(feet_);
+        s.afollow_waiting_warp = afollow_->waiting_warp;
+    }
     s.goal = goal_.label;
     s.remaining = follower_.remaining(feet_);
     return s;
@@ -689,7 +944,7 @@ void Navigator::log_stuck(const Frame& f) const {
 }
 
 bool Navigator::open_door_ahead(const Frame& f) {
-    if (!options_.open_doors || !env_.doors || !env_.use_door || f.now - door_clicked_at_ < kDoorRetrySeconds) return false;
+    if (!doors_on() || !env_.doors || !env_.use_door || f.now - door_clicked_at_ < kDoorRetrySeconds) return false;
     if (follower_.next() >= follower_.points().size()) return false;
     glm::vec3 to = follower_.points()[follower_.next()] - f.feet;
     glm::vec2 dir = glm::length(glm::vec2(to)) > 0.01f ? glm::normalize(glm::vec2(to)) : glm::vec2(0.0f);
@@ -777,7 +1032,7 @@ bool Navigator::open_door_ahead(const Frame& f) {
 }
 
 void Navigator::open_door_early(const Frame& f) {
-    if (!options_.open_doors || !env_.door_in_way || !env_.door || !env_.use_door || !env_.door_reachable) return;
+    if (!doors_on() || !env_.door_in_way || !env_.door || !env_.use_door || !env_.door_reachable) return;
     if (early_door_)
         if (const game::Door* d = env_.door(early_door_->id); d && d->state != game::kSwitchClosed) {
             early_door_->moved = true;
@@ -830,6 +1085,7 @@ nav::SteerOutput Navigator::frame(const Frame& f) {
     now_ = f.now;
     if (zone_) zone_->update(f.feet);
     if (stick_) return stick_frame(f);
+    if (afollow_) return afollow_frame(f);
     return walk_frame(f);
 }
 
@@ -900,6 +1156,18 @@ nav::SteerOutput Navigator::walk_frame(const Frame& f) {
         }
     }
 
+    // A /moveto id: where the spawn is, again each second, so the walk turns after it and the look follows it up
+    // or down. A spawn gone, or another in its id, leaves the last place; the walk goes on to it.
+    if (goal_.track_spawn && f.now >= goal_.track_at) {
+        goal_.track_at = f.now + kMoveToTrackSeconds;
+        const game::Spawn* s = env_.spawn ? env_.spawn(goal_.spawn) : nullptr;
+        if (revision != goal_revision_) return {};
+        if (s && s->incarnation == goal_.incarnation) {
+            goal_.point = s->display_valid ? s->display_position : s->position;
+            follower_.set_end(goal_.point);
+        }
+    }
+
     if (revision != goal_revision_) return {};
 
     // Out of the swing of a door the walk clicked, until it has swung.
@@ -967,7 +1235,7 @@ nav::SteerOutput Navigator::walk_frame(const Frame& f) {
     }
     // A few tries per door and walk: each new way round starts the stall clock again, so one that keeps failing
     // (a leaf across the whole passage) would hold the walk for ever; past them it is a stall (open_door_ahead).
-    if (out.active && options_.open_doors && !options_.pass_open_doors && !door_detour_)
+    if (out.active && doors_on() && !options_.pass_open_doors && !door_detour_)
         if (auto way = pass_open_door(f); way && detour_tries(way->door) < kDoorDetours) {
             auto it = std::find_if(detour_tries_.begin(), detour_tries_.end(), [&](const auto& e) { return e.first == way->door; });
             if (it == detour_tries_.end()) detour_tries_.emplace_back(way->door, 1);
@@ -988,7 +1256,7 @@ nav::SteerOutput Navigator::walk_frame(const Frame& f) {
     out.strafe = safe_strafe(f, out);
     // Never into a zone line by accident: the step ahead (3 units, a body's middle) inside one ends the walk, unless
     // zone lines are allowed or the goal itself is in one.
-    if (out.active && !options_.allow_zone_lines && regions_) {
+    if (out.active && !options_.allow_zone_lines && !goal_.trail && regions_) {
         glm::vec3 ahead = f.feet + glm::vec3(std::cos(out.yaw), std::sin(out.yaw), 0.0f) * 3.0f + glm::vec3(0.0f, 0.0f, 2.0f);
         bool goal_in_line = regions_->lookup(goal_.point + glm::vec3(0.0f, 0.0f, 2.0f)).is_zone_line();
         if (!goal_in_line && regions_->lookup(ahead).is_zone_line()) {
@@ -1015,6 +1283,7 @@ nav::SteerOutput Navigator::walk_frame(const Frame& f) {
             return {};
         }
         finish("");
+        if (done.moveto) moveto_arrived_ = true;
         if (done.kind == GoalKind::Door && done.click && env_.use_door) env_.use_door(done.door);
         log::info("nav: arrived at {}", done.label);
         return {};
@@ -1083,6 +1352,13 @@ nav::SteerOutput Navigator::walk_frame(const Frame& f) {
     }
     if (out.active && follower_.next() < follower_.points().size())
         out.pitch = swim_pitch(f, follower_.points()[follower_.next()], follower_.ahead(f.feet, kSwimAhead));
+    // A /moveto id out of the water looks at the spawn (its place as last taken), from the player's own height:
+    // the pitch is only the view there, the walk keeps to the ground.
+    if (out.active && goal_.track_spawn && !f.swimming) {
+        const glm::vec3 to = goal_.point - (f.feet + glm::vec3(0.0f, 0.0f, f.height));
+        out.pitch = std::clamp(std::atan2(to.z, std::max(glm::length(glm::vec2(to)), 0.5f)), -kMoveToLookSteepest,
+                               kMoveToLookSteepest);
+    }
     // Logged once the change has held for a second (at the surface the body bobs in and out of the water).
     if (f.swimming == swim_logged_) swim_changed_at_ = -1.0;
     else if (swim_changed_at_ < 0.0) swim_changed_at_ = f.now;
@@ -1109,12 +1385,17 @@ int Navigator::safe_strafe(const Frame& f, const nav::SteerOutput& out) const {
     return out.strafe;
 }
 
+bool Navigator::swim_needs_air(const Frame& f) {
+    constexpr float kAirLow = 0.35f;
+    return f.head_under && f.air < kAirLow;
+}
+
 std::optional<float> Navigator::swim_pitch(const Frame& f, const glm::vec3& aim, std::optional<glm::vec3> along) const {
     if (!f.swimming) return std::nullopt;
     // Our own numbers (docs/navigation.md "Water"): when to head for air, how near a shore to climb, how steep.
-    constexpr float kAirLow = 0.35f, kClimbOut = 0.7f, kUp = 1.0f, kSteepest = 1.1f, kShoreReach = 12.0f,
+    constexpr float kClimbOut = 0.7f, kUp = 1.0f, kSteepest = 1.1f, kShoreReach = 12.0f,
                     kSteepVertical = 1.4f;
-    if (f.head_under && f.air < kAirLow) return kUp;
+    if (swim_needs_air(f)) return kUp;
     float d = glm::length(glm::vec2(aim - f.feet));
     float dz = aim.z - f.feet.z;
     // A corner is in the water when there is water over it (the bottom) or just under it (the surface).

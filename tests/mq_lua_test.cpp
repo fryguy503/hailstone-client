@@ -3,7 +3,9 @@
 #include <doctest/doctest.h>
 
 #include <chrono>
+#include <cmath>
 #include <fstream>
+#include <limits>
 #include <thread>
 #include <utility>
 
@@ -12,9 +14,11 @@
 #include "core/ini_file.h"
 #include "core/log.h"
 #include "core/sha256.h"
+#include "game/coords.h"
 #include "mq/commands.h"
 #include "mq/lua_mq.h"
 #include "mq/lua_script.h" // ScriptRun, HostWork (the host's insides)
+#include "mq/map_filter.h"
 #include "mq_test_world.h"
 #include "scratch_dir.h"
 #include "app/web_service.h"
@@ -34,8 +38,10 @@ struct Host {
     plugin::Policy policy;
     mq::Registry reg;
     mq::Context ctx;
+    mq::MapFilters filters;
     std::vector<std::string> printed, sent;
     std::vector<std::pair<std::string, int>> keys; // /keypress: the command and its mode (0 tap, 1 hold, 2 release)
+    std::vector<double> faced; // /face: the MQ degrees asked for
     std::uint32_t target = 0;
     std::int64_t clock = 0;
     std::unique_ptr<mq::Commands> commands;
@@ -51,6 +57,7 @@ struct Host {
         mq::CommandEnv ce;
         ce.hooks = &hooks;
         ce.registry = &reg;
+        ce.map_filters = &filters;
         ce.context = [this]() -> const mq::Context& { return ctx; };
         ce.echo = [this](const std::string& t) { printed.push_back(t); };
         ce.run = [this](const std::string& l) { run(l); };
@@ -59,6 +66,8 @@ struct Host {
             keys.emplace_back(command, mode);
             return true;
         };
+        ce.face = [this](double degrees, bool) { faced.push_back(degrees); };
+        ce.now_ms = [this] { return clock; };
         commands = std::make_unique<mq::Commands>(ce);
         mq::ScriptEnv se;
         se.hooks = &hooks;
@@ -968,6 +977,35 @@ print('read', dofile('f1.lua').v)
     CHECK_FALSE(fs::exists(own / "more.lua"));
 }
 
+TEST_CASE("MQ Lua: mq.pickle's byte limit counts a replaced file once and the script's own new files") {
+    Host h(plugin::kCapRead | plugin::kCapCommands); // scripts/config/bytes/
+    const fs::path own = h.config_dir / "bytes";
+    fs::create_directories(own / "deep");
+    std::ofstream(own / "deep" / "pad.bin", std::ios::binary).close();
+    fs::resize_file(own / "deep" / "pad.bin", std::uintmax_t{56} << 20); // sparse: 56 of the 64 MiB
+    h.write("bytes.lua", R"(
+local mq = require('mq')
+local three = string.rep('a', 3 * 1024 * 1024)
+print('a', pcall(mq.pickle, 'a.lua', {s = three}))
+for i = 1, 6 do print('again' .. i, pcall(mq.pickle, 'a.lua', {s = three})) end
+print('b', pcall(mq.pickle, 'sub/b.lua', {s = three}))
+print('c', pcall(mq.pickle, 'c.lua', {s = three}))
+print('small', pcall(mq.pickle, 'a.lua', {v = 1}))
+print('c2', pcall(mq.pickle, 'c.lua', {s = three}))
+)");
+    REQUIRE(h.scripts->run("bytes", {}));
+    h.pulses(20); // (several 3 MiB pickles may take more than one slice)
+    CHECK(h.printed_line("a true"));
+    for (int i = 1; i <= 6; ++i) CHECK(h.printed_line("again" + std::to_string(i) + " true")); // 59 MiB, not 77
+    CHECK(h.printed_line("b true"));                                                     // 62 MiB
+    bool full = false;
+    for (const auto& l : h.printed) full |= l.rfind("c false", 0) == 0 && l.find("config directory is full") != std::string::npos;
+    CHECK(full); // 65 MiB: the count has b in it, written after it was taken
+    CHECK(h.printed_line("small true"));
+    CHECK(h.printed_line("c2 true")); // a's shrinking freed its room
+    CHECK(fs::exists(own / "sub" / "b.lua"));
+}
+
 TEST_CASE("MQ Lua: require of a huge name that is not there is a plain error, and the script goes on") {
     Host h;
     h.write("huge_require.lua", R"(
@@ -1052,6 +1090,26 @@ TEST_CASE("MQ commands: /target, ${} for typed lines, /noparse, /squelch") {
     CHECK(h.printed.back() == "There are no spawns matching: (next Groupie)");
 }
 
+TEST_CASE("MQ commands: /mapfilter shares its state with the map model") {
+    Host h;
+    h.run("/mapfilter npc show");
+    CHECK(h.filters.enabled(mq::MapFilter::Npc));
+    h.run("/mapfilter npcconcolor show");
+    CHECK(h.filters.enabled(mq::MapFilter::NpcConColor));
+    h.run("/mapfilter target show");
+    h.run("/mapfilter targetradius 40");
+    CHECK(h.filters.state(mq::MapFilter::TargetRadius).radius == 40.0f);
+    h.run("/mapfilter custom npc radius 25");
+    REQUIRE(h.filters.custom_search());
+    CHECK(h.filters.custom_search()->radius == 25.0);
+    h.run("/mapfilter");
+    bool custom_status = false;
+    for (const auto& line : h.printed)
+        custom_status |= line.find("Custom: npc radius 25") != std::string::npos;
+    CHECK(custom_status);
+    CHECK(h.sent.empty()); // the hook took the command; nothing went to the server
+}
+
 TEST_CASE("MQ commands: /keypress reads hold only after a space") {
     Host h;
     h.run("/keypress forward hold");
@@ -1062,6 +1120,42 @@ TEST_CASE("MQ commands: /keypress reads hold only after a space") {
     h.run("/keypress forward hold\t");
     REQUIRE(h.keys.size() == 2);
     CHECK(h.keys.back().second == 0);
+}
+
+TEST_CASE("MQ commands: /face takes only a finite heading or loc") {
+    Host h;
+    h.run("/face heading 450");
+    REQUIRE(h.faced.size() == 1);
+    CHECK(h.faced.back() == doctest::Approx(90.0)); // one turn's degrees
+    h.run("/face heading -90");
+    REQUIRE(h.faced.size() == 2);
+    CHECK(h.faced.back() == doctest::Approx(270.0));
+    // "nan", "inf" and 1e300 parse as numbers; none turns the player, nor falls back to the target.
+    for (const char* bad : {"/face heading nan", "/face heading inf", "/face heading -inf",
+                            "/face loc nan,0", "/face loc 0,inf", "/face loc 1e300,0", "/face loc 1,x"})
+        h.run(bad);
+    CHECK(h.faced.size() == 2);
+    h.run("/face heading 1e300"); // finite but past float: wrapped, not cast
+    CHECK(h.faced.size() == 3);
+    CHECK(h.faced.back() >= 0.0);
+    CHECK(h.faced.back() < 360.0);
+    h.run("/face loc 10,0"); // the server's y first: due north of the player at the origin
+    REQUIRE(h.faced.size() == 4);
+    CHECK(h.faced.back() == doctest::Approx(0.0));
+}
+
+TEST_CASE("MQ degrees to an EQ heading: wrapped, and nothing for NaN or an infinity") {
+    CHECK(*game::mq_degrees_to_heading(0.0) == doctest::Approx(0.0f));
+    CHECK(*game::mq_degrees_to_heading(90.0) == doctest::Approx(384.0f)); // clockwise vs counter-clockwise
+    CHECK(*game::mq_degrees_to_heading(450.0) == doctest::Approx(384.0f));
+    CHECK(*game::mq_degrees_to_heading(-90.0) == doctest::Approx(128.0f));
+    auto huge = game::mq_degrees_to_heading(1e300);
+    REQUIRE(huge);
+    CHECK(*huge >= 0.0f);
+    CHECK(*huge < 512.0f);
+    CHECK_FALSE(game::mq_degrees_to_heading(std::nan("")));
+    CHECK_FALSE(game::mq_degrees_to_heading(std::numeric_limits<double>::infinity()));
+    CHECK_FALSE(game::mq_degrees_to_heading(-std::numeric_limits<double>::infinity()));
 }
 
 TEST_CASE("MQ commands: /target prefers an exact player name over a mount") {
@@ -1183,6 +1277,87 @@ mq.cmd('/docommand /hpbind')
     CHECK(std::find(h.sent.begin(), h.sent.end(), "/tell Groupie bind 75") != h.sent.end());
     CHECK(std::find(h.sent.begin(), h.sent.end(), "/tell Groupie x${Me.PctHPs}") != h.sent.end());
     CHECK(std::find(h.sent.begin(), h.sent.end(), "/tell Groupie x75") == h.sent.end());
+}
+
+TEST_CASE("MQ commands: /nomodkey, /shiftkey and /ctrlkey parse the line they run once") {
+    Host h;
+    net::GameConnectionTestAccess::world(*h.world.conn).spawns[11].name = "x${Me.PctHPs}";
+    // As the client registers them (ClientApp::run_with_keys): the rest of the line goes back through the filters.
+    const auto owner = h.hooks.new_owner("keys");
+    for (const char* word : {"/nomodkey", "/shiftkey", "/ctrlkey"})
+        h.hooks.add_command(owner, word, [&](std::string_view args) { h.run(std::string(args)); });
+    h.run("/nomodkey /tell Groupie ${Spawn[id 11].CleanName} ${Me.PctHPs}");
+    CHECK(h.sent.back() == "/tell Groupie x${Me.PctHPs} 75");
+    h.run("/shiftkey /ctrlkey /tell Groupie ${Spawn[id 11].CleanName}");
+    CHECK(h.sent.back() == "/tell Groupie x${Me.PctHPs}");
+}
+
+TEST_CASE("MQ commands: /timed runs its line that many tenths of a second later, expanded then, as its sender") {
+    Host h;
+    auto tick = [&](std::int64_t ms) {
+        h.clock += ms;
+        h.hooks.pulse();
+    };
+    // 3 tenths: not before 300 ms.
+    h.run("/timed 3 /who");
+    CHECK(h.sent.empty());
+    tick(299);
+    CHECK(h.sent.empty());
+    tick(1);
+    CHECK(h.sent == std::vector<std::string>{"/who"});
+    tick(1000);
+    CHECK(h.sent.size() == 1u); // once
+    // Due ones in the order they fall due; the same time in the order sent. 0 (or no number) is the next pulse.
+    h.sent.clear();
+    h.run("/timed 2 /who second");
+    h.run("/timed 1 /who first");
+    h.run("/timed 2 /who third");
+    h.run("/timed x /who now");
+    tick(0);
+    CHECK(h.sent == std::vector<std::string>{"/who now"});
+    tick(250);
+    CHECK(h.sent == std::vector<std::string>{"/who now", "/who first", "/who second", "/who third"});
+    // ${...} is read when the line runs, not when it is sent.
+    h.sent.clear();
+    auto& ps = net::GameConnectionTestAccess::status(*h.world.conn);
+    h.run("/timed 1 /tell Groupie ${Me.PctHPs}");
+    ps.hp = 500;
+    tick(100);
+    CHECK(h.sent == std::vector<std::string>{"/tell Groupie 50"});
+    // Nested: a /timed line may queue another.
+    h.sent.clear();
+    h.run("/timed 1 /timed 1 /who later");
+    tick(100);
+    CHECK(h.sent.empty());
+    tick(100);
+    CHECK(h.sent == std::vector<std::string>{"/who later"});
+    // No command, no arguments.
+    h.run("/timed 5");
+    h.run("/timed");
+    CHECK(h.printed.back() == "Usage: /timed <deciseconds> <command>");
+    tick(1000);
+    CHECK(h.sent.size() == 1u);
+    // A script's line runs with the script's permissions, not the player's, however late it runs.
+    h.sent.clear();
+    {
+        plugin::CallerScope scope(plugin::kCapRead | plugin::kCapCommands, "probe");
+        h.run("/timed 1 /sit");
+        h.run("/timed 1 /who allowed");
+    }
+    tick(100);
+    CHECK(h.sent == std::vector<std::string>{"/who allowed"});
+    bool refused = false;
+    for (const auto& l : h.printed)
+        refused |= l.find("probe") != std::string::npos && l.find("/sit needs the server's 'move' permission") !=
+                                                                std::string::npos;
+    CHECK(refused);
+    // At most kMaxTimedCommands waiting at once.
+    for (std::size_t i = 0; i < mq::kMaxTimedCommands; ++i) h.run("/timed 10 /who");
+    h.run("/timed 10 /who one too many");
+    CHECK(h.printed.back().find("/timed holds at most") != std::string::npos);
+    h.sent.clear();
+    tick(1000);
+    CHECK(h.sent.size() == mq::kMaxTimedCommands);
 }
 
 // ---------------------------------------------------------------- Lua socials

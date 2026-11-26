@@ -3,8 +3,12 @@ build-*/
 .local/
 .claude/worktrees/
 build.log
+# Plugins kept in repositories of their own, cloned here so CMake builds them with the client (CMakeLists.txt): the
+# NMS and Project Triune server plugins, and HSMono (the MQ2Mono port). Their changes are committed in their own
+# repositories, never here.
 /plugins/nms
 /plugins/projecttriune
+/plugins/hsmono
 __pycache__/
 # What a local release writes in the checkout (docs/updater.md "Making a release", docs/addons.md "For authors").
 /dist/

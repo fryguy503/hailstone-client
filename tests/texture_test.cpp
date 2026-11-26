@@ -95,8 +95,13 @@ TEST_CASE("UI animation art: installed stock badges resolve XML rectangles again
              {"A_General", "Achievement_subcat_base.tga", 0, 0, 128, 30}}}) {
         INFO(badge.name);
         const auto frame = hailstone::ui::find_ui_animation_frame(xml, badge.name);
-        REQUIRE(frame); CHECK(frame->file == badge.file); CHECK(frame->x == badge.x); CHECK(frame->y == badge.y);
-        CHECK(frame->w == badge.width); CHECK(frame->h == badge.height);
+        REQUIRE(frame);
+        // The rectangles are the reference folder's; another install's XML may place them elsewhere, so it gets
+        // the crop checked against its own rectangle.
+        if (hailstone::test::reference_folder()) {
+            CHECK(frame->file == badge.file); CHECK(frame->x == badge.x); CHECK(frame->y == badge.y);
+            CHECK(frame->w == badge.width); CHECK(frame->h == badge.height);
+        }
         const auto bytes = game->read("uifiles/default/" + frame->file); REQUIRE(bytes);
         const auto decoded = decode_texture(*bytes); REQUIRE(decoded);
         REQUIRE(decoded->width <= static_cast<std::uint32_t>(std::numeric_limits<int>::max()));
@@ -104,11 +109,11 @@ TEST_CASE("UI animation art: installed stock badges resolve XML rectangles again
         const hailstone::ui::UiTextures::Texture atlas{reinterpret_cast<void*>(std::uintptr_t{1}),
             static_cast<int>(decoded->width), static_cast<int>(decoded->height)};
         const auto crop = hailstone::ui::ui_animation_crop(atlas, *frame); REQUIRE(crop);
-        CHECK(crop->width == badge.width); CHECK(crop->height == badge.height);
-        CHECK(crop->cell.u0 == doctest::Approx(static_cast<double>(badge.x) / decoded->width));
-        CHECK(crop->cell.v0 == doctest::Approx(static_cast<double>(badge.y) / decoded->height));
-        CHECK(crop->cell.u1 == doctest::Approx(static_cast<double>(badge.x + badge.width) / decoded->width));
-        CHECK(crop->cell.v1 == doctest::Approx(static_cast<double>(badge.y + badge.height) / decoded->height));
+        CHECK(crop->width == frame->w); CHECK(crop->height == frame->h);
+        CHECK(crop->cell.u0 == doctest::Approx(static_cast<double>(frame->x) / decoded->width));
+        CHECK(crop->cell.v0 == doctest::Approx(static_cast<double>(frame->y) / decoded->height));
+        CHECK(crop->cell.u1 == doctest::Approx(static_cast<double>(frame->x + frame->w) / decoded->width));
+        CHECK(crop->cell.v1 == doctest::Approx(static_cast<double>(frame->y + frame->h) / decoded->height));
     }
 }
 
@@ -577,7 +582,9 @@ TEST_CASE("Textures over 8192 x 8192 texels are refused before decoding (no 1 Gi
 }
 
 TEST_CASE("Real textures from a classic zone decode" * doctest::skip(!hailstone::test::game_dir())) {
-    auto archive = PfsArchive::open(hailstone::test::game_dir()->find("qeynos2.s3d").value());
+    const auto path = hailstone::test::game_file("qeynos2.s3d");
+    if (!path) return;
+    auto archive = PfsArchive::open(*path);
     int count = 0;
     for (const auto& name : archive.names()) {
         if (!name.ends_with(".bmp") && !name.ends_with(".dds")) continue;
@@ -596,7 +603,9 @@ TEST_CASE("Real textures from a classic zone decode" * doctest::skip(!hailstone:
 }
 
 TEST_CASE("Real textures from an EQG archive decode" * doctest::skip(!hailstone::test::game_dir())) {
-    auto archive = PfsArchive::open(hailstone::test::game_dir()->find("broodlands.eqg").value());
+    const auto path = hailstone::test::game_file("broodlands.eqg");
+    if (!path) return;
+    auto archive = PfsArchive::open(*path);
     auto data = archive.read("swmp_canopy_trim.dds");
     REQUIRE(data);
     auto img = decode_ok(*data);
@@ -671,16 +680,28 @@ TEST_CASE("TGA truecolour and RLE") {
 }
 
 TEST_CASE("Real TGA and 8-bit BMP decode" * doctest::skip(!hailstone::test::game_dir())) {
-    auto sky = PfsArchive::open(hailstone::test::game_dir()->find("sky.s3d").value());
-    auto tga = decode_ok(sky.read("glare.tga").value());
-    CHECK(tga.format == PixelFormat::RGBA8);
-    auto chr = PfsArchive::open(hailstone::test::game_dir()->find("gfaydark_chr.s3d").value());
-    auto data = chr.read("batch0001.bmp").value();
-    CHECK(describe_texture(data) == "BMP 8-bit");
-    auto img = decode_ok(data);
-    CHECK(img.width == 64);
-    CHECK(img.height == 128);
-    CHECK(img.mips.size() == 1);
+    // Each file is checked where the folder has it (a live install's archives differ from RoF2's).
+    if (const auto path = hailstone::test::game_file("sky.s3d")) {
+        auto sky = PfsArchive::open(*path);
+        if (auto glare = sky.read("glare.tga")) {
+            auto tga = decode_ok(*glare);
+            CHECK(tga.format == PixelFormat::RGBA8);
+        } else {
+            MESSAGE("sky.s3d has no glare.tga: the TGA check was skipped");
+        }
+    }
+    if (const auto path = hailstone::test::game_file("gfaydark_chr.s3d")) {
+        auto chr = PfsArchive::open(*path);
+        if (auto data = chr.read("batch0001.bmp")) {
+            CHECK(describe_texture(*data) == "BMP 8-bit");
+            auto img = decode_ok(*data);
+            CHECK(img.width == 64);
+            CHECK(img.height == 128);
+            CHECK(img.mips.size() == 1);
+        } else {
+            MESSAGE("gfaydark_chr.s3d has no batch0001.bmp: the BMP check was skipped");
+        }
+    }
 }
 
 TEST_CASE("build_color_mips: linear filtering, alpha-weighted colour, cut-out coverage") {

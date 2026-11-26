@@ -99,4 +99,10 @@ mechanics::hit::Hit hit_record(std::uint16_t source, std::uint16_t level, float 
 
 HitLandingResult land_spell(const mechanics::hit::Hit& hit, const HitLandingContext& ctx);
 
+// The buff slot (0-based) FindAffectSlot gives `spell` cast by the player on the player, with `keep` set (nothing
+// is removed, nothing changes in ctx.spell_state), at the player's level; -1 when it would not land. The buffs are
+// ctx.spell_state's: the player's for MQ's Spell.WillLand, or one hypothetical buff for MQ's WillStackWith
+// (Spell.StacksWith), which calls the original's FindAffectSlot the same way.
+int buff_landing_slot(std::uint32_t spell, const HitLandingContext& ctx);
+
 } // namespace hailstone::game

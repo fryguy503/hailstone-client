@@ -410,6 +410,7 @@ struct ControlInput {
     bool forward_sits = false;                // 0xde0d5b (Defaults AllowAutoStand): forward stands up / ends loot
     bool loot_window_open = false;            // CLootWnd active
     bool auto_duck = false;                   // byte 0xddf675: CanIFitHere's duck under a low ceiling
+    std::optional<SwimSteering> follow_swim;
 };
 
 // What the controller needs about the character each frame.
@@ -508,7 +509,8 @@ public:
     glm::vec2 strafe_push(const CharacterInput& ch) const;
 
     // PhysicsObject::Step; returns the displacement (see physics.h).
-    glm::vec3 step(const Environment& env, float elapsed_ms, const CharacterInput& ch, float hover_floor);
+    glm::vec3 step(const Environment& env, float elapsed_ms, const CharacterInput& ch, float hover_floor,
+                   std::optional<SwimSteering> swim = std::nullopt);
 
     // PlayerZoneClient_LandingAndFallCheck @0x506e20 after the caller placed
     // the body: when the feet are below `floor` the body lands there; a fall

@@ -175,10 +175,35 @@ void SpellParticles::update_blood(net::GameConnection& conn, const render::Actor
         r.position = glm::vec3((*point)[3]);
         particles_.create(r);
     }
-    std::vector<std::uint32_t> gone;
+}
+
+void SpellParticles::stop_gone_actors(const net::GameConnection& conn) {
+    const auto& spawns = conn.world().spawns;
+    auto gone = [&](std::uint32_t id) {
+        if (id == 0 || (id & kMissileActorBit) != 0) return false; // no actor, or a missile's (end_missile's)
+        auto it = spawns.find(id);
+        if (it == spawns.end()) return true;
+        auto seen = attached_.find(id);
+        return seen != attached_.end() && seen->second != it->second.incarnation;
+    };
+    gone_.clear();
     for (const auto& e : particles_.emitters())
-        if (e.point == kBloodPoint && !spawns.contains(e.actor)) gone.push_back(e.actor);
-    for (auto id : gone) particles_.stop_attachment(id, kBloodPoint);
+        if (gone(e.actor)) gone_.push_back(e.actor);
+    std::sort(gone_.begin(), gone_.end());
+    gone_.erase(std::unique(gone_.begin(), gone_.end()), gone_.end());
+    particles_.stop_actors(gone_);
+    timers_.drop_spawns(gone);
+}
+
+void SpellParticles::note_attached(const net::GameConnection& conn) {
+    const auto& spawns = conn.world().spawns;
+    attached_.clear();
+    auto note = [&](std::uint32_t id) {
+        if (id == 0 || (id & kMissileActorBit) != 0) return;
+        if (auto it = spawns.find(id); it != spawns.end()) attached_[id] = it->second.incarnation;
+    };
+    for (const auto& e : particles_.emitters()) note(e.actor);
+    timers_.for_each_spawn(note);
 }
 
 void SpellParticles::missile_effect(const net::GameConnection& conn, const game::Missile& missile, int stage,
@@ -216,6 +241,8 @@ void SpellParticles::update(net::GameConnection& conn, std::span<const net::Spel
                             std::span<const net::EffectPacketCue> effect_packets, const render::ActorRenderer* actors,
                             float dt) {
     clock_ += dt;
+    // Before anything is played this frame: what is made now hangs from the spawns as they are.
+    stop_gone_actors(conn);
     update_blood(conn, actors);
     for (const auto& cue : cues) {
         Held h{clock_ + cue.delay, cue.stage, cue.caster, cue.target, cue.spell, cue.source, cue.duration_ms};
@@ -312,6 +339,7 @@ void SpellParticles::update(net::GameConnection& conn, std::span<const net::Spel
         if (pt >= 0 && pt < kBloodPoint && !a.position) a.position = position(id);
         return a;
     });
+    note_attached(conn);
 }
 
 float SpellParticles::particle_scale(const assets::CharacterModel& model) const {
@@ -558,6 +586,7 @@ void SpellParticles::clear() {
     particles_.clear();
     held_.clear();
     timers_.clear();
+    attached_.clear();
 }
 
 std::vector<game::LightSource> SpellParticles::lights(std::size_t max) const {

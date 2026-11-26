@@ -73,6 +73,17 @@ TEST_CASE("spell effect text: a slot's line as ParseSpellEffect writes it") {
         s.duration_cap = 10;
         CHECK(spell_effect_text(s, 0, ctx) == "Slot 1: Decrease HP by 30 per tick ");
     }
+    SUBCASE("an AC effect shows its value divided by 10/3") {
+        SpellData s = one_slot(SPA_AC, 30, 0, 0, 102);
+        s.class_level[1] = 1;
+        CHECK(spell_effect_text(s, 0, ctx) == "Slot 1: Increase AC by 9 (L1) to 39 (L125)");
+    }
+    SUBCASE("an AC value past INT_MAX after the divide stays exact, not cast to int") {
+        // Formula 2000 + n adds level * n: 30 + 100 * 100000000 at the context level 100, a quotient of 3000000000.
+        SpellData s = one_slot(SPA_AC, 30, 0, 0, 2000 + 100000000);
+        s.class_level[1] = 50;
+        CHECK(spell_effect_text(s, 0, ctx) == "Slot 1: Increase AC by 1500000000 (L50) to 3000000000 (L125)");
+    }
     SUBCASE("haste counts from base 100, as a percent") {
         SpellData s = one_slot(SPA_HASTE, 140, 0, 140, 100);
         s.class_level[13] = 20; // enchanter 20

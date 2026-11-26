@@ -671,10 +671,7 @@ void ClientApp::addons_login_action(ui::LoginAction action) {
         if (addons_) {
             addons_->set_auto_update(row->name, v.choice_on);
         } else {
-            auto all = read_installed_addons(data);
-            for (auto& a : all)
-                if (a.name == row->name) a.auto_update = v.choice_on;
-            write_installed_addons(data, all);
+            set_addon_auto_update(data, row->name, v.choice_on);
         }
         break;
     case A::AddonRevoke:

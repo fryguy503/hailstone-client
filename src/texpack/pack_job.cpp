@@ -6,6 +6,7 @@
 #include <exception>
 #include <fstream>
 
+#include "core/atomic_file.h"
 #include "core/build_info.h"
 #include "core/config.h"
 #include "platform/local_time.h"
@@ -31,21 +32,29 @@ std::string display_name(const TextureInfo& info) {
 GpuWorker::GpuWorker(ModelSetFactory factory) : thread_([this, f = std::move(factory)]() mutable { run(std::move(f)); }) {}
 
 GpuWorker::~GpuWorker() {
+    std::deque<Queued> dropped;
     {
         std::lock_guard lock(mutex_);
         stop_ = true;
-        tasks_.clear();
+        dropped.swap(tasks_);
     }
     cv_.notify_all();
+    for (Queued& q : dropped)
+        if (q.dropped) q.dropped();
     thread_.join();
 }
 
-void GpuWorker::post(Task task, bool urgent) {
+void GpuWorker::post(Task task, bool urgent, std::function<void()> dropped) {
     {
         std::lock_guard lock(mutex_);
-        if (urgent) tasks_.push_front(std::move(task));
-        else tasks_.push_back(std::move(task));
+        if (!stop_) {
+            if (urgent) tasks_.push_front({std::move(task), std::move(dropped)});
+            else tasks_.push_back({std::move(task), std::move(dropped)});
+            dropped = nullptr;
+        }
     }
+    // (posted while the worker stops: it will never run)
+    if (dropped) dropped();
     cv_.notify_all();
 }
 
@@ -83,7 +92,7 @@ void GpuWorker::run(ModelSetFactory factory) {
             std::unique_lock lock(mutex_);
             cv_.wait(lock, [&] { return stop_ || !tasks_.empty(); });
             if (stop_) break;
-            task = std::move(tasks_.front());
+            task = std::move(tasks_.front().task);
             tasks_.pop_front();
         }
         // (a task runs without models when they failed: it sees null models and says so)
@@ -140,7 +149,8 @@ std::set<std::string> pack_contents(const fs::path& pack_dir) {
     std::error_code ec;
     for (fs::directory_iterator it(pack_dir / "by-hash", ec), end; !ec && it != end; it.increment(ec)) {
         const fs::path& p = it->path();
-        if (p.extension() != ".dds") continue;
+        std::error_code type_ec;
+        if (p.extension() != ".dds" || !it->is_regular_file(type_ec)) continue; // (a folder of that name is no file made)
         out.insert(p.stem().string());
     }
     return out;
@@ -182,6 +192,7 @@ struct PackJob::Made {
     Outputs outputs;
     const MaterialTile* material = nullptr; // composed by the encoder from `sources`, not upscaled
     std::shared_ptr<Sources> sources;
+    std::uint64_t bytes = 0; // its share of JobStatus::bytes_held
 };
 
 namespace {
@@ -199,16 +210,20 @@ std::string now_text() {
     return buf;
 }
 
+// Through a temporary file checked after its last write and flush (core/atomic_file.h): a short file is never renamed
+// into the pack, where a resumed build would take it as made.
 bool write_bytes(const fs::path& path, const std::vector<std::byte>& data) {
-    const fs::path tmp = path.string() + ".tmp";
-    {
-        std::ofstream out(tmp, std::ios::binary);
-        out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
-        if (!out) return false;
-    }
-    std::error_code ec;
-    fs::rename(tmp, path, ec);
-    return !ec;
+    return write_file_atomic(path, std::string_view(reinterpret_cast<const char*>(data.data()), data.size()));
+}
+
+// What a texture holds between the reader and its encoder: its sources (RGBA8, with a masked and a keyed variant)
+// and each pack image it makes, at the pack's scale or a material tile's side.
+std::uint64_t held_estimate(const TextureInfo& t, std::size_t files, std::uint32_t scale, std::uint32_t tile_side) {
+    const std::uint64_t source = std::uint64_t{t.width} * t.height * 4;
+    const std::uint64_t variants = 1 + (t.masked_variant ? 1 : 0) + (t.keyed_variant ? 1 : 0);
+    const std::uint64_t texels = tile_side ? std::uint64_t{tile_side} * tile_side
+                                           : std::min(std::uint64_t{t.width} * scale * t.height * scale, kMaxUpscaleTexels);
+    return source * variants + texels * 4 * files;
 }
 
 constexpr std::size_t kInGpu = 6;       // textures read and waiting for (or on) the GPU
@@ -284,6 +299,17 @@ void PackJob::note_error(std::string text) {
     if (status_.errors.size() > kErrorsKept) status_.errors.erase(status_.errors.begin());
 }
 
+void PackJob::release_bytes(std::uint64_t bytes) {
+    status_.bytes_held -= std::min(bytes, status_.bytes_held);
+}
+
+void PackJob::drop_made() {
+    // What the GPU handed back after a cancel had sent the encoders home.
+    std::lock_guard lock(mutex_);
+    for (const auto& item : made_) release_bytes(item->bytes);
+    made_.clear();
+}
+
 void PackJob::wait_while_paused() {
     std::unique_lock lock(mutex_);
     cv_.wait(lock, [&] { return !paused_ || cancel_; });
@@ -338,20 +364,34 @@ void PackJob::run() {
         });
 
         auto cache = make_archive_cache();
+        const std::uint64_t budget = options_.memory_budget ? options_.memory_budget : kDefaultMemoryBudget;
         for (Todo& t : todo) {
             wait_while_paused();
+            const MaterialTile* planned_tile = plan ? plan->find(t.info.hash) : nullptr;
+            const std::uint64_t bytes = held_estimate(t.info, t.files.size(), options_.settings.scale,
+                                                      planned_tile ? plan->size : 0);
             {
                 std::unique_lock lock(mutex_);
-                cv_.wait(lock, [&] { return cancel_ || (in_gpu_ < kInGpu && made_.size() < kMadeQueue); });
+                // Room in the queues, and in the memory budget (a texture alone always goes, however large).
+                cv_.wait(lock, [&] {
+                    return cancel_ || (in_gpu_ < kInGpu && made_.size() < kMadeQueue &&
+                                       (status_.bytes_held == 0 || status_.bytes_held + bytes <= budget));
+                });
                 if (cancel_) break;
+                status_.bytes_held += bytes;
+                status_.bytes_held_peak = std::max(status_.bytes_held_peak, status_.bytes_held);
             }
             std::string why;
             auto sources = read_sources(t.info, cache.get(), &why);
             if (!sources) {
-                std::lock_guard lock(mutex_);
-                note_error(display_name(t.info) + ": " + why);
-                ++status_.failures;
-                ++status_.done;
+                {
+                    std::lock_guard lock(mutex_);
+                    note_error(display_name(t.info) + ": " + why);
+                    ++status_.failures;
+                    ++status_.done;
+                    release_bytes(bytes);
+                }
+                cv_.notify_all();
                 continue;
             }
             {
@@ -362,6 +402,7 @@ void PackJob::run() {
             item->info = std::move(t.info);
             item->files = std::move(t.files);
             item->planned = item->files.size();
+            item->bytes = bytes;
             auto src = std::make_shared<Sources>(std::move(*sources));
             if (const MaterialTile* tile = plan ? plan->find(item->info.hash) : nullptr) {
                 // (no GPU: the encoder composes it)
@@ -402,6 +443,17 @@ void PackJob::run() {
                     --in_gpu_;
                 }
                 cv_.notify_all();
+            }, false, [this, item] {
+                // The worker stopped before this texture's turn: it comes back with nothing made, and the build,
+                // which can no longer finish, ends as cancelled.
+                item->files.clear();
+                {
+                    std::lock_guard lock(mutex_);
+                    made_.push_back(item);
+                    --in_gpu_;
+                }
+                cancel();
+                cv_.notify_all();
             });
         }
         {
@@ -413,6 +465,7 @@ void PackJob::run() {
         cv_.notify_all();
         for (auto& e : encoders_) e.join();
         encoders_.clear();
+        drop_made();
 
         const bool cancelled = cancel_;
         if (had_record || !material_record_.empty()) write_material_record(options_.pack_dir, material_record_);
@@ -447,6 +500,7 @@ void PackJob::run() {
         cv_.notify_all();
         for (auto& t : encoders_) t.join();
         encoders_.clear();
+        drop_made();
         std::lock_guard lock(mutex_);
         status_.fatal = e.what();
         status_.state = JobStatus::State::Failed;
@@ -463,7 +517,10 @@ void PackJob::encoder(unsigned index, unsigned count) {
                 cv_.wait_for(lock, std::chrono::milliseconds(200));
             cv_.wait(lock, [&] { return cancel_ || !made_.empty() || (reading_done_ && in_gpu_ == 0); });
             if (made_.empty() || cancel_) {
-                if (cancel_) made_.clear();
+                if (cancel_) {
+                    for (const auto& dropped : made_) release_bytes(dropped->bytes);
+                    made_.clear();
+                }
                 return;
             }
             item = std::move(made_.front());
@@ -503,7 +560,10 @@ void PackJob::encoder(unsigned index, unsigned count) {
                 break;
             }
         }
-        std::lock_guard lock(mutex_);
+        item->outputs = {};
+        item->sources.reset();
+        std::unique_lock lock(mutex_);
+        release_bytes(item->bytes);
         if (!error.empty()) {
             note_error(display_name(item->info) + ": " + error);
             ++status_.failures;
@@ -516,6 +576,8 @@ void PackJob::encoder(unsigned index, unsigned count) {
         status_.bytes_written += bytes;
         status_.texels_done += static_cast<double>(item->info.width) * item->info.height *
                                static_cast<double>(item->planned);
+        lock.unlock();
+        cv_.notify_all(); // (the reader waits for room in the budget)
     }
 }
 

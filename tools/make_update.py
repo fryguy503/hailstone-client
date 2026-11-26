@@ -5,7 +5,8 @@ Run once for each platform's installed folder (cmake --install ... --prefix dist
 plugins' components installed into the same folder), with the same --out for every platform of a release; then
 sign the manifest once with tools/hailstone_sign and upload everything in --out to the release.
 
-usage: tools/make_update.py --version 0.2.0-alpha --platform linux-x64 --dist dist/hailstone [--notes URL] --out release/
+usage: tools/make_update.py --version 0.2.0-alpha --platform linux-x64 --dist dist/hailstone [--notes URL]
+       [--key update-key.pub] --out release/
 
 The whole folder, the browser and the plugins included, becomes one zip, hailstone-<version>-<platform>.zip: the
 download a player unpacks into a folder of their own, and the manifest's one package (`core`) the updater installs.
@@ -13,6 +14,9 @@ Its names have no top folder, as the updater wants them. Files and folders whose
 A symbolic link is stored as the file or folder it points to, which must lie inside --dist (a link out of it, or to a
 folder holding it, stops the tool). --out may not lie inside --dist. The zip is made the same way each time (sorted, dated
 1980-01-01, the files' Unix permissions).
+The binary at the top of --dist must hold the release key's public half (--key, by default update-key.pub at the top
+of the tree, as CMake's HAILSTONE_UPDATE_KEY embeds it): a build configured with another key, or none, would never
+take the next release's update, so it stops the tool.
 Existing package lines of other platforms in --out/hailstone-update.txt are kept; this platform's are replaced.
 """
 import argparse
@@ -28,7 +32,7 @@ VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(0|[1-9]\d*|\d
 WORD = re.compile(r"^[a-z0-9_-]{1,64}$")
 # What an update may never write (app/update_install.cpp is_player_path); kept out of packages here too.
 PLAYER_FOLDERS = {"update", "servers", "logs", "cache", "screenshots", "bug-reports", "maps", "scripts", "textures",
-                  "web", "addons", "tools", "ui-data", "ui-addons"}
+                  "web", "addons", "tools", "upscalers", "ui-data", "ui-addons"}
 PLAYER_FILES = {"hailstone.ini", "hailstone-windows.ini", "notes.txt"}
 
 
@@ -133,6 +137,25 @@ def digest(path):
     return h.hexdigest()
 
 
+def read_key(path):
+    """The release key's public half: the first line of 64 hex digits in `path` (update-key.pub's format)."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if re.fullmatch(r"[0-9a-fA-F]{64}", line.strip()):
+                    return line.strip()
+    except OSError as e:
+        sys.exit(f"--key {path}: {e.strerror}")
+    sys.exit(f"--key {path}: no public key (64 hex digits on a line of its own)")
+
+
+def binary_has_key(path, key):
+    """Whether the binary at `path` holds `key` as the text CMake compiles in (app/updater.cpp HAILSTONE_UPDATE_KEY)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    return re.search(re.escape(key.encode("ascii")), data, re.IGNORECASE) is not None
+
+
 def check_notes(url):
     """The release page: an http(s) address on one line of the manifest, no blanks or control characters."""
     if (not url.startswith(("https://", "http://")) or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in url)
@@ -147,6 +170,8 @@ def main():
     ap.add_argument("--platform", required=True, help="linux-x64, linux-arm64, windows-x64, macos-arm64 ...")
     ap.add_argument("--dist", required=True, help="the installed client folder, its plugins included")
     ap.add_argument("--notes", default="", help="the release's page")
+    ap.add_argument("--key", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "update-key.pub"),
+                    help="the release key's public half the binary must hold (default: update-key.pub)")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     if not VERSION.match(a.version):
@@ -155,13 +180,19 @@ def main():
         sys.exit(f"{a.platform}: not a platform name")
     if a.notes:
         check_notes(a.notes)
+    key = read_key(a.key)
     if within(a.out, a.dist):
         sys.exit(f"--out {a.out} is inside --dist {a.dist}: its zips and manifest would go into the download")
     os.makedirs(a.out, exist_ok=True)
 
     everything = files_under(a.dist)
-    if not any(n in ("hailstone", "hailstone.exe") for n in everything):
+    binaries = [n for n in everything if n in ("hailstone", "hailstone.exe")]
+    if not binaries:
         sys.exit(f"{a.dist}: no hailstone binary at its top")
+    for name in binaries:
+        if not binary_has_key(os.path.join(a.dist, name), key):
+            sys.exit(f"{os.path.join(a.dist, name)} does not hold the release key of {a.key}: it was built with another "
+                     "HAILSTONE_UPDATE_KEY (or none), and would never take an update signed with that key")
     file = f"hailstone-{a.version}-{a.platform}.zip"
     make_zip(os.path.join(a.out, file), a.dist, everything)
     packages = [("core", file, "")]  # (component, file, needs)

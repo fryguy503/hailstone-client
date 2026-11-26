@@ -243,6 +243,23 @@ std::int32_t call_ret(const Json& in, const char* fn) {
     return c ? i32(*c, "ret") : 0;
 }
 
+// The recorder's SSE float arithmetic (addss, subss, mulss): a NaN result is the first NaN operand, quieted, or x86's
+// default NaN (0xffc00000) when neither operand is one. ARM's default NaN is positive, so it is set here.
+float sse_result(float r, float x, float y) {
+    if (!std::isnan(r)) return r;
+    float n = std::isnan(x) ? x : y;
+    std::uint32_t b = 0xffc00000u;
+    if (std::isnan(n)) {
+        std::memcpy(&b, &n, 4);
+        b |= 0x00400000u;
+    }
+    std::memcpy(&r, &b, 4);
+    return r;
+}
+float sse_add(float x, float y) { return sse_result(x + y, x, y); }
+float sse_sub(float x, float y) { return sse_result(x - y, x, y); }
+float sse_mul(float x, float y) { return sse_result(x * y, x, y); }
+
 // A float loaded onto the FPU (fld quiets a signalling NaN).
 X87 st_value(float f) {
     if (is_signalling(f)) {
@@ -1324,11 +1341,7 @@ std::map<std::string, Checker> checkers() {
             double cos(float angle) override { return angle; }
             double sin(float angle) override { return angle; }
             double vf0(float value) override { return value; }
-            // SSE addss: a NaN result is the first NaN operand, quieted.
-            static float add(float x, float y) {
-                if (std::isnan(x) || std::isnan(y)) return static_cast<float>(st_value(std::isnan(x) ? x : y).v);
-                return x + y;
-            }
+            static float add(float x, float y) { return sse_add(x, y); }
             void add_push(float p[3]) override {
                 p[0] = add(p[0], f32(answers, "vf4_adds_y"));
                 p[1] = add(p[1], f32(answers, "vf4_adds_x"));
@@ -1468,12 +1481,12 @@ std::map<std::string, Checker> checkers() {
                 for (int k = 0; k < 3; ++k) {
                     volatile float fa_ = from[static_cast<std::size_t>(k)], fb = to[static_cast<std::size_t>(k)];
                     if (off) {
-                        volatile float sum = fa_ + o[static_cast<std::size_t>(k)];
+                        volatile float sum = sse_add(fa_, o[static_cast<std::size_t>(k)]);
                         r.position[static_cast<std::size_t>(k)] = sum;
                     } else if (t > 0.0f && t < 1.0f) {
-                        volatile float d = fb - fa_;
-                        volatile float p = d * t;
-                        volatile float sum = fa_ + p;
+                        volatile float d = sse_sub(fb, fa_);
+                        volatile float p = sse_mul(d, t);
+                        volatile float sum = sse_add(fa_, p);
                         r.position[static_cast<std::size_t>(k)] = sum;
                     } else {
                         r.position[static_cast<std::size_t>(k)] = to[static_cast<std::size_t>(k)];

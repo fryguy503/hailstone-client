@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "app/movement_test.h"
 #include "game/mechanics/movement.h"
 #include "game/mechanics/physics.h"
 #include "net/movement_packets.h"
@@ -1126,4 +1127,25 @@ TEST_CASE("the jump's crouch window: the duck track's length + 1, at most 500 (0
     CHECK_FALSE(ev.jumped);
     ev = m.controls(in, ch, 2300);
     CHECK(ev.jumped);
+}
+
+TEST_CASE("--move-test: a spec with a number that is not finite runs no test") {
+    using hailstone::app::parse_movement_test;
+    auto walk = parse_movement_test("walk:90:2@1,2,3+trace");
+    CHECK(walk.kind == "walk");
+    CHECK(walk.walk_degrees == 90.0f);
+    CHECK(walk.walk_secs == 2.0f);
+    REQUIRE(walk.start);
+    CHECK(walk.start->z == 3.0f);
+    CHECK(walk.trace);
+    CHECK(parse_movement_test("fall:40").height == 40.0f);
+    CHECK(parse_movement_test("wander:10:7").wander_seed == 7u);
+    for (const char* bad : {"fall:nan", "fall:inf", "walk:nan", "walk:90:inf", "wander:-inf", "speed@nan,0,0",
+                            "jump@0,0,inf"}) {
+        INFO(bad);
+        auto s = parse_movement_test(bad);
+        CHECK(s.kind.empty());
+        CHECK_FALSE(s.start);
+    }
+    CHECK(parse_movement_test("nonsense").kind.empty());
 }

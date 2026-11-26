@@ -153,7 +153,7 @@ void AnimatedObjects::near(const glm::vec3& lo, const glm::vec3& hi, std::vector
         for (std::uint32_t i = 0; i < parts_.size(); ++i) out.push_back(i); // a huge query: every part
         return;
     }
-    out = big_;
+    out.assign(big_.begin(), big_.end());
     for (std::int32_t x = cx0; x <= cx1; ++x)
         for (std::int32_t y = cy0; y <= cy1; ++y)
             if (auto it = grid_.find(cell_key(x, y)); it != grid_.end()) out.insert(out.end(), it->second.begin(), it->second.end());
@@ -164,7 +164,7 @@ void AnimatedObjects::near(const glm::vec3& lo, const glm::vec3& hi, std::vector
 bool AnimatedObjects::sweep_sphere(SphereSweep& sweep) const {
     if (parts_.empty()) return false;
     const glm::vec3 a = sweep.start, b = sweep.end;
-    std::vector<std::uint32_t> candidates;
+    thread_local std::vector<std::uint32_t> candidates; // (kept from call to call: several a movement step)
     near(glm::min(a, b) - sweep.radius, glm::max(a, b) + sweep.radius, candidates);
     bool hit = false;
     glm::mat4 transform, inverse;
@@ -178,7 +178,7 @@ bool AnimatedObjects::sweep_sphere(SphereSweep& sweep) const {
 
 std::optional<float> AnimatedObjects::floor_below(const glm::vec3& at, float step_up) const {
     if (parts_.empty()) return std::nullopt;
-    std::vector<std::uint32_t> candidates;
+    thread_local std::vector<std::uint32_t> candidates; // (kept from call to call: several a movement step)
     near(at, at, candidates);
     std::optional<float> best;
     glm::mat4 transform, inverse;
@@ -195,7 +195,7 @@ std::optional<float> AnimatedObjects::floor_below(const glm::vec3& at, float ste
 
 bool AnimatedObjects::blocks(const glm::vec3& a, const glm::vec3& b) const {
     if (parts_.empty()) return false;
-    std::vector<std::uint32_t> candidates;
+    thread_local std::vector<std::uint32_t> candidates; // (kept from call to call: several a movement step)
     near(glm::min(a, b), glm::max(a, b), candidates);
     glm::mat4 transform, inverse;
     for (std::uint32_t i : candidates) {
@@ -208,7 +208,7 @@ bool AnimatedObjects::blocks(const glm::vec3& a, const glm::vec3& b) const {
 
 std::optional<float> AnimatedObjects::visual_surface_below(const glm::vec3& at) const {
     if (parts_.empty()) return std::nullopt;
-    std::vector<std::uint32_t> candidates;
+    thread_local std::vector<std::uint32_t> candidates; // (kept from call to call: several a movement step)
     near(at, at, candidates);
     std::optional<float> best;
     for (std::uint32_t i : candidates) {

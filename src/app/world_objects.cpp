@@ -419,21 +419,33 @@ void WorldObjects::update(const net::GameConnection& conn) {
     // Ground objects.
     for (const auto& o : conn.ground_objects()) {
         auto [it, fresh] = objects_.try_emplace(o.drop_id);
-        Placed& p = it->second;
+        PlacedObject& p = it->second;
         p.seen = serial;
-        if (fresh) {
+        // An OP_GroundSpawn may replace the record under a drop id without a removal first: another name builds the
+        // model again, another position, heading, tilt or size places it again.
+        const game::GroundObjectChange change = fresh ? game::GroundObjectChange{true, true}
+                                                      : game::ground_object_change(p.source, o);
+        if (!change.model && !change.placement) continue;
+        if (!fresh) note_flora(p); // where it stood
+        if (change.model) {
             // The OP_GroundSpawn handler (@0x4d050f) creates the actor with CreateActor's fallbacks on: a model it
             // lacks shows as IT63 (or RED_BLOB). Every definition in the table is named "..._ACTORDEF", so a long
             // name without that ending finds none.
             std::string def = upper(game::create_actor_definition(o.name));
-            p.model = def.ends_with("_ACTORDEF") ? model_for(def) : nullptr;
+            const Model* model = def.ends_with("_ACTORDEF") ? model_for(def) : nullptr;
             for (const char* fallback : game::kCreateActorFallbacks)
-                if (!p.model) p.model = model_for(fallback);
+                if (!model) model = model_for(fallback);
+            if (!fresh && p.model != model) {
+                p.emitter_actor = 0;
+                if (p.model || model) ++visual_generation_;
+            }
+            p.model = model;
             p.solid = false; // items and containers on the ground do not block (an assumption)
-            glm::mat4 t = game::ground_object_transform(o);
-            place(p, t, std::isfinite(o.size) && o.size > 0.0f ? o.size : 1.0f);
-            note_flora(p);
         }
+        p.source = o;
+        glm::mat4 t = game::ground_object_transform(o);
+        place(p, t, std::isfinite(o.size) && o.size > 0.0f ? o.size : 1.0f);
+        note_flora(p);
     }
     std::erase_if(objects_, [&](const auto& kv) {
         const bool gone = kv.second.seen != serial;

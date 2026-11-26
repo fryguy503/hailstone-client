@@ -979,6 +979,73 @@ TEST_CASE("Plugin UI: what pack functions return and pass to a plugin comes as v
     CHECK(s.run("plugin:A", "return getmetatable('')") == "false");
 }
 
+// What a plugin hands the pack's code (a pack function's arguments, what its callback returns or raises) comes to the
+// pack as what it leaves in a shared table does: the pack that keeps it and uses it later, as the player, runs none of
+// the plugin's code with the player's authority, so a client function the plugin took raw from a pack table (whose
+// capability gate trusts the player's code) is never called as the player.
+TEST_CASE("Plugin UI: what a plugin hands the pack's functions cannot run as the player later") {
+    SandboxUi s;
+    s.add_pack_file("keep.lua", "RAW = { who = hs.Who }\n"
+                                "KEPT = {}\n"
+                                "function Keep(v) KEPT[#KEPT + 1] = v end\n"
+                                "function KeepFn(f) KEPT.fn = f end\n"
+                                "function Id(v) return v end\n"
+                                "function CallBack(f) local ok, e = pcall(f) KEPT.err = e return ok end\n");
+    s.lua->add_ui_api([](lua_State* L) {
+        lua_pushcfunction(L, [](lua_State* S) -> int {
+            const std::string tag(ui::lua::LuaUi::caller_tag());
+            lua_pushstring(S, tag.empty() ? "pack" : tag.c_str());
+            return 1;
+        });
+        lua_setfield(L, -2, "Who");
+    });
+    s.caps["plugin:A"] = plugin::kCapAll;
+    s.add_folder("plugin:A");
+    s.frame();
+
+    CHECK(s.run("plugin:A", R"(
+      local who = RAW.who -- the client's function itself, as push_in gives a C function
+      SEEN = {}
+      local function note(what) SEEN[#SEEN + 1] = what .. ':' .. who() end
+      local mt = {
+        __index = function() note('index') end,
+        __eq = function() note('eq') return true end,
+        __lt = function() note('lt') return true end,
+        __le = function() note('le') return true end,
+        __concat = function() note('concat') return 'c' end,
+        __call = function() note('call') end,
+        __tostring = function() note('tostring') return 't' end,
+        __len = function() note('len') return 1 end,
+      }
+      Keep(setmetatable({}, mt))
+      Keep(setmetatable({}, mt))
+      Keep({ cb = function() note('cb') end })
+      KeepFn(function() note('fn') return { inner = function() note('inner') end } end)
+      CallBack(function() error(setmetatable({}, mt)) end)
+      local mine = {}
+      return tostring(rawequal(Id(mine), mine))
+    )") == "true");
+    CHECK(s.run("", R"(
+      local a, b, c = KEPT[1], KEPT[2], KEPT[3]
+      local _ = a.anything
+      pcall(function() return a == b end)
+      pcall(function() return a < b end)
+      pcall(function() return a <= b end)
+      pcall(function() return a .. 'x' end)
+      pcall(function() return 'x' .. KEPT.err end)
+      pcall(function() return a() end)
+      pcall(tostring, a)
+      pcall(tostring, KEPT.err)
+      local _ = #a
+      c.cb()
+      KEPT.fn().inner()
+      return 'done'
+    )") == "done");
+    // Each of the plugin's code that ran, ran as the plugin; the operators a view has none of ran nothing.
+    CHECK(s.run("plugin:A", "return table.concat(SEEN, ' ')") ==
+          "index:plugin:A len:plugin:A cb:plugin:A fn:plugin:A inner:plugin:A");
+}
+
 // A plugin's code allocates up to the limit less the pack's reserve, so what it holds leaves the pack room.
 TEST_CASE("Plugin UI: what a plugin holds leaves the pack's code memory") {
     SandboxUi s;

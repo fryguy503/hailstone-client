@@ -9,10 +9,12 @@
 #include <string>
 #include <vector>
 
+#include "game/appearance.h"
 #include "game/inventory.h"
 #include "mock_server/harness.h"
 #include "net/packet_io.h"
 #include "net/player_packets.h"
+#include "net/zone_packets.h"
 
 using namespace hailstone;
 using namespace hailstone::test;
@@ -73,6 +75,7 @@ TEST_CASE("bandolier swap: a weapon with no room to go back cancels the swap; wi
     CHECK(std::find(lines.begin(), lines.end(), "NO ROOM FOR THE BANDOLIER") != lines.end());
     rig.run_for(std::chrono::milliseconds(30));
     CHECK(swaps_sent(rig.server, 1) == 0);
+    CHECK(MockEqServer::count(rig.server.zone_log, net::Op::WearChange) == 0);
 
     // The Dagger in the last general slot: pulling it makes the room the Cudgel needs, so both swaps go through and
     // the two weapons trade places each time.
@@ -85,6 +88,68 @@ TEST_CASE("bandolier swap: a weapon with no room to go back cancels the swap; wi
     CHECK(id_at(conn, 13) == 1001);
     CHECK(id_at(conn, net::kSlotGeneral10) == 1002);
     REQUIRE(rig.until([&] { return swaps_sent(rig.server, 1) == 1 && swaps_sent(rig.server, 0) == 1; }));
+}
+
+TEST_CASE("bandolier swap: publishes the equipped primary and cleared secondary after activation") {
+    MockConfig config = MockConfig::standard();
+    auto dagger = make_item(1002, "Dagger", net::kSlotPrimary);
+    dagger.id_file = "IT2";
+    config.characters.front().inventory = {dagger};
+    Rig rig(std::move(config));
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    REQUIRE(conn.bandolier_create(0, "Dagger only"));
+
+    // Equip a different primary and a shield, and put the saved dagger in general inventory.
+    auto cudgel = make_item(1001, "Cudgel", net::kSlotPrimary);
+    cudgel.id_file = "IT63";
+    auto shield = make_item(1003, "Shield", net::kSlotSecondary);
+    shield.id_file = "IT200";
+    dagger.slot = ItemSlot::possessions(net::kSlotGeneral1);
+    for (const net::Item& item : {cudgel, shield, dagger}) rig.server.item_packet(net::kItemPacketCharInventory, item);
+    REQUIRE(rig.until([&] {
+        return id_at(conn, net::kSlotPrimary) == cudgel.id && id_at(conn, net::kSlotSecondary) == shield.id &&
+               id_at(conn, net::kSlotGeneral1) == dagger.id &&
+               MockEqServer::count(rig.server.zone_log, net::Op::Bandolier) == 1;
+    }));
+    const auto& appearance = conn.world().player()->appearance;
+    REQUIRE(appearance.material[game::kSlotSecondary] == 200);
+    CHECK(MockEqServer::count(rig.server.zone_log, net::Op::WearChange) == 0);
+    rig.server.zone_log.clear();
+
+    REQUIRE(conn.bandolier_activate(0));
+    CHECK(id_at(conn, net::kSlotPrimary) == dagger.id);
+    CHECK(id_at(conn, net::kSlotSecondary) == 0);
+    CHECK(appearance.material[game::kSlotPrimary] == 2);
+    CHECK(appearance.material[game::kSlotSecondary] == 0);
+    REQUIRE(rig.until([&] {
+        return MockEqServer::count(rig.server.zone_log, net::Op::WearChange) >= 2 &&
+               MockEqServer::count(rig.server.zone_log, net::Op::Bandolier) >= 1;
+    }));
+
+    std::vector<const net::AppPacket*> sent;
+    for (const auto& packet : rig.server.zone_log) {
+        if (net::is_op(packet, net::Op::Bandolier) || net::is_op(packet, net::Op::WearChange)) sent.push_back(&packet);
+    }
+    // PcZoneClient::BandolierSwap @0x585aa0: SetHeldModel 7, then 8, then OP_Bandolier.
+    REQUIRE(sent.size() == 3);
+    REQUIRE(net::is_op(*sent[0], net::Op::WearChange));
+    REQUIRE(net::is_op(*sent[1], net::Op::WearChange));
+    REQUIRE(net::is_op(*sent[2], net::Op::Bandolier));
+    auto swap = net::decode_bandolier(*sent[2]);
+    REQUIRE(swap);
+    CHECK(swap->action == net::kBandolierSet);
+    CHECK(swap->number == 0);
+    auto primary = net::decode_wear_change(*sent[0]);
+    auto secondary = net::decode_wear_change(*sent[1]);
+    REQUIRE(primary);
+    REQUIRE(secondary);
+    CHECK(primary->spawn_id == conn.world().player_id);
+    CHECK(primary->slot == game::kSlotPrimary);
+    CHECK(primary->armor.material == 2);
+    CHECK(secondary->spawn_id == conn.world().player_id);
+    CHECK(secondary->slot == game::kSlotSecondary);
+    CHECK(secondary->armor.material == 0);
 }
 
 TEST_CASE("bandolier swap: with the general slots full, a returned weapon goes into the first bag that takes it") {

@@ -43,7 +43,7 @@ time. They run on plain data (`CharacterSheet`) and are covered by recorded test
 | `attack_rules.*` | who may attack whom (the PvP rules) through `AttackQueries`; live in `game/attack_check.*` |
 | `spell_gems.*` | memorising, linked timers, the usable-slot rule, gem readiness; see "Spell gems and buff stacking" |
 | `find_affect_slot.*` | buff slot choice and stacking over `AffectQueries`; live callees `game/hit_landing.*` |
-| `shown_stats.*` | the AC and ATK the inventory window shows (label cases 0x15 / 0x16), shared with the item comparison (docs/item-compare.md) |
+| `shown_stats.*` | the AC and ATK the inventory window shows (label cases 0x15 / 0x16; 0x580330 and 0x584f60, whose x 1000 wraps in 32 bits before the divide by 847 / 744), shared with the item comparison (docs/item-compare.md) |
 | `sheet_builder.*` | the sheet from the live connection; see note 4 |
 
 Notes:
@@ -94,6 +94,9 @@ donation receipt when the cursor is empty. That receipt uses the server's reply.
   (behaviour flags 0x24/0x84/0x44 | 4). `Fpu` rounds every
   result as the FPU does at either precision; `-ffp-contract=off` stops fused operations. Example: drunkenness 64 and
   INT 150 give 102 at 24 bits, 101 at 53.
+- An invalid operation on non-NaN operands (inf - inf, 0 * inf, 0 / 0, a negative square root) gives the x87's
+  default NaN, the negative quiet NaN `0xfff8...` (`0xffc00000` stored as a float). `Fpu` sets it explicitly, since
+  ARM's own default NaN is positive; a NaN operand passes through as on x86-64 (the first one, quieted).
 - A deliberate difference where the original never ends: shadow step (SPA 379) walks its distance down by 2 as a float
   while above 5; from 2^25 up `distance - 2` can round back to `distance` and the original loops for ever. Hailstone
   stops at the first step that leaves the distance unchanged; every base that ends in the original ends at the same
@@ -674,9 +677,13 @@ swarms, so those cannot be attributed; names and target-cycling flags do not est
   the turn snaps below 1, the gap below 4, 9 above 128, else 4; the bands). Its autorun / run mode writes go to the
   movement state.
 
+**Deliberate change:** while swimming on a clear line, stock and enhanced follow steer the normal swim thrust toward
+the leader's reported spawn Z. Manual camera pitch and avatar height differences do not set the swim direction.
+Within the horizontal stop band, the follower can rise or dive in place until the depths are within one unit.
+
 **Deliberate change (switchable):** the navigation mesh helps /follow where the straight line fails
 (`docs/navigation.md` "/follow"): the mesh's path steers with the same bands measured along it, and the follow keeps
-on to 400 instead of 200. `hailstone.ini` `nav.follow=0` or `/nav option follow off` gives the original's.
+on to 400 instead of 200. `hailstone.ini` `nav.follow=0` or `/nav option follow off` disables the mesh help.
 
 ## Listener, music, spell sounds and spell gems
 
@@ -807,6 +814,9 @@ client refuses another player's request as busy, since on EQEmu the late answer 
 A deliberate difference from the original, which sends one OP_MoveCoin per move: a same-denomination move of more
 than 2^24 coins goes as two packets, the first rounded down to 24 significant bits. EQEmu's OPMoveCoin scales the
 amount through a float even when the coin type stays the same, so one packet could move a slightly different amount.
+
+When another player offers an item, its name in the trade notification is a chat link you can click to inspect it.
+Updating the stack count of the same item in the same slot leaves the existing notification in place.
 
 On the merchant's Parcels page (0x698290, `GameConnection::parcel_coin_button`) the button is first outlined (+0x259,
 0x6909a0) and the merchant's item and row are cleared (0x6f2120); any later SelectSlot clears the outline. The
@@ -1156,7 +1166,13 @@ Also Hailstone's own: selected rows can be sold, donated as tribute, destroyed o
 - Withdraw, at an open bank: each item goes through the cursor into the first free general slot, else a bag with room
   (`stow_cursor_in_packs`, never equipped). A bag and its children move once. Closing the bank stops the job.
 - Destroy: each item is destroyed from the cursor (OP_MoveItem to nowhere), with one confirmation for the batch. A
-  non-empty bag and No Destroy items are left out, rechecked just before each pickup.
+  non-empty bag and No Destroy items are left out, rechecked just before each pickup. The client owns the confirmation:
+  the Modern pack's own window asks it; any other caller of `hs.BulkItems("destroy", ...)` gets the client's question
+  with the count and how many are No Trade or attuned, and the job starts on Yes only if the same items (slot, ID,
+  serial, quantity) are still there. The client draws that question in a window of its own under any pack, which no Lua
+  code sees or can answer, so it appears even when an interface draws no ConfirmationDialogBox and no script can press
+  its Yes. Options' Fast Item Destroy skips the client's
+  question, as it does the single item's.
 
 The window shows beforehand how many items each action takes. A job stops, with a chat line and the cursor put away,
 if the items change under it. The selection records each item's ID, serial and quantity, which must still match, so a
@@ -1325,6 +1341,27 @@ Inspect. Each row runs its command's path (`/invite`, `/raidinvite`, the trade r
 Options > General "Player Right-Click Menu" (hailstone.ini `mouse.player_menu`, on by default) switches it off. With
 context menus off (the ContextMenus option, or the player down) the original's right click happens; the gamepad's
 Interact keeps the original's.
+
+#### Right click on an NPC
+
+With **Right-Click to Consider** enabled, a mouse right click on a targetable NPC without another right-click action
+uses the same Consider request and chat reply as `/consider`. It considers the clicked NPC and preserves the current
+target, as in RoF2 (CEverQuest::RightClickedOnPlayer, call at 0x537cf8). Merchant, banker and other NPC interactions,
+boat controls and corpse looting take priority. Click-to-move still walks into range before acting.
+
+The setting is on by default and saved in `hailstone.ini` as `mouse.right_click_consider`. In Modern it is under
+Options > General > Interface. In Gamepad it is under Options > Interface and applies to the mouse. The controller's
+Interact button and the `/click right target` command keep their existing interactions.
+
+RoF2 has no such switch: its right click always ends in a consider when nothing else took the click, so the switch
+is Hailstone's. RoF2 also considers in cases this client does not yet:
+
+- a right click on a player that is not a trader considers them, then sends the inspect request when `/toggleinspect`
+  is on (this client opens the player menu or inspects);
+- an interaction that fails (a merchant or banker out of range or already open, a guildmaster even after training
+  opens, a corpse the loot request refuses) falls through to the consider;
+- the USE key goes through the same function with a range check (consider within 20, else eqstr 0x7c); the gamepad's
+  Interact and `/click right target` here do not consider.
 
 ## Death, teleports, the respawn at bind and camping
 
@@ -2001,6 +2038,16 @@ Previews never enter the inventory and no success is reported locally: the serve
 A refusal changes nothing (EQEmu prints "Transfer Failed"). RoF2 clears both selections after sending (`0x6b00b0`).
 Zoning or disconnecting closes the window.
 
+#### Real estate: transferring a plot
+
+The packets and the original's checks are in docs/protocol/rof2-packets.md "Real estate". The Transfer button (the
+purchase and manage windows, `RealEstatePurchaseWnd` and `RealEstateManageWnd` in `app/lua_ui_realestate.cpp`) asks for a confirmation naming the current target.
+**Hailstone change:** the question keeps that target's spawn id and name, and its Yes sends the transfer only while the
+same spawn, with the same name, is still targeted (`GameConnection::re_transfer`); otherwise nothing is sent and the
+refusal is logged. RoF2's RealEstate_SendTransferPlot reads the target as it is at the Yes, so a target changed while
+the question was up received the plot. Not switchable: sending a plot to a player the question did not name is not
+behaviour worth keeping.
+
 #### Other rules
 
 - Stats-disabled flags (`game::update_stats_disabled`): from the UseItem (0x13) and Ornament (0x15) game features and
@@ -2017,6 +2064,17 @@ Skill 111, `slam_innate`. A deliberate change: Hailstone takes the innate Slam f
 (`app::skill_race`), as EQEmu does (Client::OPCombatAbility checks `GetRace()`). The combat lists gain or lose Slam
 with an illusion, and Bash without a shield uses the Slam path; both send `DoAttack(100, 10)`. The original uses the
 profile race (EQ_Character::InitInnates).
+
+That attack still goes through `CanUseCombatSkill` (@0x5a2f10), which lets Bash pass without the skill or a shield
+only when the spawn's `GetRace` (vtable +0x88, 0x58b4e0: the raw race an illusion sets) is 2, 9 or 10. The citizen
+races 90, 92 and 93 have the innate Slam but not that pass, so in the original their Slam needs Bash and a shield.
+
+A second deliberate change: Slam never needs a shield. Under a 90, 92 or 93 form Hailstone's Slam (and Bash, which
+goes the Slam way there) needs only the Bash skill (`can_use_combat_skill(..., slam)`): a character with the skill
+slams shieldless, one without it sends nothing. That is what stock EQEmu accepts: `Client::OPCombatAbility` bypasses
+the skill check only for races 2, 9 and 10 by `GetRace()` and checks no shield (it uses one only for the damage).
+Bash by a form without the innate Slam keeps the original's rule: a shield in the secondary slot, one of the primary
+items 11050, 10099 and 14383, or a two-hander (item type 1, 4 or 35) with SPA 226, else 12394.
 
 #### More Hot Button States
 
@@ -2463,6 +2521,8 @@ The blood spurt (`PlayerClient_SpawnBloodSpurt` @0x58f1c0) goes with the player'
 
 Classic (WLD) models take old-style numbers (C01..T09), with the old-style movement and idle choice, the sitting
 substitutions, the replacement for a missing clip, and a 100 ms cross-fade.
+For classic movement, Hailstone treats one-frame walk and run clips as missing so the animated gait can take over.
+South Karana's classic gnolls use their run clip while walking because their walk clip is a single pose.
 
 New-style models (EQG races) take sequence codes 0x4f..0xb6 (old-style numbers go through the old-to-new map), with
 the movement selection while moving, the idle choice while still, and the track search:
@@ -2602,8 +2662,8 @@ Which group plays what:
     or NPC bodies.
   - Full remote collision correction and the physical-radius gap remain open.
 - Other spawns' FeetWet / BodyWet (+0xa1 / +0xa2) are probed with each step (`WorldState::smooth`), so they swim and
-  tread water. A swimming player's depth comes from its position updates. A floor below the swimmer does not lower
-  that position between updates, so follow's pitch tracks the swimmer's depth.
+  tread water. A swimming player's depth comes from position updates, including at the surface when only its feet
+  are wet and the floor below would put its body underwater. Follow uses that depth to steer its swim pitch.
 
 ## Character appearance
 

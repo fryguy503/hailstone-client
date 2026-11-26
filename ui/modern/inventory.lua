@@ -32,12 +32,15 @@ local GENERAL_FIRST = 23
 
 local SLOT, GAP = 46, 6
 local LEFT_W = 5 * SLOT + 4 * GAP
-local STATS_W = 220
+local STATS_W = 260
 local W = LEFT_W + 18 + STATS_W
 local HEADER_H, TABS_H = 46, 28
 local BODY_H = 4 * (SLOT + GAP) + 10 + SLOT + 14
 local FOOT_H = SLOT + 12 + 34 + 2 * 32 + 2
 local H = HEADER_H + TABS_H + BODY_H + FOOT_H
+-- The window is resizable, no smaller than W x its height (OPTS.size): the pages get the width and the extra height
+-- (bodyW, bodyH: design pixels, set each frame by body).
+local bodyW, bodyH = W, BODY_H
 
 local page = "character" -- character, stats, bandolier, currency
 -- the game's tab box pages (it fills some only while shown); the Bandolier page is Hailstone's, the game's Character
@@ -104,8 +107,8 @@ local function characterPage(x, y, s)
 
   -- the numbers
   local sx = x + (LEFT_W + 18) * s
-  local sw = STATS_W * s
-  ui.DrawRectFilled(sx - 9 * s, y - 2 * s, sx - 8 * s, y + BODY_H * s - 14 * s, C.ink[1], C.ink[2], C.ink[3], 0.06)
+  local sw = (bodyW - LEFT_W - 18) * s
+  ui.DrawRectFilled(sx - 9 * s, y - 2 * s, sx - 8 * s, y + bodyH * s - 14 * s, C.ink[1], C.ink[2], C.ink[3], 0.06)
   local yy = y
   yy = yy + pool(sx, yy, sw, s, "Health", 17, 18, C.hp)
   local _, _, manaRaw = API.character.Gauge(2)
@@ -148,7 +151,7 @@ local function currencyPage(x, y, s)
   for _, c in ipairs(list) do if (c.count or 0) > 0 then held = held + 1 end end
   T.Text(x, y, string.format("%d held", held), C.muted, T.font.small)
   local tw = T.TextSize("Show all", T.font.small)
-  if T.Button("##missing", x + W * s - tw - 30 * s, y - 3 * s, x + W * s, y + 21 * s, s, "Show all",
+  if T.Button("##missing", x + bodyW * s - tw - 30 * s, y - 3 * s, x + bodyW * s, y + 21 * s, s, "Show all",
       { primary = showMissing, tooltip = "Also the currencies you have none of" }) then
     showMissing = not showMissing
   end
@@ -159,7 +162,7 @@ local function currencyPage(x, y, s)
   local _, _, sel = API.windows.ListInfo(WINDOW, CURRENCY_LIST)
   local wx, wy = ui.GetWindowPos()
   ui.SetCursorPos(x - wx, y + 30 * s - wy)
-  ui.BeginChild("##currencies", W * s, (BODY_H - 30 - 54) * s, false)
+  ui.BeginChild("##currencies", bodyW * s, (bodyH - 30 - 54) * s, false)
   local cw = ui.GetContentRegionAvail()
   local cols = 2
   local cardW = (cw - (cols - 1) * 8 * s) / cols
@@ -186,14 +189,14 @@ local function currencyPage(x, y, s)
   end
   ui.EndChild()
   -- Claim and Reclaim, enabled as the game's buttons are; clear of the line over the search field (ty0 - 8)
-  local by = y + (BODY_H - 46) * s
+  local by = y + (bodyH - 46) * s
   local bw = 120 * s
   local actions = {
     { "AltCurr_CreateItemButton", "Claim", "Take the selected currency out onto the cursor as items" },
     { "AltCurr_ReclaimButton", "Reclaim", "Put the currency item you hold back into its count" },
   }
   for k, a in ipairs(actions) do
-    local bx1 = x + W * s - (#actions - k) * (bw + 6 * s)
+    local bx1 = x + bodyW * s - (#actions - k) * (bw + 6 * s)
     local enabled = API.windows.ChildState(WINDOW, a[1])
     if T.Button("##" .. a[1], bx1 - bw, by, bx1, by + 26 * s, s, a[2], { enabled = enabled == true, tooltip = a[3] }) then
       API.windows.ClickChild(WINDOW, a[1], "left")
@@ -208,7 +211,7 @@ end
 local function bandolierPage(x, y, s)
   local wx, wy = ui.GetWindowPos()
   ui.SetCursorPos(x - wx, y - wy)
-  ui.BeginChild("##bandolier", W * s, (BODY_H - 16) * s, false)
+  ui.BeginChild("##bandolier", bodyW * s, (bodyH - 16) * s, false)
   local cw, ch = ui.GetContentRegionAvail()
   local listW = math.floor(cw * 0.4)
   band.List(listW, ch)
@@ -249,7 +252,9 @@ local function kv(x, y, w, rows, s)
   local _, th = T.TextSize("Ag", T.font.small)
   for i, r in ipairs(rows) do
     if i % 2 == 0 then ui.DrawRectFilled(x - 4 * s, y - 1 * s, x + w + 4 * s, y + th + 2 * s, C.ink[1], C.ink[2], C.ink[3], 0.025, 3 * s) end
-    T.Text(x, y, r[1], C.muted, T.font.small)
+    -- a name that would run into its value is shortened (a narrow column, a long value)
+    local vw = T.TextSize(r[2] or "", T.font.small)
+    T.Text(x, y, T.Fit(r[1], math.max(w - vw - 6 * s, 0), T.font.small), C.muted, T.font.small)
     T.Text(x + w, y, r[2] or "", r[3] or C.text, T.font.small, "right")
     if r[4] then
       kvHits = kvHits + 1
@@ -287,10 +292,12 @@ end
 local function statsPage(x, y, s)
   local wx, wy = ui.GetWindowPos()
   ui.SetCursorPos(x - wx, y - wy)
-  ui.BeginChild("##stats", W * s, BODY_H * s, false)
+  ui.BeginChild("##stats", bodyW * s, bodyH * s, false)
   local cx, cy = ui.GetCursorScreenPos()
   local cw = ui.GetContentRegionAvail()
-  local colW = (cw - 24 * s) / 2
+  -- the right column (attributes, resists and the item bonuses' two columns of "current / cap") gets the larger share
+  local colW = math.floor((cw - 24 * s) * 0.4)
+  local colR = (cw - 24 * s) - colW
   local lx, rx = cx + 4 * s, cx + colW + 20 * s
   local st = API.character.Stats() or {}
   kvHits = 0
@@ -354,16 +361,20 @@ local function statsPage(x, y, s)
   if title ~= "" then table.insert(progress, 2, { "Title", title }) end
   yl = kv(lx, yl, colW, progress, s)
   -- right: attributes, resists, item bonuses
-  local yr = section(rx, cy, colW, "Attributes", s)
-  yr = statTable(rx, yr, colW, STATS, s) + 6 * s
-  yr = section(rx, yr, colW, "Resists", s)
-  yr = statTable(rx, yr, colW, RESISTS, s) + 6 * s
-  yr = section(rx, yr, colW, "Item bonuses", s)
-  local half = (colW - 16 * s) / 2
+  local yr = section(rx, cy, colR, "Attributes", s)
+  yr = statTable(rx, yr, colR, STATS, s) + 6 * s
+  yr = section(rx, yr, colR, "Resists", s)
+  yr = statTable(rx, yr, colR, RESISTS, s) + 6 * s
+  yr = section(rx, yr, colR, "Item bonuses", s)
+  local half = (colR - 16 * s) / 2
   local b1, b2 = {}, {}
+  local caps = st.bonusCaps or {}
   for i, b in ipairs(BONUSES) do
     local v, c = label(b[2])
-    local row = { b[1], v, (v ~= "0" and v ~= "") and (c or C.text) or C.faint }
+    local shown = v ~= nil and v ~= "0" and v ~= ""
+    -- RoF2's "current / cap" for the capped ones; the sum may be past the cap where the server allows it.
+    if caps[b[2]] and v and v ~= "" then v = v .. " / " .. caps[b[2]] end
+    local row = { b[1], v, shown and (c or C.text) or C.faint }
     if i <= math.ceil(#BONUSES / 2) then b1[#b1 + 1] = row else b2[#b2 + 1] = row end
   end
   local y1 = kv(rx, yr, half, b1, s)
@@ -413,15 +424,28 @@ local function vitality(x, y, w, s, gauge, name, color)
   if ui.IsItemHovered() then ui.SetTooltip(name .. ": " .. amount) end
 end
 
+-- The foot's height past FOOT_H: the vitality bars and the Shroud Progress button, when they are there.
+local function footExtra()
+  local extra = API.windows.ChildShown(WINDOW, "ShroudProgressButton") == true and 32 or 0
+  return extra + (hasVitality() and 40 or 0)
+end
+
+-- A resizable dialog's size is the window's (hud.Dialog): the contents' W x H, plus its padding (10 a side) and title
+-- bar (hud.Dialog's own allowance, 40, and a little to spare: extra height goes to the pages).
+local FRAME_W, FRAME_H = 20, 44
 local OPTS = {
-  size = function()
-    local extra = API.windows.ChildShown(WINDOW, "ShroudProgressButton") == true and 32 or 0
-    return W, H + (hasVitality() and 40 or 0) + extra
-  end,
+  size = function() return W + FRAME_W, H + FRAME_H + footExtra() end,
+  resizable = { W + FRAME_W, H + FRAME_H }, -- set each frame to the size above: never smaller than the contents
   place = function(sw, sh, w, h, s, x, y) return sw - w - 60 * s, sh / 2 - h / 2 end,
   keepTitle = true,
 }
 local function body(x, y, w, h, s)
+  -- the size the player gave the window (its contents' area, not hud.Dialog's w, h, which are raised to the window's
+  -- smallest size): the pages get the width and the extra height
+  local aw, ah = ui.GetContentRegionAvail()
+  bodyW = math.max(W, aw / s)
+  bodyH = math.max(BODY_H, ah / s - HEADER_H - TABS_H - FOOT_H - footExtra())
+  w = bodyW * s
   -- header: name, level, class, deity
   local name = label(1)
   local last = label(73)
@@ -469,17 +493,19 @@ local function body(x, y, w, h, s)
   else characterPage(x, by, s) end
 
   -- the carried slots
-  local fy = y + (HEADER_H + TABS_H + BODY_H) * s
+  local fy = y + (HEADER_H + TABS_H + bodyH) * s
   ui.DrawLine(x, fy - 8 * s, x + w, fy - 8 * s, C.ink[1], C.ink[2], C.ink[3], 0.06, 1)
   local sz = SLOT * s
-  local gap = (w - 10 * sz) / 9
+  -- the spacing they have at the window's own width, from the left: a wider window does not spread them
+  local gap = (W * s - 10 * sz) / 9
   for i = 0, 9 do
     items.InvSlot(GENERAL_FIRST + i, nil, x + i * (sz + gap), fy, sz, s, SLOT_NUMBERS[i])
   end
   local free, total = API.inventory.InventorySpace()
   local low = free <= 5
   local note = tools.Note() -- (a refusal of Sort / Stack started from a bag's window or the Advanced Inventory)
-  T.Text(x + w, fy + sz + 1 * s, note or string.format("%d / %d free", free, total),
+  -- under the slots' right end, not the window's
+  T.Text(x + 10 * sz + 9 * gap, fy + sz + 1 * s, note or string.format("%d / %d free", free, total),
     (note or low) and C.danger or C.faint, T.font.tiny, "right")
   -- coins, then the buttons
   local cy = fy + sz + 12 * s
@@ -554,5 +580,6 @@ end
 
 ui.window("Inventory", function()
   if not API.session.InGame() then return end
+  OPTS.resizable[1], OPTS.resizable[2] = OPTS.size()
   hud.Dialog(WINDOW, "Inventory", OPTS, body)
 end)

@@ -6,6 +6,8 @@
 
 #include <array>
 #include <climits>
+#include <cstdint>
+#include <cstring>
 #include <limits>
 #include <map>
 
@@ -14,6 +16,7 @@
 #include "game/mechanics/find_affect_slot.h"
 #include "game/mechanics/item_stats.h"
 #include "game/mechanics/sheet_builder.h"
+#include "game/mechanics/shown_stats.h"
 #include "game/mechanics/tables.h"
 #include "game/eq_strings.h"
 #include "game/spell_display.h"
@@ -120,6 +123,37 @@ TEST_CASE("Fpu reproduces 24-bit and 53-bit x87 rounding") {
     CHECK(Fpu::ftol(-1.9) == -1);
     CHECK(Fpu::ftol(2147483648.0) == INT_MIN);
     CHECK(Fpu::ftol(std::numeric_limits<double>::quiet_NaN()) == INT_MIN);
+}
+
+// The x87's default NaN is negative on every CPU; ARM's own is positive.
+TEST_CASE("Fpu: an invalid operation gives the x87's negative default NaN on any CPU") {
+    auto bits = [](double d) {
+        std::uint64_t b;
+        std::memcpy(&b, &d, 8);
+        return b;
+    };
+    constexpr std::uint64_t kIndefinite = 0xfff8000000000000u;
+    const double inf = std::numeric_limits<double>::infinity();
+    volatile double zero_v = 0.0; // not a constant: MSVC warns (C4723) on a division it sees is by zero
+    const double zero = zero_v;
+    for (FpuPrecision p : {FpuPrecision::Single24, FpuPrecision::Double53}) {
+        CAPTURE(static_cast<int>(p));
+        Fpu f(p);
+        CHECK(bits(f.add(inf, -inf)) == kIndefinite);
+        CHECK(bits(f.sub(inf, inf)) == kIndefinite);
+        CHECK(bits(f.mul(0.0, inf)) == kIndefinite);
+        CHECK(bits(f.div(zero, zero)) == kIndefinite);
+        CHECK(bits(f.div(-inf, inf)) == kIndefinite);
+        CHECK(bits(f.sqrt(-1.0)) == kIndefinite);
+        CHECK(bits(static_cast<double>(static_cast<float>(f.mul(0.0, inf)))) == kIndefinite);
+        // A NaN operand passes through, quieted: the first one, as SSE gives it.
+        const double pos = std::numeric_limits<double>::quiet_NaN();
+        const double neg = -pos;
+        CHECK(bits(f.add(pos, 1.0)) == bits(pos));
+        CHECK(bits(f.mul(2.0, neg)) == bits(neg));
+        CHECK(bits(f.div(pos, neg)) == bits(pos));
+        CHECK(bits(f.sqrt(pos)) == bits(pos));
+    }
 }
 
 TEST_CASE("BaseData.txt and SkillCaps.txt load as the original reads them") {
@@ -790,6 +824,27 @@ TEST_CASE("Attributes, caps, base saves and the drunk INT/WIS scaling at both pr
     CHECK(d53.stats().stats.int_ == 101);
 }
 
+TEST_CASE("Shown AC: 0x580330's x 1000 wraps in 32 bits before the divide by 847") {
+    CHECK(shown_ac_value(362, 109) == 556);
+    CHECK(shown_ac_value(2147483, 0) == 2535399);   // 2147483000 still fits
+    CHECK(shown_ac_value(2147484, 0) == -2535399);  // 2147484000 wraps to -2147483296
+    CHECK(shown_ac_value(2147483, 1) == -2535399);  // the sum is the original's too
+    CHECK(shown_ac_value(-2147484, 0) == 2535399);  // and the other way
+    CHECK(shown_ac_value(-847, 0) == -1000);
+    CHECK(shown_ac_value(0, -1) == -1);             // -1000 / 847 truncates towards zero
+    CHECK(shown_ac_value(INT32_MAX, INT32_MAX) == -2);  // (-2) * 1000 = -2000, / 847
+}
+
+TEST_CASE("Shown ATK: 0x584f60's x 1000 wraps in 32 bits before the divide by 744") {
+    CHECK(shown_atk_value(300, 444) == 1000);
+    CHECK(shown_atk_value(1, 1) == 2);                // 2000 / 744 truncates
+    CHECK(shown_atk_value(2147483, 0) == 2886401);    // 2147483000 still fits
+    CHECK(shown_atk_value(2147484, 0) == -2886402);   // 2147484000 wraps to -2147483296
+    CHECK(shown_atk_value(2147483, 1) == -2886402);   // the sum is the original's too
+    CHECK(shown_atk_value(0, -1) == -1);              // -1000 / 744 truncates towards zero
+    CHECK(shown_atk_value(INT32_MAX, INT32_MAX) == -2);  // (-2) * 1000 = -2000, / 744
+}
+
 TEST_CASE("Armor class, defense, item haste and carried weight") {
     World w;
     CharacterSheet s = warrior(60);
@@ -802,6 +857,7 @@ TEST_CASE("Armor class, defense, item haste and carried weight") {
     // 30 * 4 / 3 = 40, + defense 200 / 3 = 66, + AGI 75 / 20 = 3
     CHECK(ch.stats().ac == 109);
     CHECK(ch.compute_defense() == 362); // 200 * 400 / 225 + (75 - 40) * 8000 / 36000
+    CHECK(shown_ac(ch) == 556); // (362 + 109) * 1000 / 847
 
     CharacterSheet h = warrior(30);
     net::Item gloves = item();

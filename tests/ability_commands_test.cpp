@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <array>
 #include <ctime>
 #include <fstream>
 #include <map>
@@ -15,6 +16,7 @@
 #include "app/actions_ui.h"
 #include "app/ability_bulk.h"
 #include "app/lua_ui.h"
+#include "app/lua_ui_windows.h"
 #include "core/byte_io.h"
 #include "core/config.h"
 #include "core/ini_file.h"
@@ -320,7 +322,7 @@ TEST_CASE("a fresh zone clears the previous character body's unconscious or dead
         status.owner_status = previous;
         status.dead = previous == 4;
         status.stand_state = net::kStandLying;
-        c.receive_world_packet_for_test(net::encode(net::ZoneServerInfo{"127.0.0.1", 9000}));
+        net::GameConnectionTestAccess::zone_hand_off(c, 9000);
         CHECK(status.owner_status == 0);
         CHECK_FALSE(status.dead);
         CHECK(status.stand_state == net::kStandStanding);
@@ -722,6 +724,54 @@ TEST_CASE("an active discipline refreshes and its icon asks the server for its s
     c.stop_discipline();
     barrier();
     CHECK(test::MockEqServer::count(server.zone_log, net::Op::BuffRemoveRequest) == 1);
+}
+
+// hs.Disciplines lists what CCombatSkillsSelectWnd::ShouldDisplayThisSkill does (an ability is hidden when another of
+// the character's is a higher rank of its spell group), found in one sorted pass rather than 300 x 300 lookups: the
+// same list as the pairwise rule, worked out here the old way.
+TEST_CASE("hs.Disciplines: higher ranks hide lower ones of their group, as the pairwise rule") {
+    test::EmptyGameDir dir;
+    std::ofstream spells(dir.path() / "spells_us.txt");
+    // {id, group, rank}: group 10 ranks 1..3 (two copies of rank 3), group 20 rank 5 alone, group 0 ranks 1 and 2
+    const std::array<std::array<int, 3>, 7> table{{{6101, 10, 1}, {6102, 10, 3}, {6103, 10, 2}, {6104, 10, 3},
+                                                   {6105, 20, 5}, {6106, 0, 1}, {6107, 0, 2}}};
+    for (const auto& [id, group, rank] : table)
+        spells << mq_test::spell_line({{0, std::to_string(id)}, {1, "Disc" + std::to_string(id)}, {207, std::to_string(group)},
+                                       {208, std::to_string(rank)}}) << '\n';
+    spells.close();
+    GameDir game(dir.path());
+    net::GameConnection c(game, {});
+    c.receive_zone_packet_for_test(test::build_player_profile(test::ProfileSpec{}));
+    ByteWriter known;
+    for (std::uint32_t i = 0; i < 300; ++i)
+        known.le<std::uint32_t>(i < table.size() ? static_cast<std::uint32_t>(table[i][0]) : i == 299 ? 6105u : 0u);
+    c.receive_zone_packet_for_test(net::AppPacket(net::to_wire(net::Op::DisciplineUpdate), known.take()));
+    // the pairwise rule, as should_display had it
+    std::string want;
+    for (int n = 0; n < 300; ++n) {
+        const game::SpellData* s = c.combat_ability(n) ? c.spell_table().get(c.combat_ability(n)) : nullptr;
+        if (!s) continue;
+        bool shown = true;
+        for (int k = 0; k < 300 && shown; ++k) {
+            const game::SpellData* o = k == n ? nullptr : c.spell_table().get(c.combat_ability(k));
+            shown = !(o && o->spell_group == s->spell_group && s->spell_rank < o->spell_rank);
+        }
+        CHECK(app::combat_ability_listed(c, n) == shown);
+        if (shown) want += std::to_string(n) + ":" + std::to_string(c.combat_ability(n)) + " ";
+    }
+    CHECK(want == "1:6102 3:6104 4:6105 6:6107 299:6105 ");
+    app::UiHost host;
+    host.in_game = host.ui_ready = true;
+    host.conn = &c;
+    app::UiApi api(host);
+    std::unique_ptr<lua_State, decltype(&lua_close)> lua(luaL_newstate(), lua_close);
+    luaL_openlibs(lua.get());
+    lua_newtable(lua.get());
+    api.register_functions(lua.get());
+    lua_setglobal(lua.get(), "hs");
+    REQUIRE(luaL_dostring(lua.get(), "local t = {} for _, d in ipairs(hs.Disciplines()) do "
+                                     "t[#t + 1] = d.index .. ':' .. d.spell .. ' ' end return table.concat(t)") == LUA_OK);
+    CHECK(std::string(lua_tostring(lua.get(), -1)) == want);
 }
 
 TEST_CASE("discipline buttons share server reuse timers despite different recasts") {

@@ -42,9 +42,14 @@ struct Runner : game::SocialRunQueries {
     std::vector<std::string> lines = std::vector<std::string>(5);
     std::vector<std::string> calls;
     bool cooling = false;
+    bool allow_timing = true;
     const std::string* line(std::int32_t, std::int32_t n) override { return &lines[static_cast<std::size_t>(n)]; }
     void interpret(const std::string& c) override { calls.push_back(c); }
     void alternate_ability(std::int32_t g) override { calls.push_back(std::format("aa {}", g)); }
+    bool allow_directive(std::string_view name) override {
+        if (!allow_timing) calls.emplace_back(name);
+        return allow_timing;
+    }
     bool cooldown_running(std::int32_t) override { return cooling; }
     void start_cooldown(std::int32_t, std::int32_t ms) override {
         calls.push_back(std::format("cooldown {}", ms));
@@ -101,6 +106,18 @@ TEST_CASE("Social lines: a press runs a line a step, waits a step after each and
     // running cooldown not restarted), a step's wait, then the empty line 5 skipped and the queue ends.
     CHECK(at == std::vector<std::string>{"/assist", "", "cooldown 30000| /attack on", "", "", "", " /say done", "", ""});
     CHECK(q.current == -1);
+}
+
+TEST_CASE("Social lines: a denied timer or pause does not prevent the trailing command") {
+    Runner r;
+    r.allow_timing = false;
+    r.lines[0] = "/timer 300,/pause 3, /assist";
+    game::SocialQueue queue;
+    queue.current = 0;
+    game::social_passage_of_time(queue, 101, r);
+    CHECK(queue.pause == 1);
+    CHECK_FALSE(r.cooling);
+    CHECK(r.calls == std::vector<std::string>{"/pause", "/timer", " /assist"});
 }
 
 TEST_CASE("Social editor: hs.SocialLine, hs.SocialEditorSocial and hs.SetLuaSocial's lines") {

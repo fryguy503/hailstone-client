@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <format>
 #include <string_view>
+#include <utility>
 
 #include "core/ascii_case.h"
 #include "core/msvc_atoi.h"
@@ -222,6 +223,19 @@ std::optional<std::size_t> player_from_partial_name(std::string_view word, const
     return best;
 }
 
+std::string who_race_name(const EqStrings& strings, std::uint32_t race_id) {
+    if (race_id == 0) return {};
+    // HandleWhoAllResponse @0x4bc010: a playable race's name is CharacterZoneClient_GetRaceDescription's (race_name
+    // here), any other race's dbstr type 11 (GetRaceDesc @0x515ce0), as an illusion reports it.
+    if (is_playable_race(race_id)) return race_name(race_id);
+    auto name = strings.db_string(race_id, eRaceName);
+    if (!name.empty() && !hailstone::iequals(name, "UNKNOWN RACE")) return name;
+    // A deliberate difference from RoF2, which prints dbstr's "UNKNOWN RACE" as it stands: the client's own label
+    // instead, "Tree" for Illusion Tree's race (spell 601), "Race <id>" when it has none.
+    if (race_id == Race::Tree) return "Tree";
+    return race_name(race_id);
+}
+
 std::vector<std::string> format_who_response(const net::WhoResponse& r, const EqStrings& strings, bool multiclass_masks) {
     std::vector<std::string> lines;
     if (r.title_string != 0xffffffff) {
@@ -265,7 +279,7 @@ std::vector<std::string> format_who_response(const net::WhoResponse& r, const Eq
             } else if (e.class_ != 0) {
                 klass = who_class_text(strings, static_cast<std::int32_t>(e.class_), static_cast<std::int32_t>(e.level));
             }
-            std::string race = e.race ? race_name(e.race) : std::string();
+            std::string race = who_race_name(strings, e.race);
             lines.push_back(str(strings, e.format,
                                 {prefix, std::to_string(e.level), klass, e.name, race, e.guild, zone, pid, extra}));
         } else if (e.format == 5023) {
@@ -690,15 +704,34 @@ GuildAppearanceLine guild_rank_appearance_line(const GuildState& g, bool own, st
 
 // ---------------------------------------------------------------- raids
 
-RaidMember* RaidState::find(const std::string& name) {
-    for (auto& m : members)
+namespace {
+
+std::string fold_name(std::string_view name) {
+    std::string out(name);
+    for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return out;
+}
+
+} // namespace
+
+const RaidMember* RaidState::find(const std::string& name) const {
+    if (index.size() == members.size()) {
+        auto it = index.find(fold_name(name));
+        if (it == index.end()) return nullptr;
+        if (it->second < members.size() && iequals(members[it->second].name, name)) return &members[it->second];
+    }
+    // `members` was written past the index (or holds a name twice): the walk the index stands in for.
+    for (const auto& m : members)
         if (iequals(m.name, name)) return &m;
     return nullptr;
 }
 
-bool RaidState::is_member(const std::string& name) const {
-    return std::any_of(members.begin(), members.end(), [&](const RaidMember& m) { return iequals(m.name, name); });
+RaidMember* RaidState::find(const std::string& name) {
+    if (index.size() != members.size()) reindex();
+    return const_cast<RaidMember*>(std::as_const(*this).find(name));
 }
+
+bool RaidState::is_member(const std::string& name) const { return find(name) != nullptr; }
 
 bool RaidState::add(const RaidMember& m) {
     if (RaidMember* e = find(m.name)) {
@@ -707,14 +740,22 @@ bool RaidState::add(const RaidMember& m) {
         if (e->note.empty()) e->note = std::move(note);
         return false;
     }
+    if (members.size() >= kRaidMembersKept) return false;
     members.push_back(m);
+    if (index.size() == members.size() - 1) index.emplace(fold_name(m.name), members.size() - 1);
     return true;
 }
 
 bool RaidState::remove(const std::string& name) {
-    auto it = std::find_if(members.begin(), members.end(), [&](const RaidMember& m) { return iequals(m.name, name); });
-    if (it == members.end()) return false;
-    members.erase(it);
+    const RaidMember* m = find(name);
+    if (!m) return false;
+    const auto at = static_cast<std::size_t>(m - members.data());
+    members.erase(members.begin() + static_cast<std::ptrdiff_t>(at));
+    if (index.size() == members.size() + 1) {
+        index.erase(fold_name(name));
+        for (auto& [key, i] : index)
+            if (i > at) --i;
+    }
     return true;
 }
 
@@ -725,10 +766,16 @@ void RaidState::clear() {
     locked = false;
     motd.clear();
     members.clear();
+    index.clear();
     target.clear();
     loot_type = 1;
     looters.clear();
     id = 0;
+}
+
+void RaidState::reindex() {
+    index.clear();
+    for (std::size_t i = 0; i < members.size(); ++i) index.emplace(fold_name(members[i].name), i);
 }
 
 // ---------------------------------------------------------------- anonymity

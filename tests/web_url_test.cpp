@@ -145,3 +145,21 @@ TEST_CASE("web: a tab's rules, at every navigation and request") {
     CHECK_FALSE(tab_may_request("https://example.net/x.js", TabRules::Sites, sites));
     CHECK(tab_may_request("https://example.net/x.js", TabRules::Sites, none));
 }
+
+TEST_CASE("web: a tab's profile folder is held to the helper's data folder") {
+    using hailstone::web::profile_within;
+    CHECK(profile_within("/home/p/.local/share/hailstone/web/server", "/home/p/.local/share/hailstone/web"));
+    CHECK(profile_within("/d/web/server/hailstone-addons/x-0123abcd", "/d/web"));
+    CHECK(profile_within("/d/web", "/d/web"));
+    CHECK(profile_within("/d/web/s", "/d/web/"));
+    CHECK(profile_within("C:\\Users\\p\\hailstone\\web\\server/hailstone-addons/x", "C:\\Users\\p\\hailstone\\web"));
+    CHECK(profile_within("/d/web/caf\xc3\xa9", "/d/web")); // UTF-8 names, as the client sends them
+    CHECK_FALSE(profile_within("/d/web2/server", "/d/web"));     // a name that only starts with the folder's
+    CHECK_FALSE(profile_within("/d/web/../other", "/d/web"));
+    CHECK_FALSE(profile_within("/d/web/s/../../other", "/d/web"));
+    CHECK_FALSE(profile_within("C:\\d\\web\\..\\x", "C:\\d\\web"));
+    CHECK_FALSE(profile_within("/elsewhere", "/d/web"));
+    CHECK_FALSE(profile_within("", "/d/web"));
+    CHECK_FALSE(profile_within("/d/web/s", ""));
+    CHECK(profile_within("/d/web/..x/s", "/d/web")); // only ".." itself climbs
+}

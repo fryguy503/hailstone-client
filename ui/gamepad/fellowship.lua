@@ -6,6 +6,8 @@
 --   Camp         the current campsite, Create / Destroy Camp, the campsite kits (Refresh List asks for them, Show All
 --                Possible, the kind filter) and the selected kit's description.
 -- Every list, field and button is the stock window's (app/lua_ui_fellowship.cpp), so the requests are the game's.
+-- Make Leader, Remove, Leave, End Fellowship and Destroy Camp ask first: the stock window's own question, naming the
+-- member, in the confirmation dialog (dialogs.lua). This window asks nothing of its own, or they would ask twice.
 local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")

@@ -27,6 +27,16 @@ TEST_CASE("Swapchain size: a surface that lags a resize is caught up; one that d
     CHECK_FALSE(swapchain_outdated(new_size, new_size, std::nullopt, scaled));
 }
 
+TEST_CASE("Swapchain size: a minimised surface (a zero side) waits; an undefined extent does not") {
+    CHECK(surface_extent_empty(Extent{0, 0}));   // Windows, minimised
+    CHECK(surface_extent_empty(Extent{0, 600}));
+    CHECK(surface_extent_empty(Extent{800, 0}));
+    CHECK_FALSE(surface_extent_empty(Extent{800, 600}));
+    CHECK_FALSE(surface_extent_empty(Extent{1, 1}));
+    // The size left to the swapchain (Wayland, say): the window's size is taken instead.
+    CHECK_FALSE(surface_extent_empty(Extent{kSurfaceExtentUndefined, kSurfaceExtentUndefined}));
+}
+
 TEST_CASE("Scene rect: a dragged size waits until it settles; a held one is made once") {
     SceneResizeDebounce d;
     const Extent made{800, 600};

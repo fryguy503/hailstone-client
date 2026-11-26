@@ -450,6 +450,40 @@ TEST_CASE("character libraries: one zone's dressed on a worker thread while the 
     CHECK(zone->dress(*zone->model("AAA"), look) == first); // the library's own cache, not another zone's
 }
 
+TEST_CASE("character libraries: dressed looks nobody wears are dropped as the cache grows, worn ones kept") {
+    // Each distinct look (an NPC tint here) is a whole dressed mesh: a zone that shows many must not keep them all.
+    test::ScratchDir dir("chr-dress-cap");
+    auto write = [&](const std::string& name, const std::vector<std::byte>& bytes) {
+        std::ofstream(dir.path() / name, std::ios::binary)
+            .write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    };
+    write("global_chr.s3d", archive_bytes("global_chr.s3d", {"BBB"}, {"a.bmp"}, std::byte{1}));
+    write("tst_chr.s3d", archive_bytes("tst_chr.s3d", {"AAA"}, {"a.bmp"}, std::byte{3}));
+    GameDir game(dir.path());
+    CharacterArchiveCache cache(false);
+    auto zone = cache.library_for_zone(game, "tst");
+    auto model = zone->model("AAA");
+    REQUIRE(model);
+    game::Appearance worn_look;
+    worn_look.npc_tint = 1;
+    auto worn = zone->dress(*model, worn_look);
+    REQUIRE(worn);
+    std::size_t most = 0;
+    for (std::uint32_t tint = 2; tint < 3000; ++tint) {
+        game::Appearance look;
+        look.npc_tint = tint;
+        CHECK(zone->dress(*model, look)); // used and let go
+        if (tint % 50 == 0) most = std::max(most, zone->cache_memory().appearances);
+    }
+    CHECK(most <= 1024);
+    CHECK(zone->cache_memory().appearances < 1024);
+    // The worn look is still the same mesh; a dropped one is dressed again.
+    CHECK(zone->dress(*model, worn_look) == worn);
+    game::Appearance again;
+    again.npc_tint = 2;
+    CHECK(zone->dress(*model, again));
+}
+
 TEST_CASE("character libraries: dressing real models on a worker while the main thread builds others" *
           doctest::skip(!hailstone::test::game_dir())) {
     const auto& game = *hailstone::test::game_dir();

@@ -122,8 +122,11 @@ public:
     const Model& of(const CharacterModel& model);
 
 private:
+    // By the model's serial, not its address: a model freed and another made at its address must not share an
+    // entry. Cleared when it reaches kMaxModels, so models the session dropped do not pile up.
+    static constexpr std::size_t kMaxModels = 4096;
     SpOffsetLookup offsets_;
-    std::unordered_map<const CharacterModel*, Model> models_;
+    std::unordered_map<std::uint64_t, Model> models_;
 };
 
 } // namespace hailstone::assets

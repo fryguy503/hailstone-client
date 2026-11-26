@@ -23,6 +23,7 @@
 #include "core/zip_read.h"
 #include "net/server_files.h"
 #include "platform/durable_file.h"
+#include "platform/shared_file.h"
 #include "plugin/native_plugins.h"
 #include "plugin/policy.h"
 
@@ -254,6 +255,54 @@ std::string extension_of(std::string_view path) {
 fs::path addons_dir(const fs::path& data_dir) { return data_dir / "addons"; }
 
 namespace {
+// The file locks this process holds, by addons/ folder, and how many holds each has.
+struct HeldAddonsLock {
+    platform::ScopedFileLock file;
+    int holders = 0;
+};
+std::mutex& held_addons_mutex() {
+    static std::mutex m;
+    return m;
+}
+std::map<fs::path, HeldAddonsLock>& held_addons_locks() {
+    static std::map<fs::path, HeldAddonsLock> held;
+    return held;
+}
+
+constexpr std::string_view kAddonsBusy =
+    "another Hailstone is installing or removing add-ons in this folder: try again in a moment";
+} // namespace
+
+AddonsLock::AddonsLock(AddonsLock&& other) noexcept : key_(std::exchange(other.key_, {})) {}
+
+AddonsLock::~AddonsLock() {
+    if (key_.empty()) return;
+    std::lock_guard guard(held_addons_mutex());
+    auto& held = held_addons_locks();
+    auto it = held.find(key_);
+    if (it != held.end() && --it->second.holders <= 0) held.erase(it);
+}
+
+std::optional<AddonsLock> lock_addons(const fs::path& data_dir) {
+    const fs::path dir = addons_dir(data_dir);
+    std::error_code ec;
+    fs::path key = fs::absolute(dir, ec);
+    key = ec ? dir.lexically_normal() : key.lexically_normal();
+    std::lock_guard guard(held_addons_mutex());
+    auto& held = held_addons_locks();
+    auto it = held.find(key);
+    if (it == held.end()) {
+        fs::create_directories(dir, ec);
+        auto file = platform::ScopedFileLock::try_acquire(dir / "install.lock", platform::FileLockMode::Exclusive,
+                                                         platform::LockFolder::Ordinary);
+        if (!file) return std::nullopt;
+        it = held.emplace(key, HeldAddonsLock{std::move(*file), 0}).first;
+    }
+    ++it->second.holders;
+    return AddonsLock(key);
+}
+
+namespace {
 std::string_view kind_folder(AddonKind kind) {
     return kind == AddonKind::Script     ? "scripts"
            : kind == AddonKind::Plugin   ? "plugins"
@@ -470,6 +519,11 @@ std::vector<mq::ManagedScript> managed_addon_scripts(const fs::path& data_dir) {
 }
 
 bool set_addon_enabled(const fs::path& data_dir, std::string_view name, bool enabled) {
+    const auto lock = lock_addons(data_dir);
+    if (!lock) {
+        log::warn("Add-ons: {} is not switched: {}", name, kAddonsBusy);
+        return false;
+    }
     auto registry = read_addon_registry(data_dir);
     if (!registry.writable()) return false;
     for (auto& addon : registry.addons) {
@@ -511,6 +565,11 @@ std::string registry_locked(const AddonRegistry& reg) {
 } // namespace
 
 bool write_installed_addons(const fs::path& data_dir, const std::vector<InstalledAddon>& addons) {
+    const auto lock = lock_addons(data_dir);
+    if (!lock) {
+        log::warn("Add-ons: addons/installed.txt is not written: {}", kAddonsBusy);
+        return false;
+    }
     if (std::string why = registry_locked(read_addon_registry(data_dir)); !why.empty()) {
         log::warn("Add-ons: {}", why);
         return false;
@@ -521,6 +580,23 @@ bool write_installed_addons(const fs::path& data_dir, const std::vector<Installe
     if (!write_file_atomic(addons_dir(data_dir) / kRegistryBackup, text))
         log::warn("Add-ons: cannot write addons/{}", kRegistryBackup);
     return true;
+}
+
+bool set_addon_auto_update(const fs::path& data_dir, std::string_view name, bool on) {
+    const auto lock = lock_addons(data_dir);
+    if (!lock) {
+        log::warn("Add-ons: {}'s auto-update switch is not saved: {}", name, kAddonsBusy);
+        return false;
+    }
+    auto registry = read_addon_registry(data_dir);
+    if (!registry.writable()) return false;
+    bool found = false;
+    for (auto& a : registry.addons)
+        if (iequal(a.name, name)) {
+            a.auto_update = on;
+            found = true;
+        }
+    return found && write_installed_addons(data_dir, registry.addons);
 }
 
 const InstalledAddon* find_addon(const std::vector<InstalledAddon>& addons, std::string_view name) {
@@ -967,6 +1043,9 @@ std::optional<std::vector<AddonFile>> unpack_addon(const fs::path& data_dir, con
         if (error) *error = std::move(why);
         return std::nullopt;
     };
+    // new/<name>/ is emptied and written: not while another process installs from there.
+    const auto lock = lock_addons(data_dir);
+    if (!lock) return fail(std::string(kAddonsBusy));
     ZipReader zip;
     if (!zip.open(zip_path)) return fail("the package is not a zip this reads: " + zip.error());
     if (m.kind == AddonKind::Tool) return unpack_tool(data_dir, m, zip, platform, error);
@@ -1040,6 +1119,11 @@ bool apply_addon(const fs::path& data_dir, const InstalledAddon& addon, std::str
     const fs::path src = dir / "new" / rel(addon.name);
     const fs::path prev = dir / "previous" / rel(addon.name);
     const fs::path target = addon_folder(data_dir, addon.kind, addon.name);
+    const auto lock = lock_addons(data_dir);
+    if (!lock) {
+        if (error) *error = std::string(kAddonsBusy);
+        return false;
+    }
     const AddonRegistry reg = read_addon_registry(data_dir);
     if (std::string why = registry_locked(reg); !why.empty()) {
         if (error) *error = why;
@@ -1130,6 +1214,11 @@ bool apply_addon(const fs::path& data_dir, const InstalledAddon& addon, std::str
 
 bool remove_addon(const fs::path& data_dir, std::string_view name, std::string* error) {
     const fs::path dir = addons_dir(data_dir);
+    const auto lock = lock_addons(data_dir);
+    if (!lock) {
+        if (error) *error = std::string(kAddonsBusy);
+        return false;
+    }
     const AddonRegistry reg = read_addon_registry(data_dir);
     if (std::string why = registry_locked(reg); !why.empty()) {
         if (error) *error = why;
@@ -1275,6 +1364,14 @@ void addons_at_start(const fs::path& data_dir) {
     const fs::path dir = addons_dir(data_dir);
     std::error_code ec;
     if (!fs::exists(dir, ec)) return;
+    // Another Hailstone holding it is installing or removing now: its journal is under way, not cut off, and new/
+    // holds what it is about to move in.
+    const auto lock = lock_addons(data_dir);
+    if (!lock) {
+        log::warn("Add-ons: another Hailstone is installing or removing add-ons in this folder; what a cut-off "
+                  "install left is looked at another start");
+        return;
+    }
     bool keep_previous = false;
     if (fs::exists(dir / "journal.txt", ec)) {
         if (!journal_done(data_dir)) {

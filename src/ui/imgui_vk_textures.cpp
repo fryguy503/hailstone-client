@@ -1,10 +1,13 @@
 #include "ui/imgui_vk_textures.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
 #include "core/log.h"
+#include "ui/descriptor_pool_book.h"
 
 namespace hailstone::ui {
 
@@ -17,7 +20,8 @@ constexpr std::uint32_t kSetsPerPool = 256;
 struct State {
     VkDevice device = VK_NULL_HANDLE;
     VkDescriptorSetLayout layout = VK_NULL_HANDLE;
-    std::vector<VkDescriptorPool> pools; // the newest last, tried first
+    DescriptorPoolBook<VkDescriptorPool> pools{kSetsPerPool};
+    std::vector<VkDescriptorPool> all; // every pool made and not yet destroyed, for shutdown
     std::unordered_map<VkDescriptorSet, VkDescriptorPool> owner;
 };
 
@@ -47,7 +51,8 @@ VkDescriptorSet allocate(State& s, VkDescriptorPool pool) {
     ai.descriptorSetCount = 1;
     ai.pSetLayouts = &s.layout;
     VkDescriptorSet set = VK_NULL_HANDLE;
-    // A full (or fragmented) pool says so (VK_ERROR_OUT_OF_POOL_MEMORY / VK_ERROR_FRAGMENTED_POOL): the next is tried.
+    // A pool the book thinks has room can still say no (VK_ERROR_FRAGMENTED_POOL, or a driver's own limit): the next
+    // is tried.
     return vkAllocateDescriptorSets(s.device, &ai, &set) == VK_SUCCESS ? set : VK_NULL_HANDLE;
 }
 
@@ -78,7 +83,7 @@ void init_imgui_textures(VkDevice device) {
 void shutdown_imgui_textures() {
     State& s = state();
     if (!s.device) return;
-    for (VkDescriptorPool p : s.pools) vkDestroyDescriptorPool(s.device, p, nullptr);
+    for (VkDescriptorPool p : s.all) vkDestroyDescriptorPool(s.device, p, nullptr);
     for (const auto& kv : s.owner) texture_id_removed(reinterpret_cast<const void*>(kv.first));
     vkDestroyDescriptorSetLayout(s.device, s.layout, nullptr);
     s = State{};
@@ -92,19 +97,25 @@ VkDescriptorSet add_imgui_texture(VkImageView view, VkImageLayout layout) {
     }
     VkDescriptorSet set = VK_NULL_HANDLE;
     VkDescriptorPool from = VK_NULL_HANDLE;
-    for (auto it = s.pools.rbegin(); it != s.pools.rend() && !set; ++it)
-        if ((set = allocate(s, *it))) from = *it;
+    for (VkDescriptorPool pool : s.pools.with_room()) {
+        if ((set = allocate(s, pool))) {
+            from = pool;
+            break;
+        }
+    }
     if (!set) {
         if (VkDescriptorPool pool = make_pool(s.device)) {
-            s.pools.push_back(pool);
+            s.pools.added(pool);
+            s.all.push_back(pool);
             set = allocate(s, pool);
             if (set) from = pool;
         }
     }
     if (!set) {
-        log::error("ui textures: no descriptor set left ({} in {} pools)", s.owner.size(), s.pools.size());
+        log::error("ui textures: no descriptor set left ({} in {} pools)", s.owner.size(), s.pools.pool_count());
         return VK_NULL_HANDLE;
     }
+    s.pools.allocated(from);
     VkDescriptorImageInfo image{VK_NULL_HANDLE, view, layout};
     VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     w.dstSet = set;
@@ -124,8 +135,15 @@ void remove_imgui_texture(VkDescriptorSet set) {
     if (!s.device || !set) return;
     auto it = s.owner.find(set);
     if (it == s.owner.end()) return;
-    vkFreeDescriptorSets(s.device, it->second, 1, &set);
+    const VkDescriptorPool pool = it->second;
+    vkFreeDescriptorSets(s.device, pool, 1, &set);
     s.owner.erase(it);
+    // Its last set gone and a newer pool up: destroyed now. No frame in flight draws a freed set (see the header), so
+    // none still refers to the pool.
+    if (std::optional<VkDescriptorPool> empty = s.pools.freed(pool)) {
+        vkDestroyDescriptorPool(s.device, *empty, nullptr);
+        s.all.erase(std::find(s.all.begin(), s.all.end(), *empty));
+    }
 }
 
 } // namespace hailstone::ui

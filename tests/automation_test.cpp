@@ -12,6 +12,7 @@
 #include "app/addon_install.h"
 #include "app/addon_requirements.h"
 #include "mq/lua_mq.h"
+#include "mq/map_filter.h"
 #include "mq_test_world.h"
 #include "core/sha256.h"
 #include "plugin/policy.h"
@@ -25,11 +26,12 @@ struct AutomationHost {
     mq_test::World world{"hailstone_automation_test"};
     std::unique_ptr<app::Automation> automation;
     std::vector<std::pair<mq::AbilityKind, std::string>> used;
-    AutomationHost() {
+    explicit AutomationHost(std::string script_autoload = {}) {
         net::GameConnectionTestAccess::set_server_rules(*world.conn, plugin::Rules{}); // no hailstone.cfg: free
         app::AutomationEnv env;
         env.data_dir = world.dir / "data";
         env.install_dir = world.dir / "install";
+        env.script_autoload = std::move(script_autoload);
         env.connection = [this] { return world.conn.get(); };
         env.autoskill_list = [] {
             game::AutoskillRule kick;
@@ -63,6 +65,189 @@ struct AutomationHost {
 };
 } // namespace
 
+TEST_CASE("Automation: a server's map rule locks vanilla mode without changing the player's choice") {
+    AutomationHost h;
+    h.automation->frame();
+    auto& filters = h.automation->map_filters();
+    filters.set_vanilla_enabled(true);
+    CHECK(filters.vanilla_mode());
+
+    auto rules = plugin::parse_server_cfg("[map]\nvanilla = on\n");
+    rules.dir = h.world.dir / "profile";
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+    h.automation->frame();
+    CHECK(filters.vanilla_locked());
+    CHECK(filters.vanilla_enabled());
+    filters.set_vanilla_enabled(false);
+    CHECK_FALSE(filters.vanilla_enabled());
+    CHECK(filters.vanilla_mode()); // the server still locks the effective mode on
+
+    rules = plugin::parse_server_cfg("[map]\nvanilla = off\n");
+    rules.dir = h.world.dir / "profile";
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+    h.automation->frame();
+    CHECK_FALSE(filters.vanilla_locked());
+    CHECK_FALSE(filters.vanilla_mode());
+    filters.set_vanilla_enabled(true);
+    CHECK(filters.vanilla_mode());
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, std::nullopt);
+    h.automation->frame();
+    CHECK_FALSE(filters.vanilla_locked());
+    CHECK(filters.vanilla_enabled()); // no server rule leaves the player's own choice alone
+}
+
+TEST_CASE("Automation: a server that blocks /mapfilter suspends the saved filters and TargetPath") {
+    AutomationHost h;
+    auto& filters = h.automation->map_filters();
+    filters.set_enabled(mq::MapFilter::Npc, true);
+    filters.set_enabled(mq::MapFilter::Target, true);
+    filters.set_enabled(mq::MapFilter::TargetPath, true);
+    filters.set_vanilla_enabled(true);
+    auto rules = plugin::parse_server_cfg("[commands]\nblock = /MapFilter\n");
+    rules.dir = h.world.dir / "profile";
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+    for (int i = 0; i < 3; ++i) h.automation->frame();
+    CHECK(filters.suspended());
+    CHECK_FALSE(filters.enabled(mq::MapFilter::Npc));
+    CHECK_FALSE(filters.enabled(mq::MapFilter::TargetPath));
+    CHECK_FALSE(filters.vanilla_mode()); // the player could not turn it off again
+    CHECK(net::GameConnectionTestAccess::find_request_count(*h.world.conn) == 0);
+    CHECK(filters.state(mq::MapFilter::Npc).enabled); // the saved choice is kept
+
+    // Only a block of the command itself suspends them; a block of add-on commands does not.
+    rules = plugin::parse_server_cfg("[commands]\nblock_groups = addon_commands\n");
+    rules.dir = h.world.dir / "profile";
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+    h.automation->frame();
+    CHECK_FALSE(filters.suspended());
+    CHECK(filters.enabled(mq::MapFilter::Npc));
+    CHECK(filters.vanilla_mode());
+
+    // A GM status rule is followed as the status comes and goes.
+    rules = plugin::parse_server_cfg("[commands]\ngm = /mapfilter:100\n");
+    rules.dir = h.world.dir / "profile";
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+    h.automation->frame();
+    CHECK(filters.suspended());
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, std::nullopt);
+    h.automation->frame();
+    CHECK_FALSE(filters.suspended());
+}
+
+TEST_CASE("Automation: groups routine zone transfer notices after the first sign-in") {
+    AutomationHost h("loader,broken");
+    auto& conn = *h.world.conn;
+    using Access = net::GameConnectionTestAccess;
+    h.write("loader.lua", "print('[Lua] from a script')\nwhile true do require('mq').delay(10) end\n");
+    h.write("manual.lua", "while true do require('mq').delay(10) end\n");
+    h.write("broken.lua", "this is invalid Lua\n");
+#ifdef HAILSTONE_EXAMPLE_PLUGIN
+    const fs::path built = HAILSTONE_EXAMPLE_PLUGIN;
+    const auto dir = h.world.dir / "data" / "plugins" / "MQ2Example";
+    fs::create_directories(dir);
+    fs::copy_file(built, dir / built.filename());
+#endif
+    plugin::Rules live;
+    live.configured = true;
+    const auto caps = plugin::kCapAll & ~plugin::kCapLogin;
+    live.player_script_caps = live.player_plugin_caps = caps;
+    Access::set_server_rules(conn, live);
+    const auto script_started = "[Lua] running loader (" + plugin::caps_text(caps) + ")";
+    auto has_line = [](const auto& lines, const auto& text) {
+        return std::find(lines.begin(), lines.end(), text) != lines.end();
+    };
+    h.automation->frame();
+    const auto first = h.chat();
+    CHECK(has_line(first, script_started));
+    CHECK(conn.take_zone_client_messages().empty());
+#ifdef HAILSTONE_EXAMPLE_PLUGIN
+    const auto plugin_loaded = "[Plugin] MQ2Example loaded (" + plugin::caps_text(caps) + ")";
+    CHECK(has_line(first, plugin_loaded));
+#endif
+
+    net::ZoneChange answer;
+    answer.success = 1;
+    Access::handle_zone(conn, net::encode(answer));
+    REQUIRE(conn.state() == net::ConnectionState::Zoning);
+    auto provisional = live;
+    provisional.provisional = true;
+    Access::set_server_rules(conn, provisional);
+    h.automation->frame();
+    CHECK_FALSE(h.automation->scripts().running("loader"));
+
+    Access::state(conn) = net::ConnectionState::InZone;
+    Access::set_server_rules(conn, live);
+    conn.ui_message("You have entered the destination.");
+    h.automation->frame();
+    REQUIRE(h.automation->scripts().run("manual", {}));
+    const auto chat = h.chat();
+    CHECK(has_line(chat, "Zoning..."));
+    CHECK(has_line(chat, "You have entered the destination."));
+    CHECK(has_line(chat, "[Lua] from a script"));
+    CHECK(has_line(chat, "[Lua] running manual (" + plugin::caps_text(caps) + ")"));
+    CHECK(std::any_of(chat.begin(), chat.end(), [](const auto& line) { return line.starts_with("[Lua] broken:"); }));
+    CHECK_FALSE(has_line(chat, script_started));
+    CHECK_FALSE(has_line(chat, "[Lua] loader stopped: it may not run here"));
+
+    std::vector<std::string> expected{"[Lua] loader stopped: it may not run here"};
+#ifdef HAILSTONE_EXAMPLE_PLUGIN
+    CHECK(has_line(chat, "[MQ2Example] loaded"));
+    CHECK_FALSE(has_line(chat, plugin_loaded));
+    expected.push_back("[Plugin] MQ2Example: it may not run here");
+    expected.push_back("[Plugin] MQ2Example unloaded");
+#endif
+    expected.push_back(script_started);
+#ifdef HAILSTONE_EXAMPLE_PLUGIN
+    expected.push_back(plugin_loaded);
+#endif
+    // Everything stopped was started again: all of it is routine and goes in the group.
+    std::vector<net::GameConnection::ZoneClientMessage> taken;
+    for (auto& text : expected) taken.push_back({text, false});
+    CHECK(conn.take_zone_client_messages() == taken);
+    CHECK(conn.take_zone_client_messages().empty());
+}
+
+TEST_CASE("Automation: a zone transfer's lasting stop is not hidden in the group") {
+    AutomationHost h("loader");
+    auto& conn = *h.world.conn;
+    using Access = net::GameConnectionTestAccess;
+    h.write("loader.lua", "while true do require('mq').delay(10) end\n");
+    h.write("manual.lua", "while true do require('mq').delay(10) end\n");
+    plugin::Rules live;
+    live.configured = true;
+    const auto caps = plugin::kCapAll & ~plugin::kCapLogin;
+    live.player_script_caps = live.player_plugin_caps = caps;
+    Access::set_server_rules(conn, live);
+    h.automation->frame();
+    REQUIRE(h.automation->scripts().run("manual", {}));
+    (void)h.chat();
+
+    net::ZoneChange answer;
+    answer.success = 1;
+    Access::handle_zone(conn, net::encode(answer));
+    REQUIRE(conn.state() == net::ConnectionState::Zoning);
+    auto provisional = live;
+    provisional.provisional = true;
+    Access::set_server_rules(conn, provisional);
+    h.automation->frame();
+    CHECK_FALSE(h.automation->scripts().running("loader"));
+    CHECK_FALSE(h.automation->scripts().running("manual"));
+    Access::state(conn) = net::ConnectionState::InZone;
+    Access::set_server_rules(conn, live);
+    h.automation->frame();
+    CHECK(h.automation->scripts().running("loader"));
+    CHECK_FALSE(h.automation->scripts().running("manual"));
+
+    // loader is autoloaded and starts again: its stop and start go in the group. Nothing starts manual again after
+    // the zone, so its stop is shown as a line of its own.
+    const std::vector<net::GameConnection::ZoneClientMessage> expected{
+        {"[Lua] loader stopped: it may not run here", false},
+        {"[Lua] manual stopped: it may not run here", true},
+        {"[Lua] running loader (" + plugin::caps_text(caps) + ")", false},
+    };
+    CHECK(conn.take_zone_client_messages() == expected);
+}
+
 TEST_CASE("Automation: a script holds autoskill off while it runs; stopping it lets go") {
     AutomationHost h;
     h.automation->frame();
@@ -88,6 +273,30 @@ TEST_CASE("Automation: a script holds autoskill off while it runs; stopping it l
     }
     CHECK(released);
     CHECK(h.automation->scripts().running("brief"));
+}
+
+TEST_CASE("Automation: Lua publishes its own titled chat group") {
+    AutomationHost h;
+    h.write("group.lua", R"(
+        local client = require('hailstone')
+        assert(not client.chat_group('Bad group', { [1] = 'one', [3] = 'three' }))
+        assert(not client.chat_group('Bad group', { 'one', 2 }))
+        assert(not client.chat_group('Bad group', { 'one', 'two\nthree' }))
+        assert(not client.chat_group('Bad group', {}))
+        assert(client.chat_group('Inventory Check', { 'Checked four bags.', 'Seven slots are free.' }))
+    )");
+    h.automation->frame();
+    REQUIRE(h.automation->scripts().run("group", {}));
+    h.automation->frame();
+    std::vector<net::ChatEvent> groups;
+    while (auto event = h.world.conn->poll_chat()) {
+        CHECK(event->text.find("ended with an error") == std::string::npos);
+        if (!event->group.empty()) groups.push_back(std::move(*event));
+    }
+    REQUIRE(groups.size() == 1);
+    CHECK(groups[0].kind == net::ChatEvent::Kind::System);
+    CHECK(groups[0].text == "Inventory Check");
+    CHECK(groups[0].group == std::vector<std::string>{"Checked four bags.", "Seven slots are free."});
 }
 
 TEST_CASE("Automation: enforcement lazily attributes current code and refreshes identities after managed installs") {

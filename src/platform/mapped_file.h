@@ -20,8 +20,11 @@ namespace hailstone::platform {
 // nothing replaces while they are mapped: assets::PfsArchive::storage_for maps the game folder's files and reads the
 // server overlay's (which the server files sync replaces) into memory.
 //
-// The underlying file must not be edited or truncated in place while mapped: a read of a page past the new end faults
-// (SIGBUS on POSIX, EXCEPTION_IN_PAGE_ERROR on Windows), and an edit shows through. See docs/hardening.md.
+// A file truncated in place while mapped makes a read of a page past its new end fault (SIGBUS on POSIX; Windows
+// refuses the truncation while the view exists, and faults with EXCEPTION_IN_PAGE_ERROR on a read error of the disk
+// or share). read() catches that fault around its copy and throws; view() is not guarded, so code that may meet a
+// file someone else writes copies through read() and parses the copy. An edit in place still shows through either.
+// See docs/hardening.md "Mapped game archives".
 //
 // OS calls live here only; callers see a span. The Windows and POSIX spellings differ in their .cpp, nothing else.
 class MappedFile {
@@ -43,6 +46,11 @@ public:
     std::span<const std::byte> view() const noexcept {
         return std::span<const std::byte>(view_bytes_, size_);
     }
+
+    // Copies out.size() bytes of the view from `offset` into `out`. Throws std::out_of_range past the view's end and
+    // std::runtime_error when the read faults (the file shrank under the mapping, or its page could not be read).
+    // Safe to call from several threads at once.
+    void read(std::size_t offset, std::span<std::byte> out) const;
 
 private:
     void reset() noexcept;

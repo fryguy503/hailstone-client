@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -234,6 +235,31 @@ TEST_CASE("zip_read: Unix permission bits") {
 #endif
 }
 
+TEST_CASE("zip_read: an entry's group and world write bits are never given to the file") {
+    RawEntry open_exe{"hailstone", "#!", 3 << 8 | 20, 0106777u << 16}; // setuid, setgid, writable by all
+    RawEntry open_data{"ui/a.lua", "x", 3 << 8 | 20, 0100666u << 16};
+    RawEntry only_writable{"ui/b.lua", "x", 3 << 8 | 20, 0100022u << 16};
+    ZipReader zip;
+    REQUIRE(zip.open(build_zip({open_exe, open_data, only_writable})));
+    test::ScratchDir dir("zip_read_mode_mask");
+    for (const auto& e : zip.entries()) REQUIRE(zip.extract_to_file(e, dir.path() / e.name));
+#ifndef _WIN32
+    using std::filesystem::perms;
+    const auto writable = perms::group_write | perms::others_write;
+    const auto p = std::filesystem::status(dir.path() / "hailstone").permissions();
+    CHECK((p & writable) == perms::none);
+    CHECK((p & (perms::set_uid | perms::set_gid | perms::sticky_bit)) == perms::none);
+    CHECK((p & perms::others_exec) != perms::none); // the execute bits are kept
+    CHECK((p & perms::owner_write) != perms::none);
+    const auto q = std::filesystem::status(dir.path() / "ui/a.lua").permissions();
+    CHECK((q & writable) == perms::none);
+    CHECK((q & perms::others_read) != perms::none);
+    // Nothing left of the mode: the file keeps the permissions it was made with, readable by its owner.
+    const auto r = std::filesystem::status(dir.path() / "ui/b.lua").permissions();
+    CHECK((r & perms::owner_read) != perms::none);
+#endif
+}
+
 TEST_CASE("zip_read: unsafe names refuse the whole archive") {
     for (const char* bad : {"../evil", "/abs", "a\\b", "C:/x", "a//b", "./x", "ok/../../x", "x.lua.", "nul"}) {
         ZipReader zip;
@@ -353,6 +379,30 @@ TEST_CASE("zip_write: no more files than the end record can count, and dates pas
     CHECK((date >> 9) == 127);
     CHECK(((date >> 5) & 15) == 3);
     CHECK((date & 31) == 4);
+}
+
+TEST_CASE("zip_write: finished_size is the finished archive's size after every add, and add_within holds to it") {
+    std::tm when{};
+    when.tm_year = 100;
+    when.tm_mday = 1;
+    ZipWriter z;
+    CHECK(z.finished_size() == ZipWriter(z).finish().size());
+    for (int i = 0; i < 40; ++i) {
+        const std::string name = std::string(static_cast<std::size_t>(i % 7 + 1), 'n') + std::to_string(i);
+        REQUIRE(z.add(name, std::string(static_cast<std::size_t>(i * 13), static_cast<char>('a' + i % 5)), when));
+        ZipWriter copy(z);
+        const std::size_t predicted = copy.finished_size();
+        CHECK(predicted == copy.finish().size());
+        CHECK(copy.finished_size() == predicted);
+    }
+    // One stored file of 10 bytes named "x": 30 + 1 + 10 local, 46 + 1 central. At exactly the limit it goes in.
+    const std::string body = "0123456789";
+    const std::size_t limit = z.finished_size() + 30 + 1 + 10 + 46 + 1;
+    ZipWriter over(z);
+    CHECK_FALSE(over.add_within("x", std::as_bytes(std::span(body.data(), body.size())), when, limit - 1));
+    REQUIRE(z.add_within("x", std::as_bytes(std::span(body.data(), body.size())), when, limit));
+    CHECK(z.finished_size() == limit);
+    CHECK(z.finish().size() == limit);
 }
 
 TEST_CASE("zip_read: truncated and non-zip input is refused cleanly") {

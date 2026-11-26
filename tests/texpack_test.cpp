@@ -489,6 +489,64 @@ TEST_CASE("texpack: scan, the scan's cache and a whole build") {
         CHECK(missing_files(*l, true, pack_contents(pack)) == std::vector<FileKind>{FileKind::Normal});
     }
 
+    SUBCASE("the textures between the reader and the encoders stay within the memory budget") {
+        // wall 64 x 64 (colour, normal, rough at 2x), leaf 32 x 32 with its masked variant (four files), dot 8 x 8
+        const std::uint64_t wall_bytes = 64 * 64 * 4 + 3 * (128 * 128 * 4);
+        const std::uint64_t leaf_bytes = 2 * (32 * 32 * 4) + 4 * (64 * 64 * 4);
+        for (std::uint64_t budget : {std::uint64_t{1}, wall_bytes, wall_bytes + leaf_bytes, std::uint64_t{0}}) {
+            CAPTURE(budget);
+            GpuWorker gpu([](std::string*) { return std::make_unique<FakeSet>(); });
+            JobOptions o;
+            o.pack_dir = dir.path() / "textures" / ("budget" + std::to_string(budget));
+            o.textures = r.textures;
+            o.settings = {2, true};
+            o.encoders = 2;
+            o.memory_budget = budget;
+            PackJob job(o, gpu);
+            REQUIRE(wait_for([&] { return job.finished(); }));
+            const JobStatus s = job.status();
+            CHECK(s.state == JobStatus::State::Done);
+            CHECK(s.files_written == 8);
+            CHECK(s.bytes_held == 0);
+            CHECK(s.bytes_held_peak >= wall_bytes); // (one texture always goes, even past the budget)
+            // One at a time when none fits beside another; never past the budget when it holds two.
+            if (budget == 1 || budget == wall_bytes) CHECK(s.bytes_held_peak == wall_bytes);
+            else if (budget) CHECK(s.bytes_held_peak <= budget);
+        }
+    }
+
+    SUBCASE("a scan cache that cannot be put in place is refused, and no temporary file stays") {
+        const fs::path cache = dir.path() / "cache" / "scan.txt";
+        fs::create_directories(cache / "in-the-way"); // a folder where the file goes: the final rename fails
+        CHECK_FALSE(save_scan(cache, archives, r.textures));
+        CHECK(fs::is_directory(cache));
+        for (const auto& e : fs::directory_iterator(cache.parent_path()))
+            CHECK_MESSAGE(e.path() == cache, e.path().string()); // no scan.txt.tmp left beside it
+    }
+
+    SUBCASE("a pack file that cannot be written counts as a failure and leaves no temporary file") {
+        const fs::path pack = dir.path() / "textures" / "blocked";
+        // A folder where the wall's colour file goes: its write fails, the other textures are made.
+        fs::create_directories(pack / "by-hash" / (hash_name(w->hash) + ".dds") / "in-the-way");
+        GpuWorker gpu([](std::string*) { return std::make_unique<FakeSet>(); });
+        JobOptions o;
+        o.pack_dir = pack;
+        o.textures = r.textures;
+        o.settings = {2, true};
+        o.encoders = 2;
+        PackJob job(o, gpu);
+        REQUIRE(wait_for([&] { return job.finished(); }));
+        const JobStatus s = job.status();
+        CHECK(s.state == JobStatus::State::Done);
+        CHECK(s.failures == 1);
+        REQUIRE(s.errors.size() == 1);
+        CHECK(s.errors[0].find("cannot write") != std::string::npos);
+        for (const auto& e : fs::directory_iterator(pack / "by-hash"))
+            CHECK_MESSAGE(e.path().extension() == ".dds", e.path().string());
+        // The leaf's four files are there; the wall's colour is still missing, so a resumed build makes it again.
+        CHECK(missing_files(*w, true, pack_contents(pack)).size() == 3);
+    }
+
     SUBCASE("a build stops when cancelled, and failing models fail each texture") {
         GpuWorker broken([](std::string* why) -> std::unique_ptr<ModelSet> {
             *why = "no GPU here";
@@ -506,6 +564,67 @@ TEST_CASE("texpack: scan, the scan's cache and a whole build") {
         CHECK(job.status().errors.size() == 3);
         CHECK(job.status().errors[0].find("no GPU here") != std::string::npos);
     }
+}
+
+TEST_CASE("texpack: a build whose GPU worker stops first ends as cancelled, not waiting for ever") {
+    test::ScratchDir dir("texpack_gpu_gone");
+    const fs::path assets = dir.path() / "assets";
+    std::vector<std::pair<std::string, std::vector<std::byte>>> files;
+    for (int i = 0; i < 10; ++i) // ten different pictures: more than the GPU's queue holds
+        files.emplace_back("t" + std::to_string(i) + ".bmp",
+                           bmp8(16, 16, [i](std::uint32_t x, std::uint32_t y) { return 1 + (x + y + i * 7) % 200; }));
+    write(assets / "gpuzone.s3d", test::pfs_fixtures::make_pfs(files));
+    const auto archives = list_archives({assets});
+    ScanResult r = scan(archives, {.threads = 1});
+    REQUIRE(r.textures.size() == 10);
+
+    auto gpu = std::make_unique<GpuWorker>([](std::string*) { return std::make_unique<FakeSet>(); });
+    // The worker is busy with a task of its own until the build has heard its textures were dropped.
+    std::atomic<PackJob*> job_seen{nullptr};
+    std::atomic<bool> released{false};
+    gpu->post([&](const Models&) {
+        for (int i = 0; i < 4000 && !released; ++i) {
+            if (PackJob* j = job_seen.load(); j && j->status().state != JobStatus::State::Running) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    });
+    JobOptions o;
+    o.pack_dir = dir.path() / "textures" / "gone";
+    o.textures = r.textures;
+    o.settings = {2, true};
+    o.encoders = 1;
+    PackJob job(o, *gpu);
+    job_seen = &job;
+    REQUIRE(wait_for([&] { return gpu->queued() == 6; })); // the build's share of the queue, the reader waiting
+    gpu.reset();                                            // drops them: the build must hear of it
+    released = true;
+    REQUIRE(wait_for([&] { return job.finished(); }));
+    const JobStatus s = job.status();
+    CHECK(s.state == JobStatus::State::Cancelled);
+    CHECK(s.files_written == 0);
+    CHECK(s.bytes_held == 0);
+}
+
+TEST_CASE("texpack: a GPU task a stopping worker drops calls its dropped callback instead") {
+    std::atomic<int> ran{0}, dropped{0};
+    std::atomic<bool> release{false};
+    auto gpu = std::make_unique<GpuWorker>([](std::string*) { return std::make_unique<FakeSet>(); });
+    gpu->post([&](const Models&) {
+        while (!release) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        ++ran;
+    });
+    for (int i = 0; i < 3; ++i) gpu->post([&](const Models&) { ++ran; }, false, [&] { ++dropped; });
+    gpu->post([&](const Models&) { ++ran; }); // dropped, with nothing to call
+    REQUIRE(wait_for([&] { return gpu->queued() == 4; }));
+    // The running task lets go once ~GpuWorker has dropped the queue (it waits for the running task after that).
+    std::thread let_go([&] {
+        while (dropped < 3) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        release = true;
+    });
+    gpu.reset();
+    let_go.join();
+    CHECK(ran == 1);
+    CHECK(dropped == 3);
 }
 
 TEST_CASE("texpack: urgent GPU tasks go first") {

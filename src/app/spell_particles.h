@@ -17,6 +17,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -113,6 +114,10 @@ private:
     std::optional<glm::mat4> point_world(const render::ActorRenderer& actors, std::uint32_t id, int point);
     std::optional<glm::mat4> blood_point_world(const render::ActorRenderer* actors, std::uint32_t id) const;
     void update_blood(net::GameConnection& conn, const render::ActorRenderer* actors);
+    // Stops the emitters (all but a missile's) on spawns gone since the last frame, or whose id came back as another
+    // spawn, and drops their effect timers; note_attached records the spawns they hang from for the next frame.
+    void stop_gone_actors(const net::GameConnection& conn);
+    void note_attached(const net::GameConnection& conn);
 
     // GetParticleScaleFactor: the model's moddat.ini PESFactor.
     float particle_scale(const assets::CharacterModel& model) const;
@@ -152,6 +157,10 @@ private:
     std::vector<Held> held_;
     double clock_ = 0.0;
     game::SpellEffectTimers timers_; // OP_SpellEffect's
+    // The spawns the emitters and timers hung from at the end of the last frame, with their incarnation
+    // (game::Spawn::incarnation): the server may despawn a spawn and spawn another under its id within one frame.
+    std::unordered_map<std::uint32_t, std::uint64_t> attached_;
+    std::vector<std::uint32_t> gone_; // stop_gone_actors', kept for its capacity
     void play(net::GameConnection& conn, const Held& cue, const render::ActorRenderer* actors);
     // A stage of an effect by number (SpellEffectTimers_PlayStage, Handle_OP_AddNimbusEffect).
     void play_effect(net::GameConnection& conn, const game::SpellEffectStagePlay& play,

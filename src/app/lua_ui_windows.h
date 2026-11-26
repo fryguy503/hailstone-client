@@ -467,6 +467,8 @@ bool open_player_menu(UiHost& host, std::uint32_t spawn_id, float x, float y);
 // A right click on an item (CInvSlot::HandleRButtonUp): a bag opens or closes its container window, anything else
 // shows its information (app/lua_ui_items.cpp).
 void item_right_click(UiHost& host, const net::ItemSlot& slot);
+// The same with the modifier keys given (a command's: /itemnotify under /nomodkey or /shiftkey), not the keyboard's.
+void item_right_click(UiHost& host, const net::ItemSlot& slot, net::SlotClickKeys keys);
 // The left button held on an item slot (CInvSlotWnd::HandleLButtonHeld, game::inventory_hot_button): a hotbutton
 // for the slot or its item on the cursor, when nothing (item, coin, spell, hotbutton) is on the cursor. True when one
 // was put there (app/lua_ui_items.cpp).

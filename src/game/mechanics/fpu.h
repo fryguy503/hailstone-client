@@ -26,6 +26,13 @@
 // __ftol2_sse (through a double) truncates toward zero; values outside
 // the int32 range give 0x80000000.
 //
+// An invalid operation on non-NaN operands (inf - inf, 0 * inf, 0 / 0, the
+// square root of a negative number) gives the x87's default NaN, the negative
+// quiet NaN 0xfff8... (Intel SDM vol. 1, 4.8.3.7). x86-64's SSE gives the same
+// value, but ARM's default NaN is positive (0x7ff8...), so every such result
+// is set explicitly. A NaN operand passes through as SSE passes it: the first
+// NaN operand, quieted.
+//
 // The mechanics files are built with -ffp-contract=off (CMakeLists.txt) so
 // that the compiler never fuses a multiply and an add.
 
@@ -49,6 +56,7 @@ public:
 
     double add(double a, double b) const {
         double s = a + b;
+        if (std::isnan(s)) return nan_result(a, b);
         if (precision_ == FpuPrecision::Double53) return s;
         double bb = s - a;
         double err = (a - (s - bb)) + (b - bb); // TwoSum: a + b = s + err exactly
@@ -57,12 +65,14 @@ public:
     double sub(double a, double b) const { return add(a, -b); }
     double mul(double a, double b) const {
         double p = a * b;
+        if (std::isnan(p)) return nan_result(a, b);
         if (precision_ == FpuPrecision::Double53) return p;
         double err = std::fma(a, b, -p); // a * b = p + err exactly
         return round24(p, err);
     }
     double div(double a, double b) const {
         double q = a / b;
+        if (std::isnan(q)) return nan_result(a, b);
         if (precision_ == FpuPrecision::Double53) return q;
         double rem = std::fma(-q, b, a); // a = q * b + rem exactly
         double err = (b < 0) ? -rem : rem; // the sign of a / b - q
@@ -74,6 +84,7 @@ public:
     // most 24 significant bits, so the remainder's sign settles a tie.
     double sqrt(double a) const {
         double q = std::sqrt(a);
+        if (std::isnan(q)) return nan_result(a, a);
         if (precision_ == FpuPrecision::Double53 || !std::isfinite(q) || q == 0) return q;
         double rem = std::fma(-q, q, a); // a - q * q exactly: the sign of sqrt(a) - q
         return round24(q, rem);
@@ -87,7 +98,27 @@ public:
     // A value stored to a float (round to nearest even).
     static double to_float(double v) { return static_cast<double>(static_cast<float>(v)); }
 
+    // The x87's default NaN ("real indefinite"): 0xfff8000000000000.
+    static double indefinite() {
+        constexpr std::uint64_t kIndefinite = 0xfff8000000000000u;
+        double d;
+        std::memcpy(&d, &kIndefinite, 8);
+        return d;
+    }
+
 private:
+    // The NaN an operation on a and b gives: the first NaN operand, quieted, or
+    // the default NaN when neither is a NaN.
+    static double nan_result(double a, double b) {
+        if (!std::isnan(a) && !std::isnan(b)) return indefinite();
+        double r = std::isnan(a) ? a : b;
+        std::uint64_t rb;
+        std::memcpy(&rb, &r, 8);
+        rb |= std::uint64_t{1} << 51;
+        std::memcpy(&r, &rb, 8);
+        return r;
+    }
+
     // Rounds the exact value v + err (|err| at most half an ulp of v) to 24 bits.
     // The x87 keeps its 15-bit exponent at any precision, so a result below
     // FLT_MIN or above FLT_MAX keeps 24 significant bits (a later store to a

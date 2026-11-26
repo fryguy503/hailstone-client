@@ -10,6 +10,7 @@
 //   previous/<name>/ the files an install or a removal is moving out, until it has finished
 //   journal.txt     an install's or a removal's moves, one a line, so a cut-off one is undone at the next start
 //   download/       the downloaded packages
+//   install.lock    held by the one process that installs, removes or records add-ons in this folder (lock_addons)
 // Nothing a package holds is trusted: what it may hold is what a server may send into the same folder
 // (net::server_file_destination), a script needs an init.lua, a plugin exactly one library of this platform named
 // after it (read from its header, never loaded), and every Lua file must compile as text (no precompiled chunks). A
@@ -20,6 +21,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <utility>
 #include <string_view>
 #include <vector>
 
@@ -51,6 +53,28 @@ struct InstalledAddon {
 };
 
 std::filesystem::path addons_dir(const std::filesystem::path& data_dir);
+
+// One process at a time unpacks, installs, removes or records add-ons in a data folder (addons/install.lock):
+// two Hailstone windows started on their own would otherwise undo each other's journal or lose each other's line of
+// installed.txt (a lost line makes an add-on's files hand-installed ones, with every capability on a server without
+// hailstone.cfg). Within the process the hold is shared, and nests: the manager's thread may unpack one add-on while
+// the login screen installs another, as each always could. The functions below that change anything take it
+// themselves and fail (or, addons_at_start, wait for a later start) while another process has it.
+class AddonsLock {
+public:
+    AddonsLock(AddonsLock&& other) noexcept;
+    AddonsLock& operator=(AddonsLock&& other) = delete;
+    AddonsLock(const AddonsLock&) = delete;
+    AddonsLock& operator=(const AddonsLock&) = delete;
+    ~AddonsLock();
+
+private:
+    friend std::optional<AddonsLock> lock_addons(const std::filesystem::path& data_dir);
+    explicit AddonsLock(std::filesystem::path key) : key_(std::move(key)) {}
+    std::filesystem::path key_;
+};
+// nullopt while another process holds it (or addons/ cannot be written).
+std::optional<AddonsLock> lock_addons(const std::filesystem::path& data_dir);
 // scripts/<name>, plugins/<name>, tools/<name> or ui-addons/<name> under the data folder.
 std::filesystem::path addon_folder(const std::filesystem::path& data_dir, AddonKind kind, std::string_view name);
 std::string_view addon_kind_word(AddonKind kind); // "script", "plugin", "tool", "upscaler", "ui"
@@ -84,6 +108,9 @@ std::vector<InstalledAddon> read_installed_addons(const std::filesystem::path& d
 // Managed activation records, including disabled/modified ones so they cannot fall back to manual autorun.
 std::vector<mq::ManagedScript> managed_addon_scripts(const std::filesystem::path& data_dir);
 bool set_addon_enabled(const std::filesystem::path& data_dir, std::string_view name, bool enabled);
+// The add-on's auto-update switch, read and written back in one hold of lock_addons (no other process's change to
+// installed.txt in between is lost). False when it cannot be written.
+bool set_addon_auto_update(const std::filesystem::path& data_dir, std::string_view name, bool on);
 // Writes installed.txt and its backup, installed.bak.txt; false (written nowhere) when it cannot, or may not be
 // written now (AddonRegistry::writable).
 bool write_installed_addons(const std::filesystem::path& data_dir, const std::vector<InstalledAddon>& addons);
@@ -142,7 +169,8 @@ std::vector<plugin::Ceiling> addon_ceilings(const std::filesystem::path& data_di
 
 // First thing at start: an install or a removal that was cut off is undone, and what it left in new/ and previous/
 // goes. A lost or damaged installed.txt is written again from its backup when that has every add-on it names; else
-// the log says what is wrong.
+// the log says what is wrong. Nothing is done while another process holds lock_addons (its journal is not cut off,
+// but under way): a later start does it.
 void addons_at_start(const std::filesystem::path& data_dir);
 
 } // namespace hailstone::app

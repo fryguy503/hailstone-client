@@ -126,8 +126,7 @@ struct GpuIpcServer::Impl {
             try {
                 ULONG process_id = 0;
                 if (!::GetNamedPipeClientProcessId(pipe, &process_id) || !process_id) transport_failure();
-                WinHandle process(::OpenProcess(PROCESS_DUP_HANDLE | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
-                                                 FALSE, process_id));
+                WinHandle process(::OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id));
                 if (!process || ::GetProcessId(process.get()) != process_id ||
                     ::WaitForSingleObject(process.get(), 0) != WAIT_TIMEOUT) transport_failure();
                 peer = {process_id, next_connection.fetch_add(1)};
@@ -141,9 +140,13 @@ struct GpuIpcServer::Impl {
                 write_header(pipe, {K::Authenticated, 0, 0, false}, stop_event.get(), process.get(), hello_deadline);
                 authenticated = true;
                 std::uint64_t last_sequence = 0;
+                // The last reply's handle, open until the client's next request: it duplicates it from here
+                // (GpuIpcClient::call) before it sends another.
+                std::shared_ptr<const void> lent;
                 while (!stopped(stop_event.get(), process.get())) {
                     const auto request = read_header(pipe, stop_event.get(), process.get(), Deadline::max(),
                                                      Clock::now() + idle_timeout);
+                    lent.reset();
                     if (request.kind != K::Request || last_sequence == std::numeric_limits<std::uint64_t>::max() ||
                         request.sequence != last_sequence + 1) invalid_frame();
                     last_sequence = request.sequence;
@@ -155,14 +158,11 @@ struct GpuIpcServer::Impl {
                     write_header(pipe, {K::Response, static_cast<std::uint32_t>(reply.body.size()), request.sequence,
                                         reply.borrowed_handle != nullptr}, stop_event.get(), process.get(), reply_deadline);
                     if (reply.borrowed_handle) {
-                        HANDLE remote = nullptr;
-                        if (stopped(stop_event.get(), process.get()) ||
-                            !::DuplicateHandle(::GetCurrentProcess(), reply.borrowed_handle, process.get(), &remote,
-                                                0, FALSE, DUPLICATE_SAME_ACCESS)) transport_failure();
+                        // This process's own handle by number: the client duplicates it from here, so nothing is
+                        // put into the client's handle table that it did not take itself.
+                        lent = reply.handle_owner;
                         ByteWriter handle_value;
-                        handle_value.le(static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(remote)));
-                        // The destination owns this handle now. Never CloseHandle its integer in this process or
-                        // close a possibly reused destination handle after a partial/broken transport write.
+                        handle_value.le(static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(reply.borrowed_handle)));
                         write_bytes(pipe, handle_value.data(), stop_event.get(), process.get(), reply_deadline);
                     }
                     write_bytes(pipe, reply.body, stop_event.get(), process.get(), reply_deadline);

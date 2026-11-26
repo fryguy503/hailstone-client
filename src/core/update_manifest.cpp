@@ -84,6 +84,12 @@ std::string_view update_manifest_signed_part(std::string_view text) {
     return text;
 }
 
+std::string_view update_manifest_after_signature(std::string_view text) {
+    const std::string_view rest = text.substr(update_manifest_signed_part(text).size());
+    const std::size_t nl = rest.find('\n');
+    return nl == std::string_view::npos ? std::string_view{} : rest.substr(nl + 1);
+}
+
 std::optional<UpdateManifest> parse_update_manifest(std::string_view text, const Ed25519PublicKey& key,
                                                     std::string* error) {
     if (text.size() > kMaxManifest) return fail(error, "the update manifest is too large");

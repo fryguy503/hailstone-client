@@ -302,14 +302,18 @@ void InputGeometry::finish() {
     tiles_y_ = std::max(1, static_cast<int>(span_z));
     tiles_.assign(static_cast<std::size_t>(tiles_x_) * static_cast<std::size_t>(tiles_y_), {});
     const float border = static_cast<float>(border_cells(params_)) * params_.cell_size;
+    // A tile index along one axis, clamped to the grid as a float before the cast, so the cast is in range whatever
+    // the vertex (sane_triangle already keeps every vertex finite and within kMaxNavCoord; this does not rely on it).
+    const auto tile = [ts](float v, float origin, int count) {
+        return static_cast<int>(std::clamp(std::floor((v - origin) / ts), 0.0f, static_cast<float>(count - 1)));
+    };
     for (std::size_t i = 0; i < n; ++i) {
         const float* t = &verts_[i * 9];
+        if (!std::all_of(t, t + 9, [](float f) { return std::isfinite(f); })) continue; // (std::clamp keeps a NaN)
         float x0 = std::min({t[0], t[3], t[6]}) - border, x1 = std::max({t[0], t[3], t[6]}) + border;
         float z0 = std::min({t[2], t[5], t[8]}) - border, z1 = std::max({t[2], t[5], t[8]}) + border;
-        int tx0 = std::clamp(static_cast<int>(std::floor((x0 - bmin_.x) / ts)), 0, tiles_x_ - 1);
-        int tx1 = std::clamp(static_cast<int>(std::floor((x1 - bmin_.x) / ts)), 0, tiles_x_ - 1);
-        int tz0 = std::clamp(static_cast<int>(std::floor((z0 - bmin_.z) / ts)), 0, tiles_y_ - 1);
-        int tz1 = std::clamp(static_cast<int>(std::floor((z1 - bmin_.z) / ts)), 0, tiles_y_ - 1);
+        int tx0 = tile(x0, bmin_.x, tiles_x_), tx1 = tile(x1, bmin_.x, tiles_x_);
+        int tz0 = tile(z0, bmin_.z, tiles_y_), tz1 = tile(z1, bmin_.z, tiles_y_);
         for (int ty = tz0; ty <= tz1; ++ty)
             for (int tx = tx0; tx <= tx1; ++tx)
                 tiles_[static_cast<std::size_t>(ty) * static_cast<std::size_t>(tiles_x_) + static_cast<std::size_t>(tx)]
@@ -324,7 +328,11 @@ std::span<const std::uint32_t> InputGeometry::tile_triangles(int tx, int ty) con
 
 std::span<const std::uint32_t> InputGeometry::triangles_at(float x, float z) const {
     const float ts = params_.tile_size();
-    return tile_triangles(static_cast<int>(std::floor((x - bmin_.x) / ts)), static_cast<int>(std::floor((z - bmin_.z) / ts)));
+    const float fx = std::floor((x - bmin_.x) / ts), fz = std::floor((z - bmin_.z) / ts);
+    // Off the grid, or not a number (each comparison false): no tile. The casts below are then in range.
+    if (!(fx >= 0.0f && fx < static_cast<float>(tiles_x_) && fz >= 0.0f && fz < static_cast<float>(tiles_y_)))
+        return {};
+    return tile_triangles(static_cast<int>(fx), static_cast<int>(fz));
 }
 
 bool InputGeometry::in_water(const glm::vec3& r) const { return water_ && water_(to_world(&r.x)); }

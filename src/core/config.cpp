@@ -124,7 +124,7 @@ bool Config::is_shared_key(std::string_view key) {
     // computer's graphics tier (render/graphics_tier.h), and what is taken only at start (the sample count, the
     // upscaler, the UI pack and scale, the sound device, the navigation threads).
     static constexpr std::string_view kPrefixes[] = {"assets.", "addons.", "update.", "news.", "login.", "browser.",
-                                                      "window.", "plugins.", "scripts."};
+                                                      "window.", "plugins.", "scripts.", "mapfilter."};
     static constexpr std::string_view kKeys[] = {
         "display.window_mode", "display.resolution", "display.msaa", "display.upscaler", "display.gpu_tier", "ui.name", "ui.scale", "ui.cpp_windows",
         "ui.dev_windows", "ui.perf_window", "ui.perf_log_hitches", "game.fixed_step", "audio.pregame_music",

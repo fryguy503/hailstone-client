@@ -8,6 +8,7 @@
 // the rules here are the original's (addresses below).
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -25,6 +26,10 @@ namespace hailstone::game {
 // EQWorldData_IsBazaarZone @0x7dc6c0: the zone table's flag 0x10000000, which
 // only The Bazaar (151) has.
 inline constexpr std::uint32_t kBazaarZoneId = 151;
+// The traders and search result rows kept: well above a full bazaar zone and EQEmu's Bazaar:MaxSearchResults
+// (200 by default). What the original holds is not known (docs/unknowns.md); past these, new ones are dropped.
+inline constexpr std::size_t kBazaarTradersKept = 4096;
+inline constexpr std::size_t kBazaarResultsKept = 4096;
 inline bool is_bazaar_zone(std::uint32_t zone_id) {
     if (zone_id > 1000) zone_id &= 0x7fff;
     return zone_id == kBazaarZoneId;

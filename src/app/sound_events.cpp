@@ -281,7 +281,7 @@ void SoundEvents::update_remote(const game::Spawn& s, const glm::vec3& listener,
 
 void SoundEvents::update_spawn(std::uint32_t id, const game::Spawn& s, bool local, const LocalMotion& me,
                                const glm::vec3& listener, std::uint32_t now_ms) {
-    SpawnState& st = spawns_[id];
+    SpawnState& st = spawns_.get(id, s.incarnation); // a new spawn under an old id starts afresh
     // A new-style code (a missile's launch on a new-style source) sounds as its old-style number, as
     // 0x4b15b0 remaps it before PlayAnimationSound.
     const std::uint8_t action = s.action >= kFirstNewStyleAction ? game::mechanics::new_to_old_anim(s.action) : s.action;
@@ -315,8 +315,7 @@ void SoundEvents::update(net::GameConnection& conn, const LocalMotion& me, std::
     for (const auto& [id, s] : world.spawns) update_spawn(id, s, id == my_id_, me, listener, now_ms);
     audio_.drop_spawn_loops_except(alive_);
     // Every spawn has its state (made above), so the two differ in size exactly when some have gone.
-    if (spawns_.size() != world.spawns.size())
-        std::erase_if(spawns_, [&](const auto& kv) { return !world.spawns.contains(kv.first); });
+    if (spawns_.size() != world.spawns.size()) spawns_.prune(world.spawns);
 }
 
 } // namespace hailstone::app

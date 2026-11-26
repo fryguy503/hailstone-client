@@ -239,8 +239,8 @@ local function purchasePage(s, h, btnH)
   consideredH = bottom - top
 end
 
--- The parcels waiting here (EQEmu's: hs.Parcels): a row picks one for Retrieve, which takes the first when none is
--- picked; Claim all takes every one, one after another (Hailstone). Above the game's own Send fields.
+-- The parcels waiting here (EQEmu's: hs.Parcels): left-click picks one for Retrieve, right-click inspects it.
+-- Retrieve takes the first when none is picked; Claim all takes every one, one after another (Hailstone).
 local pickedParcel = nil
 -- a parcel's "From ..." line by sender and date, made once rather than a frame (dropped past FROM_LINES_MAX, so a
 -- long session's senders and dates do not pile up)
@@ -280,8 +280,12 @@ local function parcels(s, btnH)
     for k, p in ipairs(list) do
       local y = cy + (k - 1) * rh
       local it = p.item
-      local hit = T.Hit("##parcel" .. k, cx, y, cx + cw, y + rh - 2 * s)
+      local hit = T.Hit("##parcel" .. k, cx, y, cx + cw, y + rh - 2 * s, false)
       local hov = ui.IsItemHovered()
+      if ui.IsItemClicked(ui.Mouse.Right) and not ui.GetIO().alt
+          and API.windows.ClickChild(WINDOW, "ParcelList:" .. p.slot, "right") then
+        T.TakeRightClick()
+      end
       local picked = pickedParcel == p.slot
       if picked then found = true end
       if picked or hov then

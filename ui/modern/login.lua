@@ -799,7 +799,8 @@ end
 
 -- The corner card (view.about, docs/updater.md "What the player sees"): this build, whether it is up to date (or the
 -- updater's news with its buttons), What's new (this release's part of CHANGELOG.md) and Hailstone's GitHub page.
-local ABOUT_COLORS = { uptodate = "good", checking = "muted", newer = "gold", unknown = "faint", off = "faint" }
+local ABOUT_COLORS = { uptodate = "good", checking = "muted", newer = "gold", unknown = "faint", off = "faint",
+  behind = "bad" }
 local function aboutCard(view, s)
   local a = view.about
   ui.PushFont(T.font.large)

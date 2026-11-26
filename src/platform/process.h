@@ -31,7 +31,9 @@ void lower_current_thread_priority();
 // when another process holds it; a lock that cannot be made at all (a read-only folder) counts as taken by us.
 bool hold_lock_file(const std::filesystem::path& lock);
 
-// std::fopen for a path; on Windows by its wide name, so any character in it works.
+// std::fopen for a path; on Windows by its wide name, so any character in it works. The file is not passed on to the
+// processes this one starts (the browser helper and, through it, CEF's): closed across exec on POSIX, a handle that
+// is not inheritable on Windows.
 std::FILE* open_c_file(const std::filesystem::path& path, const char* mode);
 
 // Windows: a GUI program (no console of its own) started from a console writes its stdout and stderr there from

@@ -4,6 +4,9 @@
 
 #include "game/mechanics/regions.h"
 #include "game/sound_rules.h"
+#include "game/spawn_states.h"
+
+#include <map>
 
 using namespace hailstone;
 using namespace hailstone::game;
@@ -216,4 +219,26 @@ TEST_CASE("Feet wetness: entering and leaving a liquid region (0x59ec30)") {
     CHECK_FALSE(v.change(6, 0.0f));
     CHECK(v.change(5, 2.0f) == kSoundWaterIn);
     CHECK(v.change(0, 0.0f) == kSoundWaterOut);
+}
+
+TEST_CASE("per-spawn sound state: a new spawn under an old id starts afresh, gone ids are dropped") {
+    struct State {
+        std::uint32_t action_seq = 0;
+        bool seq_seen = false;
+    };
+    SpawnStates<State> states;
+    State& rat = states.get(7, 100);
+    rat.action_seq = 5;
+    rat.seq_seen = true;
+    CHECK(states.get(7, 100).seq_seen); // the same spawn keeps its state
+    // Despawned and another spawned under id 7 within one frame: the size is the same, the state is not the rat's.
+    const State& guard = states.get(7, 101);
+    CHECK_FALSE(guard.seq_seen);
+    CHECK(guard.action_seq == 0);
+    CHECK(states.size() == 1);
+    states.get(8, 1);
+    std::map<std::uint32_t, int> alive{{8, 0}};
+    states.prune(alive);
+    CHECK(states.size() == 1);
+    CHECK_FALSE(states.get(8, 1).seq_seen);
 }

@@ -984,6 +984,17 @@ void Character::process_all_stats() {
     d_.combat_effects = sums.at(0x30);
     d_.shielding = sums.at(0x34);
     d_.spell_shield = sums.at(0x38);
+    // derive_item_bonuses' copies from before the caps (the *Bonus2 fields, +0xa0..+0xc4)
+    d_.combat_effects_uncapped = sums.at(0xa0);
+    d_.spell_shield_uncapped = sums.at(0xa4);
+    d_.shielding_uncapped = sums.at(0xa8);
+    d_.damage_shield_uncapped = sums.at(0xac);
+    d_.dot_shielding_uncapped = sums.at(0xb0);
+    d_.ds_mitigation_uncapped = sums.at(0xb4);
+    d_.avoidance_uncapped = sums.at(0xb8);
+    d_.accuracy_uncapped = sums.at(0xbc);
+    d_.stun_resist_uncapped = sums.at(0xc0);
+    d_.strike_through_uncapped = sums.at(0xc4);
     d_.avoidance = sums.at(0x3c);
     d_.accuracy = sums.at(0x40);
     d_.stun_resist = sums.at(0x44);

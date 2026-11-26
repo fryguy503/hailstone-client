@@ -60,6 +60,29 @@ TEST_CASE("hooks: commands are case-insensitive, the latest wins, removal brings
     CHECK(h.commands() == std::vector<std::string>{"/hello"});
 }
 
+TEST_CASE("hooks: the command catalog changes when add-on commands come and go") {
+    Hooks hooks;
+    auto guest = hooks.new_guest("addon");
+    auto serial = hooks.command_catalog_serial();
+    auto run = [](std::string_view) {};
+    CHECK_FALSE(hooks.add_command(guest, "/say", run));
+    CHECK(hooks.command_catalog_serial() == serial);
+    REQUIRE(hooks.add_command(guest, "/ExampleAddon", run));
+    CHECK(hooks.command_catalog_serial() != serial);
+    CHECK(hooks.commands() == std::vector<std::string>{"/exampleaddon"});
+    serial = hooks.command_catalog_serial();
+    hooks.remove_command(guest, "unknown");
+    CHECK(hooks.command_catalog_serial() == serial);
+    hooks.remove_command(guest, "EXAMPLEADDON");
+    CHECK(hooks.command_catalog_serial() != serial);
+    CHECK(hooks.commands().empty());
+    REQUIRE(hooks.add_command(guest, "exampleaddon", run));
+    serial = hooks.command_catalog_serial();
+    hooks.remove(guest);
+    CHECK(hooks.command_catalog_serial() != serial);
+    CHECK(hooks.commands().empty());
+}
+
 TEST_CASE("hooks: a plugin's or script's owner cannot take the client's own commands") {
     Hooks h;
     auto client = h.new_owner("lua"), g1 = h.new_guest("plugin:a"), g2 = h.new_guest("lua:b");
@@ -183,4 +206,35 @@ TEST_CASE("hooks: a command that runs itself stops nesting instead of overflowin
     line = "/again";
     CHECK(h.command(line));
     CHECK(runs == 64);
+}
+
+TEST_CASE("hooks: hooks added or removed while an event runs keep the event's own list") {
+    Hooks h;
+    auto a = h.new_owner("a"), b = h.new_owner("b"), c = h.new_owner("c");
+    std::vector<std::string> seen;
+    int added_runs = 0;
+    bool first = true;
+    h.on_pulse(a, [&] {
+        seen.push_back("a");
+        if (!first) return;
+        first = false;
+        h.remove(b); // a later hook removed mid-event: it does not run, now or later
+        // Enough new hooks that the list grows its storage while it is being walked: none runs this event.
+        for (int i = 0; i < 64; ++i) h.on_pulse(c, [&] { ++added_runs; });
+        // A nested event walks the list with the new hooks in it.
+        h.pulse();
+    });
+    h.on_pulse(b, [&] { seen.push_back("b"); });
+    h.on_pulse(c, [&] { seen.push_back("c"); });
+    h.pulse();
+    // The outer event: a, (nested: a, c, 64 added), c. The added hooks ran only in the nested event.
+    CHECK(seen == std::vector<std::string>{"a", "a", "c", "c"});
+    CHECK(added_runs == 64);
+    seen.clear();
+    h.pulse();
+    CHECK(seen == std::vector<std::string>{"a", "c"});
+    CHECK(added_runs == 128);
+    h.remove(c);
+    h.pulse();
+    CHECK(added_runs == 128);
 }

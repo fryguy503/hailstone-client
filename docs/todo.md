@@ -202,6 +202,7 @@ Server-dependent systems stock EQEmu never sends keep their live checks open pas
   - Open: anonymous and roleplaying friends, a comparison with RoF2.
 
 ### Combat and spells (do first)
+- [ ] **Right-click consider: RoF2's remaining cases** (docs/mechanics.md "Right click on an NPC"): consider a non-trader player before the inspect, fall through to consider when a merchant, banker, guildmaster or corpse interaction fails, and the USE key's consider within 20.
 - [ ] **Target and pet window buff slot limit.** Check the original's against the 97 the client keeps (`net::kMaxSpawnBuffSlots`, docs/unknowns.md).
 - [x] **Cure counters over multiple effect slots of one buff.**
   - A cure spends against that buff's whole local counter pool and caps it at zero, leaving removal to the server's fade.
@@ -287,6 +288,8 @@ Server-dependent systems stock EQEmu never sends keep their live checks open pas
   - One instanced model per definition, a few matrices a frame.
   - Without an authored volume, solid where the animation has them, so the rings let a player into the water shaft and out at the top. Seen live 2026-11-18.
   - Authored skeleton volumes keep the trunks solid and the branches passable in Warsliks Woods and other classic zones.
+  - The verified jungle leaf cards are passable in Trakanon's Teeth and other zones that reuse the models, matching
+    their server collision maps (docs/formats/wld.md, "Placed-object animation").
 - [ ] **Animated zone objects, open** (docs/unknowns.md).
   - The phase against the original's clock.
   - D3DX's key compression.
@@ -431,6 +434,7 @@ Server-dependent systems stock EQEmu never sends keep their live checks open pas
   - Native WLD density setting and small-node suppression.
   - Animation-trigger timing.
   - Live comparison across equipment changes, zoning and supported model families.
+- [ ] **Spell emitters of a spawn that leaves.** The client stops them and drops their effect timers; trace what the original does with a deleted actor's spell emitters (docs/unknowns.md).
 - [ ] **Actor particle hold.** Measure how far the actors' own effects' particles reach from their point and set the 30-unit view margin from it (docs/unknowns.md).
 - [ ] **Other players' carried lights after an equipment change.** Stock EQEmu sends nothing for them (docs/unknowns.md); trace how the original updates a remote player's light.
 - [x] **Name plates: occlusion, draw order and fading.**
@@ -565,6 +569,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [x] The box set's other windows (`--box-child`) have no updater and fetch no add-ons: only the first window downloads and installs (tests/updater_test.cpp).
 - [ ] A lock between Hailstone windows the client did not start (two copies opened by hand): each still has its own updater and add-on manager on the same `download/` and `addons/` files.
 - [ ] A release job in CI (packages, manifest, signature, upload).
+- [x] **Release images pinned by digest.** `linux.Dockerfile` is pinned by digest with an apt snapshot date; MSVC 17.14 and SDK 10.0.26100 in `msvc_setup.sh` (docs/updater.md "Making a release").
 - [x] **macOS arm64 releases:** a plain folder like Linux's with MoltenVK beside the binary; built, tested and signed ad hoc by the macOS workflow (docs/ci.md "macOS arm64"), packed and signed into the manifest locally. No Developer ID or notarization, by choice: players clear the quarantine (README.md).
 - [ ] **macOS on a Mac.** Only the build and headless tests have run.
   - The client on Apple Silicon: MoltenVK's device features, the window, input, audio, the Keychain.
@@ -572,6 +577,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [ ] **macOS: the saved passwords use deprecated Keychain calls** (SecKeychain, deprecated since macOS 10.10; Apple Clang warns, `platform/credentials.cpp`). SecItem's calls replace them.
 - [ ] **macOS: the startup error for a missing Vulkan** names the graphics card makers' drivers (app/startup_error.cpp); on macOS it would be the missing `libMoltenVK.dylib`.
 - [ ] Resumable downloads (HTTP range requests) instead of starting over.
+- [x] **A feed that went back:** a signed manifest older than the newest one the feed showed before (`update/feed-seen.txt`) is reported, not called up to date (tests/updater_test.cpp). A feed frozen on one manifest is not detected, by choice: no re-signing schedule (docs/updater.md "A feed that went back").
 
 ### Add-ons (docs/addons.md)
 - [x] The manifest and GitHub link parsers, the library header reader; `tools/make_addon.py`, and `hailstone_sign` for add-on manifests.
@@ -587,6 +593,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [x] An update's approval holds only for the capabilities and version the player saw.
 - [x] **The player's word wins over a check under way:** an add-on removed meanwhile is not installed again; auto-update switched off meanwhile is not overridden; an update keeps the switch as it is at install time.
 - [x] Scripts started by a script or plugin get no more than their starter; `scripts/config/` never runs as code.
+- [x] **Permanent actions asked by code other than a shipped pack's own** (a character's delete, a bulk destroy, from a script, a plugin window or an add-on interface) are asked in the client's own window (`UiHost::client_confirm`), which no Lua code sees or answers. A script's stock-window click on ConfirmationDialogBox's Yes is refused while that box asks a destroy's question (an item's destroy, a guild's disband).
 - [x] **A server's compiled plugins load only once the player allowed their bytes for that server** (`servers/<profile>/plugin_approvals.txt`). The prompt in both packs and the client's own; changed from the add-on list.
 - [x] A module runs only in a script it may do as much as: an add-on's module is refused in a script that may do more.
 - [x] **Binding a command needs 'commands'.** Scripts and plugins cannot shadow the game's or the client's own commands (`Hooks::new_guest`, `reserved_command`).
@@ -603,6 +610,9 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [x] `${Int[...]}` and `float.Int` defined for NaN, infinities and huge numbers.
 - [x] `mq.TLO` values' metatable locked, so a script cannot swap in a `__gc`.
 - [x] **MQ's `Math` TLO (its Calculate arithmetic), `If` and `Range`,** and the rest of MQ's int, float and string members with MQ's edge cases (`mq/calc.h`).
+- [x] The TLO members E3 reads on `Me`, items, spells, `Target`, spawns and `Group` (aggro, AAs, disciplines, gem and cast timers, augments, item links, the client's own stacking rules for `StacksWith` / `WillLand`). Unit tests only; not tried with E3.
+- [ ] `Spell.StacksWithDiscs` (its spell column is not decoded) and other MQ plugins' TLOs (`DanNet`, `NetBots`, `MoveUtils`) and `Defined` and window controls (`Window.Child`, `/invoke`), which E3 also reads.
+- [x] MQ's `Raid` and `Corpse` TLOs, and `Me.Invulnerable`, `Mount`, `CurrentFavor`, `TributeActive`, `SpellShieldBonus`, `SpellDamageBonus`, `PetBuff`, and the spells' `CounterType` and `CounterNumber`. Unit tests only.
 - [x] **Spawn searches follow MacroQuest's words and matching rules** (`mq/spawn_search.h`): spawn types, pets, 3D radius, named test, group, raid, guild, xtarget, light, player state.
 - [x] **The alerts key** (CMD_HISTORIC_ALERTS, __ExecuteCmd case 168) toggles AlertHistoryWnd in both packs; listed with its Shift+H default. Seen live in the Modern pack.
 - [ ] **MacroQuest's alert lists:** `/alert`, and the spawn search's `alert`, `noalert`, `nearalert`, `notnearalert`. None kept yet, so those words act as with an empty list.
@@ -620,10 +630,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
   - Whether a server extension allowed mid-zone needs the next zone-in.
 - [x] **Plugin windows: the pack's global tables are views.** Plugin functions left in the pack's global tables (`GPSTATE`, `modern`, `ui_palette`) used to run as the player; the plugin now sees those tables through views that make what it writes run as the plugin (and stop when it unloads). The views refuse setmetatable, rawset and `__gc` (ui/lua/lua_host.cpp).
 - [x] **Plugin windows: the pack's functions are wrapped.** What they return or raise reaches the plugin as a view; the pack's arguments to a plugin's callbacks are views; `getmetatable` gives a view of a metatable the plugin did not set (ui/lua/lua_host.cpp).
-- [ ] **A function or table a plugin passes to the pack is not wrapped** (as an argument to a pack function, or returned from a callback).
-  - A pack function that keeps it and calls it later runs the plugin's code as the player.
-  - A full membrane (wrap every value crossing into pack code) would close it, at a cost on every call.
-  - The packs' shared libraries that keep callbacks should keep them per window instead.
+- [x] **A function or table a plugin passes to the pack is wrapped** (as an argument to a pack function, or returned or raised from a callback): it reaches the pack as what the plugin leaves in a shared table does (`push_export`: a table as an owned view, a function as the plugin's), so a pack function that keeps it and uses it later runs none of the plugin's code as the player (ui/lua/lua_host.cpp `call_pack`, `call_as`).
 - [x] **Auto-update:** the check at start (`addons.check_hours`), locally modified files, files moved only at the login screen, approval when the caps grow.
 - [x] Signatures: the key pinned at the first install, an update with another key (or unsigned) refused.
 - [x] **Suggested add-ons:** the signed add-on index (projecthailstone/hailstone-addon-index) and a server's `[addons] suggest`. A line on the server select; Look at it / Not now / Don't ask again on the login screen, in both packs and the client's own. A suggestion's card held to the index's name and key.
@@ -663,6 +670,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [x] The item display's placeable, collectible, No Destroy, No Storage and trophy lines (stock EQEmu sends none of this data).
 - [x] **Context tips** for experience, invites, consent, red-con target, world containers and more. Tip table ids fixed (two missing entries had shifted every tip from 0x38); OP_ConsentResponse / OP_DenyResponse handled. Open: the tips listed in unknowns.md.
 - [x] The chat server's per-window channel state is saved.
+- [ ] **Popup STML tables: the rest of RoF2's table markup.** `<caption>`, `<colgroup>`, `<col>`, `rowspan` and `colspan` (and the WIDTH, HEIGHT and BGCOLOR attributes) are read by `CStmlWnd::ParseSTMLTable` @0x8826a0 but not by `lib/stml_blocks.lua`; a table that uses the tags is shown as text (docs/dev-ui.md "LargeDialogWindow").
 - [ ] **The chat log (/log): match the original's file handling.** Trace `CEverQuest::OutputTextToLog` @0x5130c0: opened and closed per line, or held open. The client holds the file open while logging (docs/unknowns.md).
 - [x] Tracking window: the controls run the /track commands, auto update saved (modern checked live).
 - [x] Tracking death cleanup (WORLD-007): tracked-target deaths send the stop request and tracking message;
@@ -725,6 +733,9 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [x] **Find: Options selects a gold ground line (default) or rainbow strands,** applied at once and saved per character in both UI packs. Live acceptance open.
 - [x] Find: Walk there (the navigator to within 10, the guide path showing; gamepad X). Not tried live.
 - [x] Find: the modern minimap marks the NPCs the map marks (the same kinds and search). Not tried live.
+- [x] **MacroQuest `/mapfilter`** (`mq/map_filter.*`, `app/lua_ui_map.cpp`): the 34 useful MQ2Map options, shared settings, custom searches, spawn and ground marks, colours, markers, vectors, target overlays and TargetPath. The shared C++ map presenter applies them to the large map and minimap; no UI-pack controls were added. Unit and render tests pass; the core filters were tried live.
+- [ ] `/mapfilter vanilla` live acceptance: both packs, mouse and controller, map window and minimap, in-map controls, Find and TargetPath still working, server lock on and off, zoning and restart persistence.
+- [ ] `/mapfilter` live acceptance: a zone with players, NPCs, a pet, a corpse, a ground item and a target; colours, custom search, markers, vectors, circles, TargetPath and restart persistence.
 - [x] **Find: quest givers from the server script** (0x1436 / 0x1437; `quest_npcs`): the NPCs whose own quest file takes hand-ins or talks, made once per zone process and kept. Not tried on a live server.
 - [ ] Find: the gamepad minimap's marks; quest givers measured on a live server (the zone log's line) and the figure put in server/README.md.
 - [ ] A key binding of the client's own (the key window holds only the original's commands): walk to the target; `/nav target` on a hot button meanwhile.

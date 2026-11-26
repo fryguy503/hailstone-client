@@ -37,6 +37,79 @@ HailstoneWorldSubmission submission(const std::array<HailstoneWorldVertex, 3>& v
 }
 }
 
+TEST_CASE("world placement host: exclusive aim, blocked gestures and one-shot results") {
+    plugin::WorldPlacementHost host;
+    const plugin::WorldPlacementScene scene{3, 85, 2};
+    const plugin::WorldPlacementPoint point{12, -7, 2};
+    HailstoneWorldPlacement out{};
+    out.size = sizeof(out);
+    CHECK_FALSE(host.get(1, std::nullopt, &out));
+    REQUIRE(host.get(1, scene, &out));
+    CHECK(out.status == HAILSTONE_WORLD_PLACEMENT_INACTIVE);
+    CHECK(out.zone_id == 85);
+    CHECK(out.instance_id == 2);
+
+    REQUIRE(host.start(1, scene));
+    CHECK_FALSE(host.start(2, scene));
+    host.cancel(2);
+    CHECK(host.aiming());
+    REQUIRE(host.get(2, scene, &out));
+    CHECK(out.status == HAILSTONE_WORLD_PLACEMENT_INACTIVE);
+
+    host.update(point, false, true); // Release from a button pressed before arming.
+    REQUIRE(host.get(1, scene, &out));
+    CHECK(out.status == HAILSTONE_WORLD_PLACEMENT_AIMING_VALID);
+    host.update(point, true, false);
+    host.update(std::nullopt, false, false); // Pointer crossed a window or invalid terrain.
+    REQUIRE(host.get(1, scene, &out));
+    CHECK(out.status == HAILSTONE_WORLD_PLACEMENT_AIMING_INVALID);
+    host.update(point, false, true);
+    CHECK(host.aiming());
+
+    host.update(point, true, true);
+    CHECK_FALSE(host.aiming());
+    REQUIRE(host.start(2, scene));
+    out.size = sizeof(out.size);
+    CHECK_FALSE(host.get(1, scene, &out));
+    out.size = sizeof(out);
+    REQUIRE(host.get(1, scene, &out));
+    CHECK(out.status == HAILSTONE_WORLD_PLACEMENT_CONFIRMED);
+    CHECK(out.position[0] == point[0]);
+    CHECK(out.position[1] == point[1]);
+    CHECK(out.position[2] == point[2]);
+    REQUIRE(host.get(1, scene, &out));
+    CHECK(out.status == HAILSTONE_WORLD_PLACEMENT_INACTIVE);
+    CHECK(host.aiming());
+}
+
+TEST_CASE("world placement host: scene and owner changes retire coordinates") {
+    plugin::WorldPlacementHost host;
+    const plugin::WorldPlacementScene scene{3, 85, 2};
+    const plugin::WorldPlacementScene new_scene{4, 85, 2};
+    const plugin::WorldPlacementPoint point{12, -7, 2};
+    HailstoneWorldPlacement out{};
+    out.size = sizeof(out);
+
+    REQUIRE(host.start(1, scene));
+    host.update(point, true, true);
+    REQUIRE(host.get(1, new_scene, &out));
+    CHECK(out.status == HAILSTONE_WORLD_PLACEMENT_CANCELLED);
+    CHECK(out.position[0] == 0);
+
+    REQUIRE(host.start(1, scene));
+    REQUIRE(host.get(1, std::nullopt, &out));
+    CHECK(out.status == HAILSTONE_WORLD_PLACEMENT_CANCELLED);
+    CHECK(out.zone_id == 0);
+    CHECK_FALSE(host.get(1, std::nullopt, &out));
+    CHECK_FALSE(host.aiming());
+
+    REQUIRE(host.start(1, scene));
+    host.retire(1);
+    CHECK_FALSE(host.aiming());
+    REQUIRE(host.get(1, scene, &out));
+    CHECK(out.status == HAILSTONE_WORLD_PLACEMENT_INACTIVE);
+}
+
 TEST_CASE("world geometry host: frame-scoped queries distinguish missing from deferred and preserve outputs") {
     plugin::WorldGeometryHost host;
     unsigned floors = 0;
@@ -365,4 +438,42 @@ TEST_CASE("world geometry host: rounded boundary witness needs a valid source fa
             CHECK(out.flags == 99);
         }
     }
+}
+
+TEST_CASE("world placement host: after the player cancels, the owner aims again only after a window press") {
+    plugin::WorldPlacementHost host;
+    const plugin::WorldPlacementScene scene{3, 85, 2};
+    HailstoneWorldPlacement out{};
+    out.size = sizeof(out);
+
+    // A host cancel (scene retirement, focus loss) holds nobody off.
+    REQUIRE(host.start(1, scene));
+    host.cancel();
+    REQUIRE(host.start(1, scene));
+
+    // The player's own cancel: the owner reads CANCELLED, and re-arming at once (every pulse) is refused, so the
+    // world's clicks stay the player's; another add-on may still aim.
+    host.player_cancel();
+    REQUIRE(host.get(1, scene, &out));
+    CHECK(out.status == HAILSTONE_WORLD_PLACEMENT_CANCELLED);
+    CHECK_FALSE(host.start(1, scene));
+    CHECK_FALSE(host.start(1, scene));
+    CHECK_FALSE(host.aiming());
+    REQUIRE(host.start(2, scene));
+    host.cancel(2);
+
+    // A press in a window (the add-on's own button) lets it aim again.
+    host.player_input();
+    REQUIRE(host.start(1, scene));
+
+    // Unload or permission loss forgets the hold-off with the rest of the owner's state.
+    host.player_cancel();
+    CHECK_FALSE(host.start(1, scene));
+    host.retire(1);
+    CHECK(host.start(1, scene));
+
+    // With no aim, a player cancel holds nobody off.
+    host.cancel();
+    host.player_cancel();
+    CHECK(host.start(1, scene));
 }

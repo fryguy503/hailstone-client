@@ -387,6 +387,211 @@ TEST_CASE("UI packs (modern): a spell dragged from a book that closed memorizes 
     CHECK(r.no_errors());
 }
 
+TEST_CASE("UI packs (modern): Spell Gems layout options preserve existing frames and wrap the icon tiles") {
+    PackRig r("modern");
+    r.run(kGems);
+    lua_pushlightuserdata(r.L, &r);
+    lua_setglobal(r.L, "testSpellIcon");
+    lua_pushcfunction(r.L, [](lua_State* L) {
+        const auto* w = ImGui::GetCurrentWindowRead();
+        lua_pushboolean(L, w && w->ID == ImHashStr("###modern.CastSpellWnd"));
+        return 1;
+    });
+    lua_setglobal(r.L, "testSpellGemsWindow");
+    r.run(R"lua(
+ui.SetSetting("hud.pos.CastSpellWnd", "700,200")
+local button = ui.InvisibleButton
+ui.InvisibleButton = function(id, ...)
+  local previous = rects[id]
+  local pressed = button(id, ...)
+  if not testSpellGemsWindow() then rects[id] = previous end
+  return pressed
+end
+local gemInfo = hs.GemInfo
+hs.GemInfo = function(win, id, info)
+  info = gemInfo(win, id, info)
+  if id == "CSPW_Spell0" then info.tex, info.tooltip = testSpellIcon, "Spirit of Wolf" end
+  return info
+end
+local clickChild = hs.ClickChild
+hs.ClickChild = function(win, id, phase)
+  if win == "CastSpellWnd" then
+    calls[#calls + 1] = "book " .. id .. " " .. phase
+    return true
+  end
+  return clickChild(win, id, phase)
+end
+menuRows = {}
+local menuItem = ui.MenuItem
+ui.MenuItem = function(label, selected, enabled, ...)
+  menuRows[label] = selected and true or false
+  if pick == label and enabled ~= false then
+    pick = nil
+    ui.CloseCurrentPopup()
+    return true
+  end
+  return menuItem(label, selected, enabled, ...)
+end
+local slider = ui.SliderInt
+ui.SliderInt = function(label, ...)
+  if label == "Icon size" and label == pick then
+    pick = nil
+    ui.CloseCurrentPopup()
+    return 28, true
+  end
+  return slider(label, ...)
+end
+local drawRect = ui.DrawRectFilled
+ui.DrawRectFilled = function(x0, y0, x1, y1, ...)
+  if testSpellGemsWindow() then
+    local x, y = ui.GetWindowPos()
+    local w, h = ui.GetWindowSize()
+    if x0 == x and y0 == y and x1 == x + w and y1 == y + h then gemPanel = true end
+  end
+  return drawRect(x0, y0, x1, y1, ...)
+end
+)lua");
+    auto refresh = [&] {
+        r.run("seen, rects, gemPanel = {}, {}, false");
+        r.s->frames(3);
+    };
+    auto choose = [&](const char* label) {
+        r.run((std::string("pick = '") + label + "'").c_str());
+        r.mouse_to(r.centre("##CSPW_Spell0"));
+        ImGui::GetIO().AddKeyEvent(ImGuiMod_Alt, true);
+        r.button(ImGuiMouseButton_Right, true, 1);
+        CHECK(r.truth("pick == nil"));
+        ImGui::GetIO().AddKeyEvent(ImGuiMod_Alt, false);
+        r.button(ImGuiMouseButton_Right, false);
+        ImGui::ClosePopupsExceptModals();
+        refresh();
+    };
+    auto click = [&](ImVec2 p) {
+        r.mouse_to(p);
+        r.button(ImGuiMouseButton_Left, true);
+        r.button(ImGuiMouseButton_Left, false);
+    };
+    refresh();
+    const auto* window = ImGui::FindWindowByName("###modern.CastSpellWnd");
+    REQUIRE(window);
+    const ImVec2 original = window->Size;
+    CHECK(original.x == 596);
+    CHECK(original.y == 56);
+    CHECK(r.truth("gemPanel and rects['##resize'] == nil"));
+    CHECK_FALSE(r.saw("Spirit of Wolf"));
+    auto first = r.centre("##CSPW_Spell0");
+    auto book = r.centre("##book");
+    CHECK(book.x == first.x + 12 * 45);
+    CHECK(book.y == first.y);
+
+    // An old saved Vertical still uses a single column of unchanged size.
+    r.run("ui.SetSetting('hud.vertical.CastSpellWnd', '1')");
+    refresh();
+    CHECK(window->Size.x == original.y);
+    CHECK(window->Size.y == original.x);
+    first = r.centre("##CSPW_Spell0");
+    book = r.centre("##book");
+    CHECK(book.x == first.x);
+    CHECK(book.y == first.y + 12 * 45);
+    choose("Vertical");
+    CHECK(r.truth("menuRows['Show spell names'] == false and menuRows['Show window background'] == true"
+                  " and menuRows['Show resize bar'] == false"));
+
+    choose("Show window background");
+    CHECK_FALSE(r.truth("gemPanel"));
+    CHECK(window->Size.x == original.x);
+    CHECK(window->Size.y == original.y);
+    choose("Show window background");
+    CHECK(r.truth("gemPanel"));
+
+    choose("Show spell names");
+    CHECK(r.saw("Spirit of Wolf"));
+    CHECK(r.truth("rects['##CSPW_Spell0'][3] > 40"));
+    r.run("calls = {}");
+    click(r.centre("##CSPW_Spell0"));
+    CHECK(r.called("gem CSPW_Spell0 left"));
+    choose("Show spell names");
+    CHECK_FALSE(r.saw("Spirit of Wolf"));
+
+    choose("Show resize bar");
+    REQUIRE(r.truth("rects['##resize'] ~= nil"));
+    const ImVec2 grip = r.centre("##resize");
+    r.mouse_to(grip);
+    r.button(ImGuiMouseButton_Left, true);
+    r.mouse_to(ImVec2(grip.x - 10 * 45, grip.y));
+    // The newly taller grid should settle even with the corner held at the same mouse position.
+    for (int i = 0; i < 3; ++i) {
+        CHECK(r.truth("ui.GetSetting('hud.gemWrap.CastSpellWnd') == '3'"));
+        r.s->frames(1);
+    }
+    r.button(ImGuiMouseButton_Left, false);
+    first = r.centre("##CSPW_Spell0");
+    const auto lastInFirstRow = r.centre("##CSPW_Spell2");
+    const auto firstInSecondRow = r.centre("##CSPW_Spell3");
+    book = r.centre("##book");
+    CHECK(lastInFirstRow.x == first.x + 2 * 45);
+    CHECK(lastInFirstRow.y == first.y);
+    CHECK(firstInSecondRow.x == first.x);
+    CHECK(firstInSecondRow.y == first.y + 45);
+    CHECK(book.x == first.x);
+    CHECK(book.y == first.y + 4 * 45);
+    r.run("calls = {}");
+    click(firstInSecondRow);
+    click(book);
+    CHECK(r.called("gem CSPW_Spell3 left"));
+    CHECK(r.called("book CSPW_SpellBookH left"));
+
+    choose("Vertical");
+    first = r.centre("##CSPW_Spell0");
+    const auto lastInFirstColumn = r.centre("##CSPW_Spell2");
+    const auto firstInSecondColumn = r.centre("##CSPW_Spell3");
+    CHECK(lastInFirstColumn.x == first.x);
+    CHECK(lastInFirstColumn.y == first.y + 2 * 45);
+    CHECK(firstInSecondColumn.x == first.x + 45);
+    CHECK(firstInSecondColumn.y == first.y);
+    const ImVec2 bottomGrip = r.centre("##resizebottom");
+    r.mouse_to(bottomGrip);
+    r.button(ImGuiMouseButton_Left, true);
+    r.mouse_to(ImVec2(bottomGrip.x, bottomGrip.y + 45));
+    r.button(ImGuiMouseButton_Left, false);
+    CHECK(r.truth("ui.GetSetting('hud.gemWrap.CastSpellWnd') == '4'"));
+    CHECK(r.centre("##CSPW_Spell3").x == r.centre("##CSPW_Spell0").x);
+    CHECK(r.centre("##CSPW_Spell4").x == r.centre("##CSPW_Spell0").x + 45);
+
+    choose("Vertical");
+    const ImVec2 wrapped = window->Size;
+    choose("Show resize bar");
+    CHECK_FALSE(r.truth("rects['##resize'] ~= nil"));
+    choose("Show spell names");
+    CHECK(r.saw("Spirit of Wolf"));
+    choose("Show spell names");
+    CHECK(window->Size.x <= wrapped.x);
+    CHECK(r.centre("##CSPW_Spell4").y == r.centre("##CSPW_Spell0").y + 45);
+    choose("Icon size");
+    CHECK(r.truth("rects['##CSPW_Spell0'][3] == 28"));
+    choose("Reset size");
+    CHECK(window->Size.x == original.x);
+    CHECK(window->Size.y == original.y);
+
+    // At large configured scales the viewport must still contain every tile and the grip.
+    r.run(R"lua(
+ui.SetSetting("hud.scale", "2.5")
+ui.SetSetting("hud.scale.CastSpellWnd", "1.6")
+ui.SetSetting("hud.icon.CastSpellWnd", "64")
+ui.SetSetting("hud.gemResize.CastSpellWnd", "1")
+ui.SetSetting("hud.gemNames.CastSpellWnd", "1")
+)lua");
+    refresh();
+    CHECK(r.truth(R"lua((function()
+  local function fits(r)
+    return r and r[1] >= 0 and r[2] >= 0 and r[1] + r[3] <= 1600 and r[2] + r[4] <= 900
+  end
+  for i = 0, 11 do if not fits(rects["##CSPW_Spell" .. i]) then return false end end
+  return fits(rects["##book"]) and fits(rects["##resize"])
+end)())lua"));
+    CHECK(r.no_errors());
+}
+
 // The spell sets the stand-in game has: one in use (Heals), nine free.
 constexpr const char* kSets = R"lua(
 hs.SpellSets = function()
@@ -651,4 +856,259 @@ end
     r.s->frames(2);
     CHECK_FALSE(r.saw("Give up the current adventure?"));
     CHECK(r.no_errors());
+}
+
+namespace {
+
+// A stand-in for a stock window's lists and buttons: fake.lists[win][list] = { rows = { {texts}, ... }, sel = row
+// (0-based, -1 none) }, one column a text with no heads; every child shown and enabled unless fake.off[id]; clicks are listed in `calls`. forced[id]
+// makes the next ui.Button / ui.InvisibleButton of that id report a click. ui.Text is seen as DrawText is.
+constexpr const char* kStockWindows = R"lua(
+forced = {}
+fake.lists, fake.off = {}, {}
+local function list(win, id) return fake.lists[win] and fake.lists[win][id] end
+local ListInfo, ListRow, ListClick = hs.ListInfo, hs.ListRow, hs.ListClick
+hs.ListInfo = function(win, id, ...)
+  local l = list(win, id)
+  if l then
+    local cols = #(l.rows[1] or { "" })
+    local labels, widths = {}, {}
+    for c = 1, cols do labels[c], widths[c] = "", 80 end
+    return #l.rows, cols, l.sel, labels, widths, false
+  end
+  if fake.lists[win] then return 0, 1, -1, { "" }, { 80 }, false end
+  return ListInfo(win, id, ...)
+end
+hs.ListRow = function(win, id, row, ...)
+  local l = list(win, id)
+  if l then return l.rows[row + 1] end
+  if fake.lists[win] then return nil end
+  return ListRow(win, id, row, ...)
+end
+hs.ListClick = function(win, id, row, button, ...)
+  local l = list(win, id)
+  if l then
+    calls[#calls + 1] = "listclick " .. id .. " " .. row
+    if button == "left" and l.rows[row + 1] then l.sel = row end
+    return true
+  end
+  return ListClick(win, id, row, button, ...)
+end
+local ChildShown, ChildState, ClickChild = hs.ChildShown, hs.ChildState, hs.ClickChild
+hs.ChildShown = function(win, id, ...)
+  if fake.lists[win] then return not fake.off[id] end
+  return ChildShown(win, id, ...)
+end
+hs.ChildState = function(win, id, ...)
+  if fake.lists[win] then return not fake.off[id], false end
+  return ChildState(win, id, ...)
+end
+hs.ClickChild = function(win, id, button, ...)
+  if fake.lists[win] then calls[#calls + 1] = "click " .. id return true end
+  return ClickChild(win, id, button, ...)
+end
+local Button, InvisibleButton = ui.Button, ui.InvisibleButton
+ui.Button = function(id, ...)
+  local hit = Button(id, ...)
+  if forced[id] then forced[id] = nil return true end
+  return hit
+end
+ui.InvisibleButton = function(id, ...)
+  local hit = InvisibleButton(id, ...)
+  if forced[id] then forced[id] = nil return true end
+  return hit
+end
+local Text = ui.Text
+ui.Text = function(s, ...)
+  seen[#seen + 1] = s
+  return Text(s, ...)
+end
+)lua";
+
+} // namespace
+
+TEST_CASE("UI packs (modern): the guild's member actions ask first, naming the member, and Yes acts on that member") {
+    PackRig r("modern");
+    r.run(kStockWindows);
+    r.run(R"lua(
+fake.shown.GuildManagementWnd = true
+fake.lists.GuildManagementWnd = { MemberList = { sel = 0, rows = {
+  { "Alpha", "50", "Warrior", "Member", "", "", "Zone", "" },
+  { "Beta", "40", "Cleric", "Member", "", "", "Zone", "" } } } }
+)lua");
+    r.s->frames(3);
+    struct Action { const char* label; const char* child; const char* question; };
+    for (const Action& a : {Action{"Promote", "PromoteButton", "Promote Alpha?"},
+                            Action{"Demote", "DemoteButton", "Demote Alpha?"},
+                            Action{"Make Leader", "MakeLeaderButton", "Make Alpha the guild leader?"},
+                            Action{"Remove", "RemoveButton", "Remove Alpha from the guild?"}}) {
+        CAPTURE(a.child);
+        const std::string button = std::string(a.label) + "##" + a.child;
+        r.run(("calls = {} seen = {} fake.lists.GuildManagementWnd.MemberList.sel = 0 forced['" + button + "'] = true")
+                  .c_str());
+        r.s->frames(2);
+        CHECK(r.saw(a.question));
+        CHECK_FALSE(r.called(std::string("click ") + a.child)); // one click asks; nothing is sent
+        r.run(("forced['" + std::string(a.label) + "##askyes" + a.child + "'] = true").c_str());
+        r.s->frames(2);
+        CHECK(r.called(std::string("click ") + a.child));
+        r.run("seen = {}");
+        r.s->frames(1);
+        CHECK_FALSE(r.saw(a.question)); // answered: put away
+    }
+    // Another member selected while it is asked: the question goes, its Yes is never drawn.
+    r.run("calls = {} seen = {} forced['Remove##RemoveButton'] = true");
+    r.s->frames(2);
+    CHECK(r.saw("Remove Alpha from the guild?"));
+    r.run("fake.lists.GuildManagementWnd.MemberList.sel = 1 seen = {}");
+    r.s->frames(2);
+    r.run("seen = {}");
+    r.s->frames(1);
+    CHECK_FALSE(r.saw("Remove Alpha from the guild?"));
+    CHECK_FALSE(r.saw("Remove Beta from the guild?"));
+    CHECK_FALSE(r.called("click RemoveButton"));
+    CHECK(r.no_errors());
+}
+
+TEST_CASE("UI packs (modern): the raid's Leave and Make Leader ask first") {
+    PackRig r("modern");
+    r.run(kStockWindows);
+    r.run(R"lua(
+fake.shown.RaidWindow = true
+hs.ContextMenus = function() return false end -- (the direct member buttons, Make Leader among them)
+fake.lists.RaidWindow = { RAID_PlayerList = { sel = 1, rows = {
+  { "1", "Alpha", "60", "Warrior", "", "Raid Leader" },
+  { "1", "Beta", "60", "Cleric", "", "" } } } }
+)lua");
+    r.s->frames(3);
+    r.run("calls = {} seen = {} forced['Leave##RAID_DisbandButton'] = true");
+    r.s->frames(2);
+    CHECK(r.saw("Leave the raid?"));
+    CHECK_FALSE(r.called("click RAID_DisbandButton"));
+    r.run("forced['Leave##askyesRAID_DisbandButton'] = true");
+    r.s->frames(2);
+    CHECK(r.called("click RAID_DisbandButton"));
+    r.run("calls = {} seen = {} forced['Make Leader##RAID_MakeLeaderButton'] = true");
+    r.s->frames(2);
+    CHECK(r.saw("Make Beta the raid leader?"));
+    CHECK_FALSE(r.called("click RAID_MakeLeaderButton"));
+    r.run("forced['Cancel##asknoRAID_MakeLeaderButton'] = true");
+    r.s->frames(2);
+    CHECK_FALSE(r.called("click RAID_MakeLeaderButton"));
+    r.run("seen = {}");
+    r.s->frames(1);
+    CHECK_FALSE(r.saw("Make Beta the raid leader?"));
+    CHECK(r.no_errors());
+}
+
+TEST_CASE("UI packs (gamepad): a friend's Remove removes that friend, or nobody once the name is gone") {
+    PackRig r("gamepad");
+    r.run(kStockWindows);
+    r.run(R"lua(
+fake.shown.FriendsWindow = true
+fake.lists.FriendsWindow = { FriendsList = { sel = 0, rows = { { "Alpha" }, { "Beta" } } }, IgnoreList = { sel = -1, rows = {} } }
+)lua");
+    r.s->frames(30);
+    r.run("calls = {} forced['##remove'] = true");
+    r.s->frames(2);
+    CHECK(r.saw("Remove Alpha from your friends list?"));
+    SUBCASE("the name has gone from the list") {
+        r.run("fake.lists.FriendsWindow.FriendsList = { sel = 0, rows = { { 'Beta' } } } forced['##confirmyes'] = true");
+        r.s->frames(2);
+        CHECK_FALSE(r.called("click DeleteButton"));
+        CHECK(r.saw("Alpha is no longer on the list."));
+    }
+    SUBCASE("the list moved: the name is selected again, then removed") {
+        r.run("fake.lists.FriendsWindow.FriendsList = { sel = 0, rows = { { 'Beta' }, { 'Alpha' } } } "
+              "forced['##confirmyes'] = true");
+        r.s->frames(2);
+        CHECK(r.called("listclick FriendsList 1"));
+        CHECK(r.called("click DeleteButton"));
+        CHECK(r.truth("fake.lists.FriendsWindow.FriendsList.sel == 1"));
+    }
+    CHECK(r.no_errors());
+}
+
+TEST_CASE("UI packs (gamepad): Who's picked player follows a new reply, or the pick goes") {
+    PackRig r("gamepad");
+    r.run(kStockWindows);
+    r.run(R"lua(
+submitted = {}
+fake.who = { 1, { { name = "Alpha", line = "[50 Warrior] Alpha (Human)" }, { name = "Beta", line = "[40 Cleric] Beta (Elf)" } } }
+hs.WhoResults = function() return fake.who[1], fake.who[2] end
+hs.ChatSubmit = function(slot, line) submitted[#submitted + 1] = line end
+GPSTATE.whoOpen = true
+)lua");
+    r.s->frames(30);
+    r.run("forced['##row'] = true"); // the first row: Alpha
+    r.s->frames(2);
+    CHECK(r.saw("ALPHA"));
+    // a reply from elsewhere (the Friends window's Who, a typed /who) with Alpha second
+    r.run("fake.who = { 2, { { name = 'Gamma', line = '[10 Monk] Gamma' }, { name = 'Alpha', line = '[50 Warrior] Alpha' } } }");
+    r.s->frames(20); // (the reply is read again every 0.25 s)
+    r.run("forced['##invite'] = true");
+    r.s->frames(2);
+    CHECK(r.truth("submitted[#submitted] == '/invite Alpha'"));
+    // a reply without Alpha: nothing is picked
+    r.run("fake.who = { 3, { { name = 'Gamma', line = '[10 Monk] Gamma' } } }");
+    r.s->frames(20);
+    r.run("seen = {}");
+    r.s->frames(1);
+    CHECK(r.saw("SELECT A PLAYER ON THE LEFT"));
+    CHECK(r.no_errors());
+}
+
+TEST_CASE("UI packs (gamepad): a merchant's Buy asked on its last frame does not press the next merchant's") {
+    PackRig r("gamepad");
+    r.run(kStockWindows);
+    r.run(R"lua(
+fake.shown.MerchantWnd = true
+fake.lists.MerchantWnd = { ItemList = { sel = -1, rows = { { "", "Bread", "", "0", "0", "1", "0", "1" } } } }
+hs.Parcels = function() return nil end
+)lua");
+    r.s->frames(30);
+    // A on a row selects it, and presses Buy the frame after
+    r.run("calls = {} forced['##row'] = true");
+    r.s->frames(2);
+    CHECK(r.called("click MW_Buy_Button"));
+    // the window closes on the frame after the row's A: no Buy, then or when a merchant opens again
+    r.run("calls = {} forced['##row'] = true");
+    r.s->frames(1);
+    r.run("fake.shown.MerchantWnd = false");
+    r.s->frames(1);
+    r.run("fake.shown.MerchantWnd = true");
+    r.s->frames(3);
+    CHECK_FALSE(r.called("click MW_Buy_Button"));
+    CHECK(r.no_errors());
+}
+
+TEST_CASE("UI packs: the fellowship's asking buttons go straight to the stock window, which asks once") {
+    // The stock FellowshipWnd model asks (app/lua_ui_fellowship.cpp, the confirmation dialog) for Make Leader, Remove,
+    // Leave, End Fellowship and Destroy Camp; a question of the pack's own on top would ask twice.
+    for (const char* pack : {"modern", "gamepad"}) {
+        CAPTURE(std::string(pack));
+        const bool modern = std::string_view(pack) == "modern";
+        PackRig r(pack);
+        r.run(kStockWindows);
+        r.run(R"lua(
+fake.shown.FellowshipWnd = true
+fake.lists.FellowshipWnd = { MemberList = { sel = 1, rows = {
+  { "Alpha", "50", "Warrior", "", "Zone", "", "On" },
+  { "Beta", "40", "Cleric", "", "Zone", "", "On" } } } }
+)lua");
+        r.s->frames(30);
+        const std::pair<const char*, const char*> buttons[] = {{"MakeLeaderButton", "Make Leader"},
+                                                               {"RemoveMemberButton", "Remove"},
+                                                               {"LeaveFellowshipButton", "Leave"},
+                                                               {"EndFellowshipButton", "End Fellowship"}};
+        for (const auto& [id, label] : buttons) {
+            CAPTURE(std::string(id));
+            const std::string forced = modern ? std::string(label) + "##" + id : std::string("##FellowshipWnd") + id;
+            r.run(("calls = {} seen = {} forced['" + forced + "'] = true").c_str());
+            r.s->frames(2);
+            CHECK(r.called(std::string("click ") + id));
+            CHECK_FALSE(r.saw("fellowship leader?"));
+        }
+        CHECK(r.no_errors());
+    }
 }

@@ -5,6 +5,7 @@
 #include "game/collision_callbacks.h"
 #include "game/mechanics/switches.h"
 
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <numbers>
@@ -483,6 +484,16 @@ glm::mat4 ground_object_transform(const GroundObject& o) {
     m = glm::rotate(m, o.tilt_x * kUnit, glm::vec3(1, 0, 0));
     float s = std::isfinite(o.size) && o.size > 0.0f ? o.size : 1.0f;
     return glm::scale(m, glm::vec3(s));
+}
+
+GroundObjectChange ground_object_change(const GroundObject& was, const GroundObject& now) {
+    const auto same = [](float a, float b) { return std::bit_cast<std::uint32_t>(a) == std::bit_cast<std::uint32_t>(b); };
+    GroundObjectChange c;
+    c.model = was.name != now.name;
+    c.placement = !same(was.position.x, now.position.x) || !same(was.position.y, now.position.y) ||
+                  !same(was.position.z, now.position.z) || !same(was.heading, now.heading) ||
+                  !same(was.tilt_x, now.tilt_x) || !same(was.tilt_y, now.tilt_y) || !same(was.size, now.size);
+    return c;
 }
 
 } // namespace hailstone::game

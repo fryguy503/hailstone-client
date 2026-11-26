@@ -38,7 +38,7 @@ length) fails the test, as does a call over 2 s.
 | 338 typed decoders `decode_*(const AppPacket&)`, and the game-side decoders of server data (`tests/fuzz_decoders.inc`; a test checks the list covers every such declaration in `src/net/*.h` and `src/game/*.h`) | 5 patterns (zeros, 0xff, counting, random, text) of 24 KB cut at ~900 lengths each, 300 mutations, and an opcode sweep for the decoders that look at the opcode | never throw, never over-allocate |
 | Session codec | `decode_datagram` for all pass/CRC combinations (also mutated plain packets re-encoded with a valid CRC), `decompress_body` (including a zlib bomb), `split_combined`/`split_app_combined`, `decode_app`, `parse_session_response`, `InboundStream` (fragments, out-of-order, wraparound, 20 000 random packets) | never throw |
 | Live `Session` | a real session over loopback UDP receiving 3 000 corrupt datagrams | keep running |
-| Login replies | `parse_handshake_reply`, `parse_login_reply`, `parse_server_list`, `parse_play_reply`, `reply_body`, with compressed/bomb seeds | error by exception only (the caller catches `std::exception`) |
+| Login replies | `parse_handshake_reply`, `parse_login_reply`, `parse_server_list`, `parse_play_reply`, `parse_kick_reply`, `reply_body`, with compressed/bomb seeds (a test checks every `parse_*` of raw bytes in `src/net/*.h` is fuzzed here or in the session codec's test) | error by exception only (the caller catches `std::exception`) |
 | Server configuration | `plugin::parse_server_cfg`, with enabled/disabled policies, malformed headers/lines, identity lists, embedded NULs, binary input, truncations and seeded mutations, up to 16 KiB per input (`tests/fuzz_server_cfg.h`) | never throw or over-allocate; every add-on identity kept is a normalized owner/repo; disabled add-on rules remain inactive, invalid enabled policies refuse installed add-ons' files but never the server's own, explicit blocks win |
 | Shared GPU textures | the transport's frame header (`gpu_ipc_wire::decode_header`), the broker's request parser (`gpu_cache::decode_request`, with the texture recipe it carries) and the recipe decoder (`gpu_cache::decode_texture`) | errors by `std::exception` |
 | Assets | PFS (multi-block), WLD (mesh fixtures plus every fragment type 0x03-0x37, `build_mesh` with its parts checked against its indices and vertices, `build_skeleton_pose`), EQG TER/MOD, ZON, heightmap ZON/DAT, ECO, TOG, water, EQGS/EQGM meshes, animations, EQGL layers, PTS/PRT points and emitters, texture animation lists, radial flora (ECO flora layers, RFD definitions), `Resources/OnDemandResources.txt`, DDS/BMP (all depths, RLE)/TGA, DDS cube maps made octahedral, WLD detail palette maps, JPEG, XMI, `_sounds.eff`, spellsnew, the old `spells.eff` (switch particles), EDD, sound-bank/asset/emt/race text, ini, zone-line tags | no crash/hang/huge allocation; errors by `std::exception` |
@@ -108,24 +108,37 @@ A file in a server's overlay (`servers/<id>/assets`) is read into the heap: the 
 files while the client runs, and Windows refuses a rename over a mapped file. A file that cannot be mapped (no
 address space, a file system that cannot map, an empty file) is also read into the heap.
 
-#### The cost of mapping
+#### A file changed under the mapping
 
-A game file that another program truncates or rewrites in place while it is mapped can:
+A game file that another program truncates or rewrites in place while it is mapped (a patcher, launcher or sync
+tool writing into the game folder alongside the client) is handled as a malformed archive, not a crash:
 
-- crash the client with SIGBUS on Linux and macOS, or `EXCEPTION_IN_PAGE_ERROR` on Windows, when a member past the
-  new end is read;
-- hand the parsers bytes that change under them.
+- A read of a page past a truncated file's new end faults: SIGBUS on Linux and macOS. On Windows the truncation is
+  refused while a view of it is mapped (`SetEndOfFile` fails with `ERROR_USER_MAPPED_FILE`, per Microsoft's
+  documentation), and the fault (`EXCEPTION_IN_PAGE_ERROR`) comes only from a read error of the disk or share the
+  file is on.
+- `PfsArchive` never parses the mapping itself. It copies what it reads (the header, the directory, each member's
+  compressed blocks) out through `platform::MappedFile::read`, and parses and inflates the copy. The copy is a
+  `memcpy` inside a guard: `__try`/`__except` for `EXCEPTION_IN_PAGE_ERROR` on Windows, and on POSIX a SIGBUS handler
+  that jumps back to the copy when the faulting thread is inside one. The read then throws, and the caller treats it
+  as it treats any archive it cannot read. Since only the `memcpy` runs inside the guard, no parser is left half-way.
+- Every other SIGBUS is handed to the action that was there before (the crash handler, or the default). A handler
+  installed later replaces the guard's; each read checks this (one `sigaction` query) and puts the guard back, with
+  that handler as its predecessor.
+- An edit in place, without a truncation, hands the parsers bytes that change between reads. The parsers bound every
+  read against the archive's length, so such bytes are treated like any malformed file.
 
-(a patcher, launcher or sync tool writing into the game folder alongside the client). The parsers bound every read
-against the mapping's length, so changed bytes are treated like any malformed file; a fault from a shrunk file is
-not caught.
+The private copy is one member's compressed bytes at a time; each thread keeps a buffer of up to 4 MiB for it between
+reads. Opening six archives of the NMS folder mapped (Greater Faydark's three, `global_chr`, `potranquility`,
+`dulak_obj`) and inflating every member (63 MB) took 118 ms before and 124 ms with the copies and the guard, best of
+seven on one core; the rest of a zone load (parsing, textures, uploads) is not affected.
 
-It is accepted because:
+Mapping stays because:
 
 - Hailstone never writes the game folder (docs/layout.md), and nothing else is expected to while the client runs;
 - a patcher that does is expected to replace files by rename (which leaves the old mapping intact on POSIX) rather
   than truncate them;
-- the gain is the archives' size in private memory.
+- the gain is the archives' size in private memory: character archives stay open for the whole session.
 
 A file replaced by rename is picked up the next time the archive is opened (another zone,
 `CharacterArchiveCache::clear()` after an asset-folder or overlay change).

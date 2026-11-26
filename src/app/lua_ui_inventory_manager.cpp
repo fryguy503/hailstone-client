@@ -18,7 +18,11 @@
 //                                   destroy also accepts banked items while the bank is open; withdraw takes banked
 //                                   items through the cursor into inventory. GameConnection::start_bulk_job:
 //                                   count is how many of them the action takes, err why it cannot run (nil: it started,
-//                                   or with dry, it could). dry only counts
+//                                   or with dry, it could). dry only counts. A destroy from code other than a shipped
+//                                   pack's own (which asks first itself) asks the client's confirmation (the count, and
+//                                   how many are No Trade or attuned) unless Options Destroy (FastItemDestroy) is on:
+//                                   then count, nil, true (asked), and the job starts on its Yes if the same items are
+//                                   still in the same places
 //   text = hs.TakeItemSearch()   -- /finditem's search, once (nil when there is none)
 //   inv, keep = hs.ItemsRevision()  -- change counters: the inventory's and the Keep marks' (a window's cache)
 //   live, age = hs.BankSeen()    -- live: the bank's rows are the bank as the server has it now; else they are the copy
@@ -33,8 +37,8 @@
 
 #include <charconv>
 #include <cmath>
+#include <cstdio>
 #include <ctime>
-#include <format>
 #include <iterator>
 #include <optional>
 #include <string>
@@ -46,6 +50,7 @@
 
 #include "app/lua_ui.h"
 #include "app/lua_ui_windows.h"
+#include "core/log.h"
 #include "game/bank.h"
 #include "game/inventory.h"
 #include "net/game_connection.h"
@@ -172,19 +177,24 @@ int AllItems(lua_State* L) {
     const net::GameConnection& c = *h.conn;
     // The bank's slots: the inventory's while it holds the bank as the server has it now, else the copy as last seen
     // (game/bank_snapshot.h), whose rows are marked stale.
-    std::optional<game::Inventory> seen;
-    if (!c.bank_live()) {
+    // (in a box the state owns, filled inside cxx_guard: hundreds of pushes follow, and one that raises would skip a
+    // destructor in this frame; plugin/lua_keep.h)
+    auto& seen = plugin::lua_keep<std::optional<game::Inventory>>(L);
+    lua_insert(L, -2); // (the box under the list, which stays on top for the rows)
+    if (!c.bank_live()) plugin::cxx_guard(L, [&] {
         seen.emplace();
         seen->load(c.bank_seen().items);
-    }
+    });
     lua_Integer n = 0;
     auto row = [&](const net::Item& it, const net::ItemSlot& at, const char* where, const net::Item* bag, bool stale) {
         lua_createtable(L, 0, 7);
         push_full_item(L, c, it);
         lua_setfield(L, -2, "item");
         const char kind = at.type == net::kInvBank ? 'b' : at.type == net::kInvSharedBank ? 's' : 'i';
-        std::string place = std::format("{}:{}", kind, at.slot) + (at.sub >= 0 ? std::format(":{}", at.sub) : std::string());
-        lua_pushstring(L, place.c_str());
+        char place[32]; // (no heap: "i:<slot>[:<sub>]")
+        if (at.sub >= 0) std::snprintf(place, sizeof place, "%c:%d:%d", kind, at.slot, at.sub);
+        else std::snprintf(place, sizeof place, "%c:%d", kind, at.slot);
+        lua_pushstring(L, place);
         lua_setfield(L, -2, "place");
         lua_pushstring(L, where);
         lua_setfield(L, -2, "where");
@@ -219,6 +229,7 @@ int AllItems(lua_State* L) {
     scan(net::kInvPossessions, net::kSlotGeneral1, net::kSlotGeneral10, "carried", true);
     scan(net::kInvBank, 0, (c.bank() ? c.bank()->slots : 24) - 1, "bank", true);
     scan(net::kInvSharedBank, 0, game::kSharedBankSlots - 1, "shared", true);
+    seen.reset(); // (what it holds goes now; the box itself to the collector)
     return 1;
 }
 
@@ -315,6 +326,57 @@ int CanPlace(lua_State* L) {
     return 1;
 }
 
+// What a bulk destroy would take, item by item, to tell on the confirmation's Yes that nothing moved meanwhile.
+struct PlannedItem {
+    net::ItemSlot at;
+    std::uint32_t id = 0;
+    std::string serial;
+    std::uint32_t count = 0;
+    bool operator==(const PlannedItem& o) const {
+        return at.same(o.at) && id == o.id && serial == o.serial && count == o.count;
+    }
+};
+
+std::vector<PlannedItem> planned_items(const net::GameConnection& c, const std::vector<net::ItemSlot>& plan) {
+    std::vector<PlannedItem> out;
+    for (const net::ItemSlot& at : plan)
+        if (const net::Item* it = c.inventory().at(at)) out.push_back({at, it->id, it->serial, it->stack_count});
+    return out;
+}
+
+// A bulk destroy asked by code other than a shipped pack's own (which asks in its own look first: the modern pack's
+// inventorymanager.lua): the client's own question in its own window (ask_client_confirm), with the count and how many are No Trade or attuned; its Yes
+// starts the job only if the same items are still where they were. Hailstone's own (the Advanced Inventory is not the
+// original's); Options Destroy (FastItemDestroy) skips it, as it does the single item's.
+std::string ask_bulk_destroy(UiHost& h, net::GameConnection& c, const std::vector<net::ItemSlot>& slots) {
+    if (auto why = c.bulk_items_blocked(net::GameConnection::ItemJobMode::Destroy); !why.empty()) return why;
+    const std::vector<net::ItemSlot> plan = c.bulk_items_plan(net::GameConnection::ItemJobMode::Destroy, slots);
+    if (plan.empty()) return c.start_bulk_job(net::GameConnection::ItemJobMode::Destroy, slots); // (its own answer)
+    if (confirm_open(h)) return "Answer the open question first.";
+    std::size_t bound = 0;
+    for (const net::ItemSlot& at : plan)
+        if (const net::Item* it = c.inventory().at(at); it && (it->no_trade() || it->attuned)) ++bound;
+    UiHost::Confirm q;
+    q.text = "Destroy " + std::to_string(plan.size()) + (plan.size() == 1 ? " item" : " items") + "?";
+    if (bound)
+        q.text += " " + std::to_string(bound) + (bound == 1 ? " of them is" : " of them are") +
+                  " No Trade or attuned and cannot be had back.";
+    q.text += " This cannot be undone.";
+    q.done = [&h, slots, before = planned_items(c, plan)](bool yes) {
+        if (!yes || !h.conn || !h.in_game) return;
+        net::GameConnection& now = *h.conn;
+        const auto plan_now = now.bulk_items_plan(net::GameConnection::ItemJobMode::Destroy, slots);
+        if (planned_items(now, plan_now) != before) {
+            log::info("bulk destroy: the items changed before the confirmation's Yes; nothing destroyed");
+            return;
+        }
+        if (auto why = now.start_bulk_job(net::GameConnection::ItemJobMode::Destroy, slots); !why.empty())
+            log::info("bulk destroy: {}", why);
+    };
+    ask_client_confirm(h, std::move(q)); // the client's own window: no script can answer it
+    return {};
+}
+
 int BulkItems(lua_State* L) {
     auto& h = host(L);
     using M = net::GameConnection::ItemJobMode;
@@ -350,12 +412,21 @@ int BulkItems(lua_State* L) {
     }
     net::GameConnection& c = *h.conn;
     std::size_t count = 0;
+    // A destroy is permanent: the shipped packs' own code has asked first; anyone else's goes through the client's
+    // question (ask_bulk_destroy), unless Options Destroy (FastItemDestroy) is on.
+    const bool ask = *mode == M::Destroy && !dry && !(h.trusted_ui && ui::lua::pack_code(L)) &&
+                     !c.client_option(game::ClientOption::FastItemDestroy);
     plugin::cxx_guard(L, [&] {
         count = c.bulk_items_plan(*mode, slots).size();
-        job.err = dry ? c.bulk_items_blocked(*mode) : c.start_bulk_job(*mode, slots);
+        job.err = dry ? c.bulk_items_blocked(*mode) : ask ? ask_bulk_destroy(h, c, slots) : c.start_bulk_job(*mode, slots);
     });
     lua_pushinteger(L, static_cast<lua_Integer>(count));
-    if (job.err.empty()) return 1;
+    if (job.err.empty()) {
+        if (!ask) return 1;
+        lua_pushnil(L);
+        lua_pushboolean(L, 1); // asked: the job starts on the client's Yes
+        return 3;
+    }
     lua_pushstring(L, job.err.c_str());
     return 2;
 }

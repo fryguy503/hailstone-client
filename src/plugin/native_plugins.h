@@ -43,6 +43,9 @@ struct NativeEnv {
     mq::Registry* registry = nullptr;
     std::function<const mq::Context&()> context;
     std::function<void(const std::string& text, std::uint32_t color)> print; // a chat line
+    // A routine automatic load or unload during zoning: `subject` names the plugin ("plugin:<name>"), `stop` is true
+    // when the notice unloads it (as ScriptEnv::zone_notice).
+    std::function<void(const std::string& text, const std::string& subject, bool stop)> zone_notice;
     std::function<void(const std::string& line)> run;                        // a command line (through the hooks)
     std::function<void(Stream stream, const net::AppPacket& p)> send;        // a packet to the server
     std::function<void*()> imgui_context;
@@ -50,6 +53,8 @@ struct NativeEnv {
     // connection its setters change (class masks, the pet list). Either may be null.
     game::ExtensionChain* extensions = nullptr;
     std::function<net::GameConnection*()> connection;
+    std::function<std::optional<WorldPlacementScene>()> world_placement_scene;
+    std::function<bool()> world_placement_input_allowed;
     // ABI 2: where a plugin's Lua windows, their functions, options and menu entries go (plugin/ui_bridge.h); null:
     // none.
     UiBridge* ui = nullptr;
@@ -81,6 +86,7 @@ struct NativeEnv {
     std::vector<std::filesystem::path> dirs; // where plugins are looked for, and one level down (plugins/<name>/)
     std::filesystem::path cache_dir;         // the approved copies
     std::filesystem::path config_dir;        // each plugin's own directory is config_dir / name
+    std::filesystem::path scripts_config_dir; // the scripts' settings folder (get_scripts_config_dir); empty: none
     // The per-server and per-character folders (server_config_dir, character_config_dir) are under the connection's:
     // the server's rules' folder (servers/<profile>/) and its character's files.
 };
@@ -97,6 +103,13 @@ public:
     void world_recorded(std::size_t batch, std::uint32_t vertices);
     void world_finish(bool submitted, bool presented);
     void world_unavailable();
+    bool world_placement_aiming() const;
+    void world_placement_update(std::optional<WorldPlacementPoint> ground, bool pressed, bool released);
+    void world_placement_cancel();
+    // The player cancelled the aim (Escape, a right click): its owner may not aim again until
+    // world_placement_player_input, a press in one of the windows (WorldPlacementHost::player_cancel).
+    void world_placement_player_cancel();
+    void world_placement_player_input();
     NativePlugins(const NativePlugins&) = delete;
     NativePlugins& operator=(const NativePlugins&) = delete;
 
@@ -139,7 +152,7 @@ public:
 
     // After the server's rules changed: unloads what they no longer allow; loads the server's own plugins and the
     // allowed ones `autoload` names ("*" all) that are not loaded yet.
-    void policy_changed(const std::vector<std::string>& autoload);
+    void policy_changed(const std::vector<std::string>& autoload, bool zone_policy = false);
     // Required add-ons are active, and no loaded plugin is forbidden by the current add-on rules. False with an
     // empty problem waits for native-code consent; a nonempty problem is a refusal or a load failure.
     bool required_addons_ready(std::string* problem = nullptr) const;
@@ -171,8 +184,8 @@ private:
     // Who loads: the player (asks, after a "Don't allow" too), the rules' automatic loads (ask only about a plugin
     // never answered) or a plugin or script (never asks).
     enum class Asker : std::uint8_t { Player, Rules, Script };
-    bool load_file(std::string_view name, std::string* why, Asker asker);
-    bool unload_file(std::string_view name);
+    bool load_file(std::string_view name, std::string* why, Asker asker, bool zone_policy = false);
+    bool unload_file(std::string_view name, bool zone_policy = false);
     bool check_required_addons(std::string* problem) const; // required_addons_ready's work, uncached
 
     std::unique_ptr<Impl> impl_;

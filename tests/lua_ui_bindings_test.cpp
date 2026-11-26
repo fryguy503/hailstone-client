@@ -554,10 +554,14 @@ TEST_CASE("hs.TakeCloseTopWindow: the close-top-window key's press, taken once")
 
 TEST_CASE("hs windows: found by name as a scan from the front finds them") {
     ImGuiContext* ctx = ImGui::CreateContext();
+    test::ScratchDir tmp("hs_windows_by_name");
     {
         app::UiHost host;
         host.in_game = host.ui_ready = true;
         UiTable hs(host);
+        // A layout of its own: the chat windows are shared by the process, and a test before this one may have
+        // left them regrouped (the main tab moved out of Chat1). Loading one starts them afresh, as a session does.
+        hs.api.load_layout(tmp.path() / "defaults.ini", tmp.path() / "UI.ini", {});
         hs.api.begin_frame();
         // Every model by its name (the first of a name, should two share one), the 32 chat windows among them.
         lua_State* L = hs.L;

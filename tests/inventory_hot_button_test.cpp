@@ -178,6 +178,20 @@ TEST_CASE("inventory hot button: held on a slot, dropped on a bar") {
     CHECK(run(L, "return hs.HasSlot(23)") == "false");
     host.in_game = true;
 
+    // hs.BagSlotClick and hs.BagSlotItem: only the open bag's own places. -1 would be the bag itself (sub -1), and an
+    // index of 65536 + k would alias place k as an int16.
+    CHECK(run(L, "return hs.ClickSlot(23, nil, 'right')") == "true"); // opens the backpack: Bag1
+    REQUIRE(run(L, "return hs.WindowShown('Bag1')") == "true");
+    CHECK(run(L, "return hs.BagSlotClick('Bag1', 0, 'right')") == "true");
+    CHECK(run(L, "return hs.BagSlotClick('Bag1', 7, 'right')") == "true");
+    CHECK(run(L, "return hs.BagSlotClick('Bag1', 8, 'right')") == "false");
+    CHECK(run(L, "return hs.BagSlotClick('Bag1', -1, 'right')") == "false");
+    CHECK(run(L, "return hs.BagSlotClick('Bag1', 65536, 'right')") == "false");
+    CHECK(run(L, "return hs.BagSlotItem('Bag1', -1).name") == "Backpack"); // (-1: the bag itself, as documented)
+    CHECK(run(L, "return hs.BagSlotItem('Bag1', 65536)") == "nil");
+    run(L, "hs.ShowWindow('Bag1', false)"); // closed again
+    CHECK(run(L, "return hs.BagSlotClick('Bag1', 0, 'right')") == "false");
+
     // The mock's profile has coin on the cursor (a type 3 attachment: nothing attaches over it). Into the purse first.
     CHECK(run(L, "return hs.ClickSlot(25, nil, 'leftheld')") == "false");
     for (int t = 0; t < 4; ++t)

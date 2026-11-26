@@ -282,9 +282,12 @@ bool ZipReader::extract_to_file(const ZipEntry& entry, const std::filesystem::pa
         if (ok && !out) ok = fail("cannot write " + path_utf8(tmp));
     }
 #ifndef _WIN32
-    // Windows has no execute bit, and its read-only flag is not wanted on an installed file.
-    if (ok && (entry.unix_mode & 0777) != 0) {
-        fs::permissions(tmp, static_cast<fs::perms>(entry.unix_mode & 0777), fs::perm_options::replace, ec);
+    // Windows has no execute bit, and its read-only flag is not wanted on an installed file. Never a group or world
+    // write bit (nor setuid, setgid or sticky): an archive's mode would otherwise let another user of the machine
+    // change a program the client runs.
+    const unsigned mode = entry.unix_mode & 0755;
+    if (ok && mode != 0) {
+        fs::permissions(tmp, static_cast<fs::perms>(mode), fs::perm_options::replace, ec);
         if (ec) ok = fail("cannot set the permissions of " + path_utf8(tmp) + ": " + ec.message());
     }
 #endif

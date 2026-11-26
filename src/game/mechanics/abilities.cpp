@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdlib>
 
+#include "game/eq_strings.h"
 #include "game/mechanics/character.h"
 #include "game/mechanics/item_stats.h"
 #include "game/mechanics/tables.h"
@@ -250,6 +251,7 @@ class ContextAttack final : public melee::AttackQueries {
 public:
     ContextAttack(const SkillContext& ctx, SkillState& state, SkillResult& out) : ctx_(ctx), st_(state), out_(out) {}
     void set_me(const melee::Spawn* me) { me_ = me; }
+    void set_slam(bool slam) { slam_ = slam; }
 
     bool has_character() override { return ctx_.ch != nullptr; }
     std::int32_t total_effect(std::int32_t spa) override { return ctx_.ch->total_effect(spa, true, 0, true, true); }
@@ -296,7 +298,7 @@ public:
     std::uint8_t can_use_combat_skill(std::int32_t slot, std::int32_t skill) override {
         if (skill > 99) return 0; // IsSkillIdBelow100
         if (slot != 100) return 1;
-        return mechanics::can_use_combat_skill(ctx_, static_cast<std::uint32_t>(skill)) ? 1 : 0;
+        return mechanics::can_use_combat_skill(ctx_, static_cast<std::uint32_t>(skill), slam_) ? 1 : 0;
     }
     melee::ItemRef item(std::int32_t slot) override { return ctx_.ch->sheet().item(slot) ? slot : melee::kNoItem; }
     melee::ItemRef weapon_ref_item(std::int32_t slot, bool fist, bool) override {
@@ -452,6 +454,7 @@ private:
     SkillState& st_;
     SkillResult& out_;
     const melee::Spawn* me_ = nullptr;
+    bool slam_ = false;
     std::optional<std::vector<int>> affects_;
     std::size_t removed_ = 0;
 };
@@ -494,13 +497,22 @@ bool can_i_hit(const SkillContext& ctx, float extra_range, SkillResult& out) {
     return melee::can_i_hit(me, t, extra_range, q, ctx.ch->fpu());
 }
 
-bool can_use_combat_skill(const SkillContext& ctx, std::uint32_t skill) {
+bool can_use_combat_skill(const SkillContext& ctx, std::uint32_t skill, bool slam) {
     if (skill > 99) return false; // IsSkillIdBelow100
     if (skill_table_entry(skill).base_damage < 1) return false;
     const CharacterSheet& sheet = ctx.ch->sheet();
-    if (skill == skill::kBash && ctx.form_slam != 0xff) return true;
+    // Bash without the skill or a shield for races 9, 10 and 2 only: the original compares the spawn's GetRace
+    // (vtable +0x88, 0x58b4e0, the raw +0xeb4 an illusion's SetRace writes) with those three, so the variant races
+    // 90, 92 and 93, whose innate Slam slot InitInnates also sets, do not pass here.
+    const std::uint32_t race = ctx.form_race ? ctx.form_race : sheet.race;
+    if (skill == skill::kBash && (race == 9 || race == 10 || race == 2)) return true;
     if (adjusted_skill(*ctx.ch, skill) <= 0) return false; // CharacterZoneClient::HasSkill @0x44a1b0
     if (skill != skill::kBash || ctx.me.type != 0) return true;
+    // A deliberate change to a RoF2 rule (docs/mechanics.md "Slam"): Slam's attack needs no shield. The original
+    // asks the races 90, 92 and 93, which have the innate Slam but not the race pass above, for the shield as for
+    // Bash; Hailstone asks only for the Bash skill, which EQEmu's OPCombatAbility wants from them too (it bypasses
+    // the skill only for races 2, 9 and 10, by GetRace, and checks no shield).
+    if (slam) return true;
     // Bash: a shield in the secondary slot, one of three primary items, or a two-hander with SPA 226.
     bool allowed = true;
     const net::Item* secondary = sheet.item(14);
@@ -508,6 +520,8 @@ bool can_use_combat_skill(const SkillContext& ctx, std::uint32_t skill) {
         const net::Item* primary = sheet.item(13);
         if (!primary || (primary->id != 11050 && primary->id != 10099 && primary->id != 14383)) allowed = false;
     }
+    // The original also requires the character's +8, its own player spawn (UseSkill reads the same field as the
+    // spawn), which is always there while the player acts.
     const net::Item* primary = sheet.item(13);
     if (primary && ctx.ch->total_effect(0xe2, true, 0, true, true) != 0 &&
         (primary->item_type == 1 || primary->item_type == 4 || primary->item_type == 35))
@@ -515,11 +529,13 @@ bool can_use_combat_skill(const SkillContext& ctx, std::uint32_t skill) {
     return allowed;
 }
 
-bool do_attack(const SkillContext& ctx, SkillState& state, std::uint8_t slot, std::uint32_t skill, SkillResult& out) {
+bool do_attack(const SkillContext& ctx, SkillState& state, std::uint8_t slot, std::uint32_t skill, SkillResult& out,
+               bool slam) {
     if (!ctx.ch) return false;
     ContextAttack q(ctx, state, out);
     melee::Spawn me = melee_spawn(ctx.me, ctx.stand_state);
     q.set_me(&me);
+    q.set_slam(slam);
     std::optional<melee::Spawn> target;
     if (ctx.target && !ctx.target_is_me) target = melee_spawn(*ctx.target, 100);
     const melee::Spawn* t = ctx.target_is_me ? &me : target ? &*target : nullptr;
@@ -566,12 +582,20 @@ std::optional<SkillMessage> check_hide_moved(const SkillContext& ctx, SkillState
     return SkillMessage{kMovedUnhidden, {}, kColorSkill};
 }
 
+std::string format_skill_message(const EqStrings& strings, const SkillMessage& m) {
+    std::vector<std::string> args = m.args;
+    for (std::size_t i = 0; i < args.size() && i < m.arg_eqstr.size(); ++i)
+        if (m.arg_eqstr[i]) args[i] = strings.format(*m.arg_eqstr[i], {});
+    return strings.format(m.eqstr, args);
+}
+
 namespace {
 
 // UseSkill's callees answered from a SkillContext (use_skill.h): the timers are SkillTimers, DoAttack(100, ...) is
 // do_attack_skill and CanIHit can_i_hit; messages and packets go to the SkillResult. A message is kept as its eqstr
-// id with its arguments: getString(id) hands out "@<id>" and build_token_string "@<id>\x1f<parameter>", which
-// dsp_chat turns back into a SkillMessage.
+// id with its arguments: getString(id) hands out "\0@<id>" and build_token_string "\0@<id>\x1f<parameter>", which
+// dsp_chat turns back into a SkillMessage. The leading NUL keeps those references apart from a name: a name comes
+// off the wire as a C string and cannot hold one, so a spawn called "@5" stays the text "@5".
 class ContextQueries final : public useskill::Queries {
 public:
     ContextQueries(const SkillContext& ctx, SkillState& state, SkillResult& out, useskill::Spawn& me,
@@ -587,13 +611,21 @@ public:
                               std::uint8_t a4) override {
         return ctx_.ch->total_effect(spa, a1 != 0, a2, a3 != 0, a4 != 0);
     }
-    std::string get_string(std::uint32_t id, std::int32_t) override { return "@" + std::to_string(id); }
+    std::string get_string(std::uint32_t id, std::int32_t) override { return ref(id); }
     void chat(const std::string& text, std::int32_t color, std::uint8_t, std::uint8_t) override {
         SkillMessage m;
         m.color = static_cast<std::uint32_t>(color);
-        std::size_t sep = text.find('\x1f');
-        m.eqstr = static_cast<std::uint32_t>(std::strtoul(text.c_str() + 1, nullptr, 10));
-        if (sep != std::string::npos) m.args.push_back(text.substr(sep + 1));
+        const std::size_t sep = text.find('\x1f');
+        m.eqstr = ref_id(text.substr(0, sep)).value_or(0);
+        if (sep != std::string::npos) {
+            std::string param = text.substr(sep + 1);
+            if (auto id = ref_id(param)) {
+                m.args.emplace_back();
+                m.arg_eqstr.emplace_back(*id);
+            } else {
+                m.args.push_back(std::move(param));
+            }
+        }
         out_.messages.push_back(std::move(m));
     }
     useskill::Handle get_pc_spell_affect(useskill::Obj, std::int32_t spa, std::int32_t* slot, bool) override {
@@ -678,13 +710,13 @@ public:
     }
     bool do_attack(useskill::Spawn&, std::int32_t slot, std::uint32_t skill, useskill::Spawn*) override {
         if (slot != 100) return false;
-        bool done = do_attack_skill(ctx_, st_, skill, out_);
+        bool done = mechanics::do_attack(ctx_, st_, 100, skill, out_, slam);
         for (std::size_t i = 0; i < 2; ++i) me_.combat_skill_used[i] = static_cast<std::int32_t>(st_.timers.combat_used[i]);
         return done;
     }
     std::string trim_name(const std::string& name) override { return name; }
     std::string build_token_string(std::uint32_t id, const std::string& p1, std::int32_t) override {
-        return "@" + std::to_string(id) + '\x1f' + p1;
+        return ref(id) + '\x1f' + p1;
     }
     void change_position(useskill::Spawn&, std::uint8_t stand_state) override { out_.stand_state = stand_state; }
     void set_auto_attack(std::uint8_t on) override {
@@ -770,6 +802,17 @@ public:
     }
 
 private:
+    static std::string ref(std::uint32_t id) { return std::string(1, '\0') + '@' + std::to_string(id); }
+    // The id of a whole "\0@<id>" reference; nothing for any other text.
+    static std::optional<std::uint32_t> ref_id(const std::string& text) {
+        if (text.size() < 3 || text[0] != '\0' || text[1] != '@') return std::nullopt;
+        std::uint32_t id = 0;
+        for (std::size_t i = 2; i < text.size(); ++i) {
+            if (text[i] < '0' || text[i] > '9') return std::nullopt;
+            id = id * 10 + static_cast<std::uint32_t>(text[i] - '0');
+        }
+        return id;
+    }
     static SkillSend::Kind kind_of(std::uint16_t opcode, const std::vector<std::uint8_t>& payload) {
         using K = SkillSend::Kind;
         switch (opcode) {
@@ -814,6 +857,9 @@ private:
     useskill::Spawn& me_;
     useskill::Spawn* target_;
     std::vector<const net::Item*> items_;
+
+public:
+    bool slam = false; // this UseSkill runs Slam (111): its DoAttack(100, 10) needs no shield (can_use_combat_skill)
 };
 
 useskill::Spawn spawn_of(const SkillActor& a) {
@@ -838,6 +884,8 @@ SkillResult use_skill(const SkillContext& ctx, SkillState& state, std::uint32_t 
     if (!ctx.ch) return out;
     // Racial Slam follows the current appearance, including illusions. Route Bash through the
     // shieldless Slam path when the current form supplies it, even if the base race cannot Slam.
+    // Under a 90, 92 or 93 form Slam still needs the Bash skill (can_use_combat_skill), so a character without it
+    // sends nothing, which EQEmu would drop.
     if (id == skill::kBash && ctx.form_slam != 0xff) id = skill::kSlam;
     useskill::Spawn me = spawn_of(ctx.me);
     me.stand_state = ctx.stand_state;
@@ -875,6 +923,7 @@ SkillResult use_skill(const SkillContext& ctx, SkillState& state, std::uint32_t 
     s.hide_position = {state.hide_x, state.hide_y, state.hide_z};
     s.precision = ctx.ch->fpu().precision();
     ContextQueries q(ctx, state, out, me, target ? &*target : nullptr);
+    q.slam = id == skill::kSlam;
     useskill::use_skill(s, id, q);
     state.sneaking = me.sneak != 0;
     state.fishing = me.fishing_event != 0;

@@ -1,5 +1,7 @@
 #include "platform/durable_file.h"
 
+#include <atomic>
+
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -14,6 +16,11 @@
 #endif
 
 namespace hailstone::platform {
+namespace {
+std::atomic<bool> g_no_hard_links_for_tests{false};
+}
+
+void set_no_hard_links_for_tests(bool on) { g_no_hard_links_for_tests = on; }
 
 bool write_file_synced(const std::filesystem::path& path, std::string_view text) {
 #if defined(_WIN32)
@@ -178,6 +185,43 @@ bool replace_file_synced(const std::filesystem::path& from, const std::filesyste
         return false;
     }
     // The rename is an entry of the folder: syncing the folder puts it on the disk.
+    sync_dir(folder_of(to));
+    return true;
+#endif
+}
+
+bool create_file_synced(const std::filesystem::path& from, const std::filesystem::path& to, std::error_code& ec) {
+#if defined(_WIN32)
+    ec.clear();
+    if (::MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_WRITE_THROUGH)) return true;
+    const auto error = ::GetLastError();
+    ec = error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS
+             ? std::make_error_code(std::errc::file_exists)
+             : std::error_code(static_cast<int>(error), std::system_category());
+    return false;
+#else
+    if (!g_no_hard_links_for_tests) {
+        if (link_file_synced(from, to, ec)) return true;
+        // File systems without hard links (exFAT and FAT, some network mounts) refuse link() with one of these.
+        const int error = ec.value();
+        if (ec.category() != std::generic_category() ||
+            (error != EPERM && error != ENOTSUP && error != EOPNOTSUPP && error != EXDEV && error != ENOSYS))
+            return false;
+    }
+    // Claim the name with an exclusive create, then rename the finished file over the empty claim: the name is
+    // never taken from another writer, and a reader sees an empty file or the whole one, never part of it.
+    ec.clear();
+    const int fd = ::open(to.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    if (fd < 0) {
+        ec = std::error_code(errno, std::generic_category());
+        return false;
+    }
+    ::close(fd);
+    if (::rename(from.c_str(), to.c_str()) != 0) {
+        ec = std::error_code(errno, std::generic_category());
+        (void)::unlink(to.c_str());
+        return false;
+    }
     sync_dir(folder_of(to));
     return true;
 #endif

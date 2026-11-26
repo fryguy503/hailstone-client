@@ -239,4 +239,17 @@ bool tab_may_request(std::string_view url, TabRules rules, const std::vector<std
     return false;
 }
 
+bool profile_within(std::string_view profile, std::string_view data) {
+    if (data.empty() || !profile.starts_with(data)) return false;
+    const auto separator = [](char c) { return c == '/' || c == '\\'; };
+    if (profile.size() > data.size() && !separator(profile[data.size()]) && !separator(data.back())) return false;
+    for (std::size_t at = data.size(); at < profile.size();) {
+        std::size_t end = at;
+        while (end < profile.size() && !separator(profile[end])) ++end;
+        if (profile.substr(at, end - at) == "..") return false;
+        at = end + 1;
+    }
+    return true;
+}
+
 } // namespace hailstone::web

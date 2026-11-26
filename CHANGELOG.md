@@ -3,8 +3,88 @@
 ## Unreleased
 
 - Custom builds can set a display version shown at login and in the in-game Help window.
-- Enhanced follow tracks the leader's swimming depth over submerged terrain.
 - Inventory add-ons can read quest flags and bag types and preview which empty slots accept the item on the cursor.
+- Other players see weapons, shields and instruments change or disappear when you swap equipment or activate a bandolier set. As in the original, placing a range item shows it in your off hand, with the main hand empty, until your next melee swing.
+- Right-clicking a parcel in the Modern merchant window opens its item details. Alt-right-click still opens window settings.
+- Right-clicking an ordinary NPC shows its Consider message in chat. **Right-Click to Consider** is on by default and can be switched off in Options.
+- Item, say, and achievement links use the chat link color while you compose a message in Modern or Gamepad. Text a script or the on-screen keyboard puts in the chat field while you type now shows at once, with the cursor at its end.
+- Stock and enhanced autofollow match a swimmer's depth, including near the surface and within the horizontal stop distance.
+- Incoming trade messages in chat show a clickable item name so you can inspect what the other player offered.
+- The blue fallback Chat window stays hidden when Modern chat is active, even after moving every tab out of window 1.
+- Chat groups routine Lua and plug-in notices from each zone transfer in a gold **Client System Messages [n]** row. Select the row to read the notices. A script or plug-in that stays stopped after the transfer still shows its notice on its own line. First sign-in shows each notice individually. Lua scripts and compiled plug-ins can post their own titled groups.
+- Save named window and chat Layout Profiles in Modern and Gamepad. See the saved window arrangement in Visual Preview, save your current layout before switching if needed, and undo the last apply. Open the manager from the EQ menu or with `/layoutprofiles`. Interfaces reach them through `hs.UI.layoutProfiles` (UI API 1.12).
+- Modern chat timestamps and Gamepad vertical hotbar settings are now saved per character, where every character shared them before. Each character starts from the shared setting it had.
+- Server popups display STML tables in aligned rows and columns in Modern and Gamepad.
+- New commands `/itemnotify` (click an item slot, a slot in a bag, or an item by name: `leftmouseup`, `rightmouseup`, `rightmouseheld`) and `/nomodkey`, `/shiftkey` and `/ctrlkey` (run a line with the modifier keys forced), as in MacroQuest: E3 moves, sells, trades and loots items with them.
+- New commands, as in MacroQuest (E3 uses them): `/makemevisible`, `/removelev`, `/removeaura <name>`, `/memspell <gem> "<spell name or id>"` and `/click left|right target`. `/memspell` and `/click` used to run the game's `/memspellset` and `/clickthrough`, whose names they abbreviate.
+- New command `/doortarget [id <n> | <name>] | clear` and TLO `${DoorTarget}` (`.ID`, `.Name`, `.X`, `.Y`, `.Z`, `.Distance`, `.Open` ...), and new TLOs `${Merchant}` (`.Open`, `.ItemsReceived`, `.Items`, `.Item[n|name]`, `.Markup`) and `${Mercenary}` (its state, `.Name` and its spawn's members), as in MacroQuest; new members `${Me.TargetOfTarget}`, `${Me.Instance}`, `${EverQuest.Ping}`, `${EverQuest.Foreground}` and `${Navigation.Velocity}`.
+- New TLO `${InvSlot[n|name]}` (`.Item`, `.Pack`, `.Slot`, `.Name`) and members `${Me.Bank[n]}` and `${Me.SharedBank[n]}` (every item member, bags' contents included; the bank need not be open), `${Me.PlatinumBank}`, `${Me.GoldBank}`, `${Me.SilverBank}`, `${Me.CopperBank}`, `${Me.PlatinumShared}` and `${Me.CashBank}`, as in MacroQuest.
+- `${Me.Pet}` and `${Pet}` now read your pet's buffs from the pet window, as in MacroQuest (`.Buff[n]` the pet window's slot, `.Buff[name]` its slot number, `.BuffDuration`), where they needed the pet targeted and the server sending its buffs.
+- The Modern pack's Inventory window can be resized from its edges and corner (never smaller than it opens), and its stats page gives the item bonuses more room, so `current / cap` fits; a name too long for its column is shortened rather than running into its value.
+- The inventory's stats page shows the capped item bonuses as RoF2's stats window does, `current / cap` (Spell Shielding 42 / 35), with the items' whole total where it used to show the capped value: a server may allow more than RoF2's caps. Heal amount, spell damage and clairvoyance have no cap and show their value alone.
+- New TLO members E3 reads, as in MacroQuest:
+  - on `${Me}`: `ItemReady[name]`, `PctAggro`, `SecondaryPctAggro`, `AltAbility[name|id]` (`.ID`, `.Name`, `.Rank`, `.ReuseTime`, `.Spell` ...), `ActiveDisc`, `AutoFire`, `Ability[name]`, `CombatAbility[#|name]`, `Endurance`, `GemTimer[#|name]`, `CastTimeLeft`, `AAPointsAssigned`, `AAPointsTotal`, `XTargetSlots` and `XTarget[n].PctAggro`;
+  - on items: `AugSlot[n]` (`.Name`, `.Item` ...), `Augs`, `ItemLink[CLICKABLE]`, `WornSlot[n|name]`, `Clicky`, `EffectType`, `FreeStack`, `NoTrade`, `Timer`, `StackCount`, `Tradeskills`;
+  - on spells: `StacksWith[name]`, `StacksTarget`, `WillLand`, `WillLandPet` (by the client's own stacking rules), `Description`, `Subcategory`, `DurationWindow`, `MyRange`, `EnduranceCost`, `Base[n]`, `Dispellable`, `SlowPct`;
+  - on `${Target}`: `PctAggro`, `SecondaryPctAggro`, `SecondaryAggroPlayer`; on spawns: `Aggressive`, `Primary`, `Secondary`, `Body.Name`;
+  - on `${Group}`: `Present`, `Injured[pct]`, `LowMana[pct]`, and `Member[n].PctAggro`.
+- New TLOs `${Raid}` (`.Members`, `.Leader`, `.Member[n|name]` with `.Name`, `.Group`, `.Class` ... and the member's spawn) and `${Corpse}` (`.Open`, `.Items`, `.Item[n|name]` with every item member), as in MacroQuest, and new members `${Me.Invulnerable}`, `${Me.Mount}`, `${Me.CurrentFavor}`, `${Me.TributeActive}`, `${Me.SpellShieldBonus}`, `${Me.SpellDamageBonus}`, `${Me.PetBuff[n|name]}`, and a spell's or buff's `CounterType` and `CounterNumber`.
+- `${Spell[...].Duration}` is now in ticks at your level, as in MacroQuest, where it gave the spell file's longest duration in milliseconds.
+- Under a Barbarian, Troll or Ogre citizen illusion (races 90, 92 and 93), Slam and Bash need the Bash skill, instead of sending an attack the server ignores, but no shield: Slam never needs one (the original client asked those forms for a shield; the server does not)
+- A game archive in the asset folder that another program shortens while Hailstone runs (a patcher writing in place) no longer crashes the client on Linux; what can no longer be read from it is treated as a damaged file
+- Under an add-on or hand-made interface, deleting a character or bulk-destroying items asks in a window of the client's own, so the question always appears (before, an interface that drew no confirmation box left the action waiting with no prompt)
+- **Script and plugin authors:** a character delete or bulk destroy a script asks for is confirmed in the client's own window under every interface, and a script can no longer press Yes on the item-destroy or guild-disband question (`hs.ClickChild` and the like return false); No and other questions are unchanged
+- If the update feed ever serves an older release than one it showed before, the login screen's corner says "Not up to date: the update feed went back to ..." instead of "Up to date", and nothing is installed
+- Perf window: **Log hitches** no longer calls every frame a hitch after the frame rate drops for good (a heavier zone, a slower power state); after 30 hitches in a row the typical frame time starts again from the latest frame
+- **Script and plugin authors:** `${Spawn[N]}`, `${Spell[N]}`, `${Me.Inventory[N]}`, an item's `Item[N]`, `${Group.Member[N]}` and `${Me.SpellReady[N]}` give NULL (or FALSE) for a number too large for what it indexes, instead of wrapping round to another spawn, spell, slot or gem
+- Spell, nimbus and server-timed effects on a creature that despawns stop with it, instead of hanging frozen in the air and jumping onto the next creature that reuses its id
+- Movement keys, `/keypress` releases and gamepad buttons let go while the client waits for a teleport zone point to answer no longer leave the character running or turning once the wait ends
+- `/face heading` with a value that is not a finite number (`nan`, `inf`) no longer leaves the character unable to turn; a heading past 360 is wrapped, and a heading or `loc` that is not a number turns nothing instead of facing the target
+- The in-game browser's helper no longer inherits the client's log and chat log files, so on Windows they can be moved or deleted after the client quits even while the helper is still closing
+- In-game browser: a script's, plugin's or server link's page whose cookie folder cannot be used is no longer opened with the player's own cookies; it closes instead. On Windows, a data folder whose name has characters outside the system's code page works with the browser
+- In-game browser: a faulty browser helper can no longer make the client reserve gigabytes of memory, or fail to make a texture, with an image larger than its tab. A drop-down list that reaches past the edge of a page is drawn inside it, and clicks on it still land on the right entry
+- In-game browser: on Linux the helper's background processes no longer crash as they finish their work (`*** stack smashing detected ***` in the terminal)
+- In-game browser: a web page's process can no longer write messages into, or read, the client's connection to the browser helper. The helper keeps that connection to itself and gives the processes it starts nothing to read or write instead
+- **Server owners:** lists a server fills by ids or names of its choosing stop at generous caps (raid members and shared task members 1024, tributes, bazaar traders and search rows 4096), and group mana and endurance, other players' casts and augment solvent texts are kept only for a spawn the client knows or a window that asked, so a flood of made-up ids no longer grows the client's memory without end
+- An accepted duel opponent can be attacked (auto attack, kick, bash, backstab, detrimental spells) on a server without PvP, and beneficial spells on players outside the duel are refused while it runs, as in the original
+- A duel, running or only offered, ends when you change zones, as the server ends it; before, a player in the new zone who happened to get the old opponent's id counted as your opponent
+- Spell and level-up effects that arrived just as you changed zones no longer play on a creature in the new zone
+- Hit, spell and door sounds that arrived just as you changed zones no longer play at a creature or place in the new zone
+- In the bazaar, a purchase answer for no purchase of yours no longer lets a later Buy go before its predecessor's answer
+- A creature that despawns and is replaced under the same id in one moment no longer starts with the old one's animation sounds and loop
+- A ground item or object the server sends again under the same id with another model, place, rotation or size is redrawn there (it kept its old model and position)
+- Isometric camera and click to move: a walk or click under way when you zone, camp or switch characters no longer clicks a spawn, door or object of the old zone on arrival in the new one
+- Taunting a target whose name starts with `@` ("@Lurker") no longer closes the client, and a name such as "@5 Guard" shows as it is
+- Servers can opt into Modern Server Management for authorized GMs to review and edit policy in game. Advisory
+  command rules can require a minimum GM status, and the add-on command list updates as commands register.
+  The encounter keeps a backup of each previous configuration. **Reload policy** keeps your draft and shows
+  settings that changed on the server.
+- Players can run through the leaves of jungle plants in Trakanon's Teeth, Emerald Jungle and other zones that reuse those models. The stems and trunks still block movement.
+- Fixed bright rectangles around faerie dragon wings in The Wakening Land.
+- South Karana's classic gnolls animate while patrolling instead of sliding in a fixed pose.
+- Plugins and scripts can colour their chat lines with MacroQuest's colour codes (`\ag`, `\a-w`, `\a#336699`, `\ax` ...), as `WriteChatColor` takes them. A server's message or a player's text cannot: its codes are left out.
+- C++ plugins can include the SDK's new `hailstone_plugin.hpp` to register commands and TLOs as lambdas that capture `this` and other values, as MacroQuest's `mq::AddCommand` does.
+- New TLOs `${MacroQuest.Path[config]}` and `${Hailstone.Path[config]}`: the folder for scripts' settings, `scripts/config` in Hailstone's folder. Plugins can also get it from the SDK's new `get_scripts_config_dir`.
+- New TLO members `${MacroQuest.Server}` and `${Hailstone.Server}` (the server's name), `${MacroQuest.Build}` and `${Hailstone.Build}` (4, MacroQuest's number for an emulator build, which E3 checks), `${MacroQuest.BuildDate}` and `${Hailstone.BuildDate}` (the day the client was built, as 20261123), and `${MacroQuest.Version}` and `${Hailstone.Version}` (Hailstone's version).
+- `/moveto dist <n>` sets how near a `/moveto` stops (`mdist` still works; 10 by default). `/moveto loc <y> <x>` without a Z, and `/moveto id`, now arrive whatever the height, where on a slope or under a levitating spawn they could keep walking or circle. `mdist <n>` also works inline (`/moveto loc <y> <x> mdist <n>`, as E3 sends it), where it was ignored. `/moveto id` now takes the spawn's place again each second, turning after it and looking up or down at it, where it walked to where the spawn stood when the command was given.
+- New command `/afollow` and TLO `${AdvPath}`, as E3 uses them from MacroQuest's MQ2AdvPath: follow your target along the way it walks (round corners, through doors, into the zone line it takes) rather than straight at it, holding within a distance (`/afollow on nodoor 15`), with `off`, `pause` and `unpause`. Hailstone's own follow; `/play` and `/record` paths are not there.
+- New TLO member `${Me.Bandolier[name|#]}` (`.Active`, `.Index`, `.Name`, `.Item[1-4]`), as in MacroQuest: E3 checks `.Active` to know which bandolier set is on.
+- New command `/timed <deciseconds> <command>`, as in MacroQuest: the command runs that many tenths of a second later (E3 uses it to delay a pet's attack and ghold). A script's delayed command keeps the script's permissions.
+- New commands `/exchange "<item>" <slot>` and `/unequip <slot>`, as MacroQuest's MQ2Exchange has them (E3 uses them to swap masks, ammo and the like): an item from your packs into a worn slot, the old one into its place, and a worn item into your packs. `/exchange help` and `/exchange help list` give the commands and slot names.
+- `/stick` takes the MQ2MoveUtils words E3 sends (`hold`, `snaproll`, `uw`, `delaystrafe`, `moveback`, `imsafe`), where it refused the whole line, and has `/stick pause` and `/stick unpause`. `uw`, `delaystrafe` and `moveback` change nothing yet; `front`, `!front`, `pin` and `behindonce` are not supported yet.
+- New TLO members `${Stick.Stopped}` and `${Stick.Behind}`: within the stick's distance, and at the spawn's back.
+- New TLO `${MoveTo}` (`.Moving`, `.Stopped`, `.ArrivalDist`, `.Broken`), as in MQ2MoveUtils: E3 reads it to know a `/moveto` is walking or has arrived.
+- New TLO `${Debuff}`: the poison, disease, curse and corruption counters on you (`.Count`, `.Poisoned`, `.Diseased`, `.Cursed`, `.Corrupted`), and `${Debuff[pet]}` on your pet, as the MQ2Debuffs plugin gives them for E3. `${Debuff.Silenced}` is TRUE while you are silenced.
+- New TLO member `Silenced` (`${Me.Silenced}`, `${Target.Silenced}`, `${Spawn[...].Silenced}`): the buff that silences, NULL when none does, as in MacroQuest.
+- New TLO member `${Me.MaxSongSlots}`: the song window's slots (RoF2's 20), beside `${Me.MaxBuffSlots}` (42).
+- `get_buff_data_bulk` and `get_buff_name_data_bulk` now report a buff's disease, poison, curse or corruption counters left, as MQ2Mono does, where they gave the counters it started with. A buff whose counters the client does not know yet (one from the profile or a zone-in list, until the spell lands again) still gives the starting count.
+- A plugin's chat line written from a thread of its own now shows at the next pulse, as MacroQuest's `WriteChatColor` does, where it was dropped.
+- Plugins can lend the client's thread to their own threads with the SDK's new `lend_thread`, while their callback waits for them, so a script runtime whose scripts run on a thread of their own (MQ2Mono-style C# scripts) can read TLOs and run commands from there. Inside a host call the client makes while a plugin lends (a command it runs, say), `lend_thread` refuses, since waiting there for the plugin's threads would hang the client.
+- Plugins can ask whether a command exists with the SDK's new `command_exists`. It says whether a plugin, a script or the client added the command, or whether it is one of the game's own.
+- Modern Spell Gems has optional spell names, a background toggle, and resize grips that wrap the tiles into rows and columns. Icon size is adjustable, and existing layouts keep their defaults
+- Native add-ons can preview and confirm a mouse-aimed ground position through the world placement SDK. **Plugin authors:** `world_capabilities` now reports `HAILSTONE_WORLD_PLACEMENT` in the zone before a geometry frame is ready; test `HAILSTONE_WORLD_GEOMETRY` for the frame
+- `/mapfilter` brings MacroQuest's map filters to Hailstone: spawn types, colours, target lines, paths and circles, markers, vectors and custom spawn searches. `on` and `off` work as aliases for `show` and `hide`. The settings are shared by every character; target lines and circles also reach into the minimap from an off-screen target, and TargetPath leaves player-started routes alone without turning or making sounds. NPC marks follow the server's NPC map policy as the Find overlays do, so a server that hides NPCs or turns off NPC Find does not show them through `/mapfilter`. A server whose command rules block `/mapfilter` also switches the saved filters and TargetPath off while you play there. TargetPath (Hailstone's own; MacroQuest's only lets a right-click on a map label through) asks for a path once the target has stayed selected for half a second, and at most once a second
+- `/mapfilter vanilla` shows only the map background, without labels, marks, routes or overlays, while navigation keeps working. A server can lock it on with `[map] vanilla = on` in `hailstone.cfg` (or the Vanilla maps switch in Server Management) without changing the player's saved choice. A server's `[commands]` rules treat `/mapfilter` as one of Hailstone's built-in commands (`non_rof2`), not an add-on's. Vanilla maps keep the packs' own text and controls (the Modern map's Viewing bar, route banner and "No map" notice, the gamepad map's zoom label) and leave out only the Modern pack's markers, Find marks and exits; add-ons can ask `hs.UI.map.Vanilla()` (UI API 1.11)
 - Trees with authored collision hulls let players move through their branches while their trunks still block movement. This fixes the invisible walls near the Field of Bone entrance to Warsliks Woods and in other classic zones
 - Decorative slime no longer blocks movement over the Veksar ramp and doorway or through passages in several Lost Dungeons of Norrath layouts
 - Spells that require line of sight now report “You cannot see your target” before casting through a solid door or moving obstacle
@@ -13,6 +93,37 @@
 - Autofollow stays with the caster's body while they steer Eye of Zomm
 - Modern Pet window: right-click a removable beneficial buff and choose **Remove** to click it off
 - Literal percent signs show correctly in chat, including tells and their echoes. Chat variables still expand when the message is sent
+- Two Hailstone windows started separately can no longer install or roll back an update at the same time, which could leave the UI folder half old and half new (chat without input, "is not in the UI's folder" in the log). The second one leaves the install to the first
+- Opening several windows of a newly updated Hailstone at once no longer rolls the update back as a failed start (and no longer keeps that release from being offered again). An update downloaded in one window installs at a quit when no other Hailstone runs from the folder, including windows started on their own, instead of replacing their files under them
+- Two Hailstone windows started separately no longer undo each other's add-on installs or lose an add-on from the installed list (which made its files count as installed by hand). While one installs or removes add-ons, the other waits or says to try again
+- Hailstone's updates never write or remove anything in `upscalers/`, so an upscaler add-on can no longer be replaced or removed by an update that ships a folder of the same name
+- On Linux and macOS, files an update installs never get group or world write permission from the update package
+- A zone where many differently dressed or tinted characters come and go no longer keeps the model of every look it has shown in memory until you leave it
+- Charged items stay in inventory and on the hotbar after spending a charge if the server keeps the item
+- Spell effects no longer attach to the wrong bones of a character whose model was loaded after another was freed
+- Minimising the window on Windows can no longer stop the client with a swapchain error ("vkCreateSwapchainKHR")
+- Add-ons that hook HUD methods (`hs.UI.hooks` on `character.Gauge`, `character.Label` and the like) cost less per frame: a hooked call no longer checks every add-on's hooks or sorts them each time
+- `mq.pickle` no longer counts every file in the script's config folder on each write. Files added or removed there outside the script count from the script's next start
+- Deleting a character always asks first: an interface other than Modern or Gamepad now gets the client's own confirmation naming the character before anything is deleted
+- Bulk destroy from the Advanced Inventory asks the client's confirmation, with the count and a No Trade warning, when an add-on or other interface starts it (unless Fast Item Destroy is on), and does nothing if the items moved before you answer
+- A map right click or Find on a point that is not a number or lies far past any zone is no longer sent to the server
+- A bag window's slot click from a script can no longer reach the bag itself or alias another slot with an out-of-range index
+- The Group Mentor window reads a typed percentage past the number range without undefined behaviour
+- The quantity dialog no longer overflows when "-2147483648" is typed
+- Transferring a real estate plot goes only to the player the question named: changing target while it is up cancels the transfer
+- Group window gauges and labels find each member's spawn faster, and an NPC whose name matches a member's no longer stands in for them
+- The Gamepad abilities list costs much less per frame while a discipline cools down
+- Moving a slider that writes to the UI ini (Window Transparency, fades) no longer rewrites the file every frame; it is saved with the window places and on quit or camp
+- Modern Guild window: Promote, Demote, Make Leader and Remove ask first and name the member, as the gamepad UI does. Selecting another member while it asks puts the question away
+- Modern Raid window: Leave and Make Leader ask first, as the gamepad UI does
+- The modern shared task Make leader asks first and names the member. If another member is selected while it asks, the lead is not handed to them
+- Gamepad Friends: confirming Remove after the list changed no longer removes whoever happened to be selected. If the name has left the list, the window says so
+- Gamepad Who: a new /who reply (from the Friends window or typed in chat) keeps the picked player picked if they are in it, and otherwise clears the pick, so Invite, Target and the rest no longer act on whoever took that row
+- Gamepad Merchant: a Buy, Sell or parcel Send pressed as the window closed no longer goes through at the next merchant you open
+- Gamepad Loot: LB no longer loots everything while the window's Loot All is disabled
+- Gamepad character select: the Delete and Return Home questions start on Cancel, so an A press carried over can't answer them
+- **Plugin authors:** a table or function a plugin window hands the UI pack's code (an argument to a pack function, or what its callback returns or raises) now reaches the pack as a view, as what it writes into the pack's shared tables does, so a pack that keeps it and uses it later runs the plugin's code as the plugin, never with the player's authority. `next` and `rawget` see nothing through such a view, and the plugin's metamethods for `==`, `<`, `..`, calls and `tostring` no longer run from the pack's code
+- `/who` shows illusion race names such as Skeleton, Tree, and Earth Elemental where it showed a numeric race code
 
 ## 0.7.3-beta (2026-11-23)
 
@@ -125,14 +236,9 @@
 - The server can now change a spawn's last name while you watch
   - It shows wherever name plates and the target window show last names, following your name-plate settings, and your own is updated too
 - The level-up effect shows: when the server sends it, rings and sparkles play on your character (and on others who level up near you), at the actor particle density
-- Item comparison, in both interfaces: an item's tooltip and details window show what wearing it instead of what you wear would change
-  - Tooltips cover the inventory, bags, bank, loot, trade and a merchant's goods; the details window covers a linked item too
-  - In the details window each stat's change sits beside the item's value (+12 in green beside AC 20, say), with the verdict and what it is compared with above the stats
+- Item comparison, in both interfaces: each stat's change for you sits beside the item's value
+  - In the details window it reads +12 in green beside AC 20, say, with the verdict and what the item is compared with above the stats
   - A tooltip shows the verdict under the name and the changes beside its AC, HP and mana
-  - It shows your HP, mana, endurance, AC, ATK, haste, stats, resists and regeneration as the game works them out, stat caps included, plus the weapon's damage and delay, effects gained and lost, and why you cannot use it
-  - A verdict (Upgrade, Downgrade, Mixed) weighs the changes by what matters for your class
-  - For rings, earrings and bracers Shift shows the other slot
-  - Options > Display > Compare Items and Upgrade Verdict turn them off. Nothing about the game's rules changes
 - The Fiery Avenger shows its blade
   - Held by a player or an NPC it showed only its flames: its blade is in an older model format the client did not read
   - The same fix draws the hull of the ghost ship in Erud's Crossing, which was invisible
@@ -659,6 +765,12 @@
   - Options > Graphics > Horizon Hills turns it off
 - Fixed a crash on entering the world when a character's own settings chose a different texture pack from the one Hailstone started with (most likely with a large pack). The pack is now switched safely while the character's models load
 - Item details: with a live game folder, stats its string table lacks show their names instead of a bracketed number such as [13036]: Spell Shield, Combat Effects, Shielding, Damage Shield, DoT Shielding, DS Mitigation, Avoidance, Accuracy, Stun Resist, Strikethrough and "Potion Belt Enabled"
+- Item comparison, in both interfaces: an item's tooltip and details window show what wearing it instead of what you wear would change
+  - Tooltips cover the inventory, bags, bank, loot, trade and a merchant's goods; the details window covers a linked item too
+  - It shows your HP, mana, endurance, AC, ATK, haste, stats, resists and regeneration as the game works them out, stat caps included, plus the weapon's damage and delay, effects gained and lost, and why you cannot use it
+  - A verdict (Upgrade, Downgrade, Mixed) weighs the changes by what matters for your class
+  - For rings, earrings and bracers Shift shows the other slot
+  - Options > Display > Compare Items and Upgrade Verdict turn them off. Nothing about the game's rules changes
 - AA window: column headers and rows stay aligned at every window scale, including when the window or scroll bar changes size
   - Drag a header's right edge to resize its column (the ability column takes the room the others leave, so widening the window widens it), or drag the header to reorder it
   - **Reset columns** restores the default widths, order and name sort

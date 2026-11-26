@@ -153,7 +153,8 @@ Every command a player can type is listed in [docs/commands.md](commands.md). Fo
 - The table is `src/game/slash_commands.inc` (384 entries) with its matching rules; the dispatch is `GameConnection::run_slash_command` (`net/game_connection_social.cpp`). A table command without a handler says "<name> is not supported by this client yet."
 - Social emotes (91) are generated into `src/game/socials.inc` by `tools/gen_socials.py`. GM-only commands (26) are never matched for players.
 - Commands for opcodes EQEmu does not have are sent and get no answer. `/spellscribe` sends only when the world's OP_LogServer allows it, which EQEmu does not.
-- Client extensions: `/destroy`, and for plugins `/destroycursor <id>` and `/stowcursor <id>` (docs/plugins.md).
+- Client extensions: `/destroy`, MQ2Exchange's `/exchange` and `/unequip`, and for plugins `/destroycursor <id>` and
+  `/stowcursor <id>` (docs/plugins.md).
 - Not implemented, by choice: the voice macros (`/vplay /vtell /vgroup /vraid`, their windows and keys) and the commercial-service features the server side has no part of (marketplace funding pages, polls, alerts, the event calendar, trading cards, social sharing, the petition and welcome web pages).
 - Real estate is built as the original has it (docs/protocol/rof2-packets.md "Real estate"). Stock EQEmu never sends it; a server with housing (Project Triune) does.
 

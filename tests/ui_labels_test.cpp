@@ -15,6 +15,7 @@
 #include "app/lua_ui_windows.h"
 #include "game/buff_overlays.h"
 #include "game/mechanics/character.h"
+#include "game/spawn_name_lookup.h"
 #include "game_files.h"
 #include "mock_server/harness.h"
 #include "mock_server/profile_builder.h"
@@ -272,7 +273,7 @@ TEST_CASE("Aggro meter labels: percents, their colours and the lock") {
 
 // The group window's labels find each member's spawn by name, ignoring case, by the spawn's name or its display name
 // (app/lua_ui_values.cpp spawn_by_name), and skip the player's own slot whatever its case (nth_other_member). The
-// lookup compares in place (game::display_name_iequals) instead of lower-casing every name each frame.
+// lookup goes through an index kept while the spawn set holds (game::SpawnNameLookup), not a walk each frame.
 TEST_CASE("Group labels: members are found by name or display name, ignoring case") {
     test::ScratchDir dir("ui_labels_group_lookup");
     GameDir game(dir.path());
@@ -311,6 +312,48 @@ TEST_CASE("Group labels: members are found by name or display name, ignoring cas
     CHECK(app::ui_gauge(t.host, 13).value == -2); // no spawn: full in dark red
     add(6, "#Dave01", 65);
     CHECK(app::ui_label(t.host, 37).text == "65");
+    // An NPC whose display name is a member's ("Eve00" shows as "Eve") does not stand in for the member's own spawn,
+    // whatever their ids
+    add(1, "Eve00", 10);
+    CHECK(app::ui_label(t.host, 38).text == "10"); // (no player Eve here: the display name is all there is)
+    t.conn.world_for_test().spawns[1].is_npc = true;
+    add(9, "Eve", 90);
+    CHECK(app::ui_label(t.host, 38).text == "90");
+}
+
+// game::SpawnNameLookup: the exact name before a display name, a player before an NPC, the lowest id between equals;
+// made again when the spawn set changes (WorldState::spawn_set_serial).
+TEST_CASE("SpawnNameLookup: exact names and players first, made again when the spawn set changes") {
+    game::WorldState w;
+    auto add = [&](std::uint32_t id, const char* name, bool npc) {
+        game::Spawn s;
+        s.id = id;
+        s.name = name;
+        s.is_npc = npc;
+        w.spawns[id] = s;
+        ++w.spawn_set_serial;
+    };
+    add(3, "Bob00", true);  // an NPC shown as "Bob"
+    add(7, "bob", true);    // an NPC with the exact name
+    add(9, "BOB", false);   // the player
+    add(4, "Carol00", true);
+    add(2, "Carol01", true);
+    game::SpawnNameLookup lookup;
+    REQUIRE(lookup.find(w, "Bob", true));
+    CHECK(lookup.find(w, "Bob", true)->id == 9);
+    CHECK(lookup.find(w, "Carol", false) == nullptr); // display names only when asked
+    REQUIRE(lookup.find(w, "carol", true));
+    CHECK(lookup.find(w, "carol", true)->id == 2); // the lowest id between equals
+    CHECK(lookup.find(w, "", true) == nullptr);
+    w.spawns.erase(9);
+    ++w.spawn_set_serial;
+    REQUIRE(lookup.find(w, "Bob", false));
+    CHECK(lookup.find(w, "Bob", false)->id == 7); // the exact NPC before the display name
+    w.spawns[7].name = "Robert";
+    ++w.spawn_set_serial; // (a rename bumps it)
+    REQUIRE(lookup.find(w, "Bob", true));
+    CHECK(lookup.find(w, "Bob", true)->id == 3);
+    CHECK(lookup.find(w, "Robert", false)->id == 7);
 }
 
 TEST_CASE("display_name_iequals is iequals over display_name") {
@@ -324,4 +367,38 @@ TEST_CASE("display_name_iequals is iequals over display_name") {
             CAPTURE(o);
             CHECK(game::display_name_iequals(n, o) == iequals(game::display_name(n), o));
         }
+}
+
+TEST_CASE("Item bonus labels: the sums before RoF2's caps (the *Bonus2 fields); heal amount and the rest uncapped") {
+    mq_test::World w("ui_labels_item_bonuses");
+    using A = net::GameConnectionTestAccess;
+    net::Item robe;
+    robe.name = "Warded Robe";
+    robe.id = 7001;
+    robe.equip_slots = 1u << net::kSlotChest;
+    robe.races = 0xffffffffu; // every race (an item the race may not use adds nothing)
+    robe.classes = 0xffff;
+    robe.spell_shield = 50;   // RoF2's cap: 35
+    robe.dot_shield = 40;     // 35
+    robe.accuracy = 200;      // 150
+    robe.heal_amt = 400;      // no cap
+    A::inventory(*w.conn).put(net::ItemSlot::possessions(net::kSlotChest), robe);
+    app::UiHost host;
+    host.in_game = true;
+    host.conn = w.conn.get();
+    bool ran = false;
+    A::with_character(*w.conn, [&](game::mechanics::Character& ch) {
+        ran = true;
+        ch.process_all_stats(); // as the stats window does with the character the labels read
+        host.character = &ch;
+        // The rules use the capped copies; the labels show the sums.
+        CHECK(ch.stats().spell_shield == 35);
+        CHECK(ch.stats().spell_shield_uncapped == 50);
+        CHECK(app::ui_label(host, 215).text == "50"); // spell shielding
+        CHECK(app::ui_label(host, 219).text == "40"); // DoT shielding
+        CHECK(app::ui_label(host, 222).text == "200"); // accuracy
+        CHECK(app::ui_label(host, 225).text == "400"); // heal amount
+        CHECK(app::ui_label(host, 216).text == "0");  // combat effects: none
+    });
+    CHECK(ran);
 }

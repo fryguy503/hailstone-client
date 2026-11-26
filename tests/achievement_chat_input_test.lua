@@ -7,6 +7,10 @@ local function achievement(name,extra)
 end
 local item="\18".."0"..string.rep("a",55).."Old Ring\18"
 local tag=achievement("Hero's <reward> & title")
+local sayName = "Tell me more"
+local say = "\18" .. "0f423f00001" .. string.rep("0", 45) .. sayName .. "\18"
+local utf8Name = "Héro's reward"
+local utf8Achievement = achievement(utf8Name)
 local helpers={}
 for _,pack in ipairs({"modern","gamepad"})do
   local helper=assert(loadfile(CLIENT_ROOT.."/ui/"..pack.."/lib/chatlinks.lua"))()
@@ -41,12 +45,13 @@ end
 for _,pack in ipairs({"modern","gamepad"})do
   local windows,sent={},{}
   local pending,edit,enter,lastShown,lastCapacity,errorText,seenTyped
+  local recalled, lastSpans
   local frameNumber=0
   local gameState,charName=5,"Hero"
   GPSTATE={chatOpen=true,chatByKeyboard=true}
   local no=function()end
   local zero=function()return 0 end
-  local color=setmetatable({chatBg={0,0,0,1}},{__index=function()return {1,1,1,1}end})
+  local color=setmetatable({chatBg={0,0,0,1},chatLink={0.25,0.65,0.9,1}},{__index=function()return {1,1,1,1}end})
   local T=setmetatable({C=color,color=color,font=setmetatable({small=1},{__index=function()return no end}),
     px=function(n)return n end,TextSize=function(text)return #text*8,16 end,
     Hit=function()return false end,button=function()return false end},
@@ -69,9 +74,13 @@ for _,pack in ipairs({"modern","gamepad"})do
     IsWindowHovered=function()return false end,IsMouseHoveringRect=function()return false end,
     IsMouseDown=function()return false end,IsKeyPressed=function()return false end,
     BeginPopup=function()return false end,InvisibleButton=function()return false end,
-    InputText=function(_,text,capacity)
+    InputText=function(_label,text,capacity,_flags,opts)
+      if recalled then
+        text = opts.history(true) or text
+      end
       if edit then text=edit;edit=nil end
       lastShown,lastCapacity=text,capacity
+      lastSpans = opts and opts.colorSpans and opts.colorSpans(text) or {}
       local accepted=enter;enter=false;return text,accepted==true
     end,
     SetTooltip=function(text)errorText=text end,TextWrapped=function(text)errorText=text end,
@@ -82,6 +91,11 @@ for _,pack in ipairs({"modern","gamepad"})do
     GameState=function()return gameState end,Name=function()return charName end,
     ChatWindows=function()return {chatWindow}end,ChatText=function()return 0,{},true,0 end,
     ChatInfo=function()return 3,true,"Say"end,ChatPage=function()return nil end,
+    ChatHistory=function()
+      local line = recalled
+      recalled = nil
+      return line
+    end,
     ChatTakeFocus=function(_,typed)
       seenTyped=typed
       if not pending then return nil end
@@ -110,6 +124,16 @@ for _,pack in ipairs({"modern","gamepad"})do
     if pack=="gamepad" and edit then GPSTATE.chatOpen=true end
     if pack=="modern"then windows["Chat 1"]() else windows["Chat Ticker"]();windows["Chat Log"]()end
   end
+  local function checkColors(expected)
+    check(#lastSpans == #expected, pack .. " drew a different number of link highlights")
+    for i, bounds in ipairs(expected) do
+      local first, name = bounds[1], bounds[2]
+      local span = lastSpans[i]
+      check(span[1] == first and span[2] == first + #name - 1 and lastShown:sub(span[1], span[2]) == name,
+        pack .. " highlighted the wrong bytes for " .. name)
+      check(span[3] == S.LINK and span[3] == color.chatLink, pack .. " did not use the chat output's link color")
+    end
+  end
   pending={text="/gsay Prefix ",replace=true};frame()
   pending={text=tag,append=true};frame()
   check(lastShown=="/gsay Prefix Hero's <reward> & title" and #sent==0,"Editor exposed metadata or submitted while inserting a link")
@@ -134,7 +158,33 @@ for _,pack in ipairs({"modern","gamepad"})do
   pending={text=tag,replace=true};frame()
   edit="";frame();edit="Hero's <reward> & title";enter=true;frame()
   check(sent[5] and sent[5][2]==ordinary,"Deleting the whole draft retained a hidden link for retyped plain text")
+  checkColors({})
+
+  local prefix = "/gsay Old Ring déjà "
+  pending = {text = prefix .. item .. " " .. say .. " " .. utf8Achievement, replace = true}
+  frame()
+  check(lastShown == prefix .. "Old Ring " .. sayName .. " " .. utf8Name and #sent == 5,
+    pack .. " did not keep the mixed links visible as unsent labels")
+  local itemAt = #prefix + 1
+  local sayAt = itemAt + #"Old Ring "
+  local achievementAt = sayAt + #sayName + 1
+  checkColors({{itemAt, "Old Ring"}, {sayAt, sayName}, {achievementAt, utf8Name}})
+
+  color.chatLink[1] = 0.8
+  edit = prefix .. "Old Ring " .. utf8Name
+  frame()
+  checkColors({{itemAt, "Old Ring"}, {sayAt, utf8Name}})
+  check(lastSpans[2][3][1] == 0.8, pack .. " retained the prior palette for the unsent link")
+
+  pending = {text = "prefix \18" .. "3Peer^bad^1^'Oops\18", replace = true}
+  frame()
+  check(lastShown == "prefix Achievement", pack .. " revealed malformed achievement data")
+  checkColors({})
+
   if pack=="modern"then
+    recalled = "/gsay " .. utf8Achievement .. " " .. item
+    frame()
+    checkColors({{#"/gsay " + 1, utf8Name}, {#("/gsay " .. utf8Name .. " ") + 1, "Old Ring"}})
     -- a half-typed line belongs to the character: zoning (no character for a while) keeps it, character select or
     -- another character drops it
     edit="half typed";frame();check(lastShown=="half typed","Typed draft was not kept")

@@ -1902,7 +1902,7 @@ public:
     bool set_text(UiHost&, std::string_view id, const std::string& text) override {
         if (id != "GM_SliderInput") return false;
         text_ = text;
-        if (std::atoi(text_.c_str()) > 100) { // sub_006745e0
+        if (core::msvc_atoi(text_) > 100) { // sub_006745e0
             value_ = 100;
             text_ = "100";
         }
@@ -1916,11 +1916,14 @@ public:
     }
     bool click(UiHost& host, std::string_view id, std::string_view button, bool) override {
         if (!host.conn || button != "left" || (id != "GM_AcceptButton" && id != "GM_SliderInput")) return false;
-        // sub_00674490, Deactivate, Send_OP_GroupMentor.
-        value_ = std::clamp(std::atoi(text_.c_str()), 0, 100);
+        // sub_00674490, Deactivate, Send_OP_GroupMentor. Both read the box with atoi: the slider takes the number
+        // (held to its range), and the packet the number itself (Send_OP_GroupMentor @0x6741a0 reads the box again,
+        // not the slider). core::msvc_atoi, not std::atoi: a number past int's range is not undefined.
+        const std::int32_t typed = core::msvc_atoi(text_);
+        value_ = std::clamp(typed, 0, 100);
         host.conn->set_group_mentor_window_open(false);
         std::string name = players_.selected > 0 ? players_.choices[static_cast<std::size_t>(players_.selected)] : std::string();
-        if (!host.conn->send_group_mentor(name, std::atoi(text_.c_str()))) reset(host);
+        if (!host.conn->send_group_mentor(name, typed)) reset(host);
         return true;
     }
 

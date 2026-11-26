@@ -321,10 +321,15 @@ std::vector<std::string> GameDir::list_dirs(std::string_view relative_dir) const
     return out;
 }
 
-std::optional<std::vector<std::byte>> read_file(const std::filesystem::path& path) {
+std::optional<std::vector<std::byte>> read_file(const std::filesystem::path& path, std::uint64_t max_size) {
+    // Only a regular file: a directory has no bytes to read, and a FIFO would block the open and has no size.
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) return std::nullopt;
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) return std::nullopt;
-    auto size = static_cast<std::size_t>(f.tellg());
+    const std::streamoff end = f.tellg();
+    if (end < 0 || static_cast<std::uint64_t>(end) > max_size) return std::nullopt;
+    const auto size = static_cast<std::size_t>(end);
     std::vector<std::byte> data(size);
     f.seekg(0);
     f.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size));

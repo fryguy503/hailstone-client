@@ -136,6 +136,8 @@ local MORE = {
   { "Video Modes", "Display size and refresh rate", "VideoModesWindow" },
   { "Load Skin", "Change the user interface", "LoadskinWnd" },
   { "Copy Layout", "Another character's window layout", "LayoutCopyWindow" },
+  { "Layout Profiles", "Save and switch your setups", "LayoutProfilesWindow", nil,
+    function() return API.layoutProfiles and API.layoutProfiles.List end },
   { "Notes", "Your own notes (/note)", "PlayerNotesWindow" },
   { "Lua Scripts", "Run, stop and autorun your scripts", "ScriptsWnd" },
   { "Web Browser", "Web pages in the game (/web)", "BrowserWnd" },

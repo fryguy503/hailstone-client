@@ -228,9 +228,10 @@ void social_passage_of_time(SocialQueue& s, std::uint32_t now_ms, SocialRunQueri
         pause = s.pause;
         if (line < 5) {
             SocialLineParts parts = split_social_line(text(line));
-            pause = parts.pause.value_or(1);
-            for (std::int32_t n : parts.timers)
-                if (n * 100 > 0 && !q.cooldown_running(social)) q.start_cooldown(social, n * 100);
+            pause = parts.pause && q.allow_directive("/pause") ? *parts.pause : 1;
+            if (!parts.timers.empty() && q.allow_directive("/timer"))
+                for (std::int32_t n : parts.timers)
+                    if (n * 100 > 0 && !q.cooldown_running(social)) q.start_cooldown(social, n * 100);
             if (!parts.command.empty()) q.interpret(parts.command);
             ++line;
         }

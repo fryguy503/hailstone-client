@@ -147,8 +147,12 @@ EnvCoefficients env_coefficients(PhysicsBody& body, const Environment& env, floa
 // moves by velocity * dt. `hover_floor` as for env_coefficients. Returns
 // the displacement applied to body.feet (the caller then resolves walls and
 // floors and runs the landing check).
+struct SwimSteering {
+    float pitch = 0.0f; // movement pitch in 512ths of a turn
+    bool vertical_only = false;
+};
 glm::vec3 step(PhysicsBody& body, const Environment& env, float elapsed_ms, const glm::vec2& strafe,
-               float hover_floor);
+               float hover_floor, std::optional<SwimSteering> swim = std::nullopt);
 
 // PlayerZoneClient::PushAlongHeading @0x506510: velocity += amount along the heading.
 void push_along_heading(PhysicsBody& body, float amount);

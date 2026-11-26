@@ -71,7 +71,9 @@ inline bool write_png_rgba(const std::filesystem::path& path, std::span<const st
     if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path(), ec); // screenshots/
     std::ofstream out(path, std::ios::binary);
     out.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
-    return static_cast<bool>(out);
+    // Closed and checked here: a small image is still in the stream's buffer, and its write can fail at the flush.
+    out.close();
+    return !out.fail();
 }
 
 } // namespace hailstone

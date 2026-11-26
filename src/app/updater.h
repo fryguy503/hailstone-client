@@ -51,6 +51,13 @@ std::string default_project_page();
 // folder's CMakeCache.txt beside it), or no release key in this build.
 std::string updates_off_reason(const std::filesystem::path& install_dir);
 
+// The newest release the feed `feed` has shown this data folder in a manifest whose signature checked, as kept in
+// <data folder>/update/feed-seen.txt ("" none seen yet), and keeping a newer one there. A Hailstone defence of its own:
+// a signed manifest older than the newest seen means the feed went back (an old manifest served again), which the
+// updater reports rather than call this build up to date (UpdateState::FeedBehind).
+std::string newest_seen_release(const std::filesystem::path& data_dir, const std::string& feed);
+bool remember_seen_release(const std::filesystem::path& data_dir, const std::string& feed, const std::string& version);
+
 // One GET; `cancelled` (safe from any thread: http_get's HttpGetOptions::cancelled) turns true when the updater
 // stops, so quitting does not wait out a fetch stalled on the network.
 using UpdateFetch = std::function<platform::HttpGetResult(
@@ -59,6 +66,7 @@ using UpdateFetch = std::function<platform::HttpGetResult(
 
 struct UpdaterEnv {
     std::filesystem::path install_dir;
+    std::filesystem::path data_dir; // where the newest release seen is kept (platform::data_dir(); "" not kept)
     std::string feed;           // the manifest's address
     std::string version;        // this build's (release_version())
     std::string platform;       // update_platform()
@@ -78,11 +86,15 @@ enum class UpdateState {
     Downloading,
     Ready,       // downloaded and checked: installed at quit
     Failed,
+    // The feed's manifest is signed but older than the newest release it showed before (newest_seen_release): the
+    // feed went back, so this build is not called up to date. Nothing is offered or installed.
+    FeedBehind,
 };
 
 struct UpdateStatus {
     UpdateState state = UpdateState::Idle;
-    std::string version;        // the newer release's
+    std::string version;        // the newer release's (FeedBehind: the feed's older one)
+    std::string seen;           // FeedBehind: the newest release seen before
     std::string notes;          // its page
     std::string error;          // Failed: why
     bool has_package = false;   // Available: this platform has a package (else the player downloads it by hand)

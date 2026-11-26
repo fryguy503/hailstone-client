@@ -630,6 +630,7 @@ TEST_CASE("a zone fixture emitter: persistent, along its axis, spreading all rou
 }
 
 TEST_CASE("bazaar's lanterns and torches carry their flames" * doctest::skip(!hailstone::test::game_dir())) {
+    if (!hailstone::test::game_file("bazaar.s3d")) return; // a live install has the EQG bazaar only
     auto z = load_classic_zone(*hailstone::test::game_dir(), "bazaar");
     // L301 and CSMOKE (FTORCH301) and L307 (HAVSTLIGHT300..302), after "None".
     REQUIRE(z.particle_definitions.size() == 4);

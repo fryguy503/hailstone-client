@@ -887,8 +887,14 @@ TEST_CASE("The game's spells_us.txt" * doctest::skip(test::game_dir() == nullptr
     sheet.class_id = 2;
     sheet.level = 1;
     game::mechanics::Character cleric{sheet, tables, [&](std::int32_t id) { return t.get(static_cast<std::uint32_t>(id)); }};
-    CHECK(app::spell_description(*heal, strings, {&cleric, 1, 2}) ==
-          "Mends minor wounds, healing between 12 and 20 hit points.");
+    // The template is the folder's: the reference folder's is "healing between #1 and @1 hit points", a live
+    // install's "healing #1 hit points". Every one fills #1 and leaves no placeholder.
+    const std::string description = app::spell_description(*heal, strings, {&cleric, 1, 2});
+    CHECK(description.starts_with("Mends minor wounds"));
+    CHECK(description.find("12") != std::string::npos);
+    CHECK(description.find_first_of("#@$") == std::string::npos);
+    if (test::pinned_values("Minor Healing's description wording"))
+        CHECK(description == "Mends minor wounds, healing between 12 and 20 hit points.");
     for (std::uint32_t id = 1; id < 3000; ++id)
         if (const auto* s = t.get(id)) CHECK(s->id == id);
 }

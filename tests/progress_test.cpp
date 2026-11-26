@@ -743,6 +743,45 @@ TEST_CASE("tasks: completed list, select window, history, completion, cancel and
     CHECK(decode_task_request_timer(packet(Op::TaskRequestTimer, timer.b)) == 15000u);
 }
 
+TEST_CASE("tasks: history and offer element counts are bounded") {
+    auto element = [](Buf& b) {
+        b.u32(2).str("a large rat").lstr("").u32(5).lstr("-1").lstr("-1").str("1").u32(0).str("").u8(0x31).str("1");
+    };
+    // CTaskManager_HandleTaskHistoryReply: the first 20 elements; the rest of the packet is not read.
+    Buf h;
+    h.u32(49).u32(25);
+    for (int i = 0; i < 20; ++i) element(h);
+    h.u8(0xff); // a truncated 21st element is never reached
+    auto hist = decode_task_history(packet(Op::TaskHistoryReply, h.b));
+    REQUIRE(hist);
+    CHECK(hist->index == 49);
+    CHECK(hist->elements.size() == 20);
+    // A negative count reads none; an index past the 50 entries is refused.
+    Buf neg;
+    neg.u32(0).i32(-1);
+    auto none = decode_task_history(packet(Op::TaskHistoryReply, neg.b));
+    REQUIRE(none);
+    CHECK(none->elements.empty());
+    Buf far;
+    far.u32(50).u32(1);
+    element(far);
+    CHECK_FALSE(decode_task_history(packet(Op::TaskHistoryReply, far.b)));
+
+    auto offer = [](std::uint32_t elements) {
+        Buf s;
+        s.u32(1).u32(2).u32(345);
+        s.u32(77).f32(1.0f).u32(0).u32(2).str("Rat Trouble").str("Rats!").u8(0);
+        s.u32(elements);
+        for (std::uint32_t k = 0; k < elements; ++k)
+            s.i32(0).i32(2).i32(0).str("").lstr("").i32(5).lstr("-1").lstr("0").str("").str("").str("");
+        return s;
+    };
+    auto most = decode_task_select(packet(Op::TaskSelectWindow, offer(256).b));
+    REQUIRE(most);
+    CHECK(most->offers.at(0).elements.size() == 256);
+    CHECK_FALSE(decode_task_select(packet(Op::TaskSelectWindow, offer(257).b)));
+}
+
 TEST_CASE("tasks: GetElementDescription's templates") {
     game::EqStrings s;
     s.set(3468, "kill %1 %2");

@@ -302,3 +302,29 @@ TEST_CASE("mock server: a GM-only command follows the player spawn's GM flag, as
     conn.send_command("/goto");
     CHECK(has_line(rig.chat(), "[12380]"));
 }
+
+// The Group Mentor window's Accept (CGroupMentorWnd::WndNotification: sub_00674490, then Send_OP_GroupMentor) sends
+// the box's number as the original's atoi reads it, not the slider's clamped value; an out-of-range number wraps as
+// core::msvc_atoi does instead of std::atoi's undefined overflow.
+TEST_CASE("Group Mentor window: Accept sends the box's number, read without undefined overflow") {
+    Rig rig(MockConfig::standard(), quick_options());
+    REQUIRE(rig.to_zone());
+    auto& conn = rig.conn;
+    app::UiHost host;
+    host.in_game = host.ui_ready = true;
+    host.conn = &conn;
+    app::UiApi api(host);
+    auto accept = [&](const std::string& text) {
+        conn.set_group_mentor_window_open(true);
+        REQUIRE(api.shown("GroupMentorWindow"));
+        REQUIRE(api.set_child_text("GroupMentorWindow", "GM_SliderInput", text));
+        REQUIRE(api.click_child("GroupMentorWindow", "GM_AcceptButton"));
+        CHECK_FALSE(conn.group_mentor().window_open);
+        return conn.group_mentor().percent;
+    };
+    CHECK(accept("42") == 42);
+    CHECK(accept("  7xyz") == 7);
+    CHECK(accept("-5") == -5); // (as the original: only a number over 100 is put back)
+    CHECK(accept("4294967338") == 42); // wraps in 32 bits (core/msvc_atoi.h)
+    CHECK(accept("-2147483649") == 100); // (reads as 2147483647: over 100, the box is put back to 100)
+}

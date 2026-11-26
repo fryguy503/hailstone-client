@@ -16,6 +16,7 @@ Code: `src/app/updater.*` (check, download), `src/app/update_install.*` (install
   updater's word on it (`ui::update_status_text`):
   - "Checking for updates...", "Up to date", "Version 0.5.0 is out";
   - "Could not check for updates" (offline, no manifest yet: the reason is only logged);
+  - "Not up to date: the update feed went back to 0.6.0 (0.7.0 was out)" (see "A feed that went back");
   - "Updates are off: <why>" (a development build, `update.check=0`, no HTTPS, a test run, a box set's other window).
 
   Under it, **What's new** (this version's part of the shipped `CHANGELOG.md`, `core/changelog.h`; greyed when
@@ -111,6 +112,32 @@ pending, the client removes each file from a table of those releases' files whos
   `ui/modern/eqmain.lua` (0.5.0-beta to 0.7.1-beta), now `game_menu.lua`.
 - A pack's folder stays, even if that empties it.
 
+### A feed that went back
+
+An older release's signed manifest still checks, so whoever can change the feed (the releases, or the way to them)
+could serve one again. That cannot downgrade anyone: only a release newer than the running build is offered. But the
+corner would say "Up to date" to a player who is not, and a fix released since would never reach them.
+
+So the client remembers the newest release each feed address has shown it in a manifest whose signature checked:
+`update/feed-seen.txt` under the data folder (`platform::data_dir()`, docs/layout.md), one `<version> <feed>` line a
+feed, at most 16. A signed manifest older than that one is reported, not taken: the corner says "Not up to date: the
+update feed went back to 0.6.0 (0.7.0 was out)", the log warns, and nothing is offered or installed. A newer manifest
+raises the mark; the check is a Hailstone defence of its own, with no counterpart in the original's patcher.
+
+- **A fresh install** has seen nothing and takes the first manifest. **A portable copy** keeps its file with the
+  folder; one made before a release has only the older mark.
+- **Going back by hand** (unpacking an older release over the folder): the feed still shows the newest, which is
+  newer than the running build and is offered as usual. The mark is about the feed, not the build.
+- **Each feed address has its own mark**, so pointing `update.feed` at a test feed with a later version does not
+  make the release feed look behind.
+- **A release withdrawn on purpose** (the newest deleted, so the feed falls back to the one before) shows as a feed
+  that went back to every client that saw it. Release a fixed version over it instead; deleting `feed-seen.txt`
+  forgets the mark.
+- **A feed frozen on one manifest is not detected.** Serving the same manifest for ever, never the newer one, looks
+  the same as no new release. Only an expiry (a date or serial each manifest must refresh, re-signed on a schedule)
+  would tell them apart, and that is left out on purpose: a re-signing schedule would be a burden on every release,
+  and a missed one would turn every client's corner into a warning.
+
 ### The release key
 
 The manifest is signed with Ed25519 (RFC 8032, through Monocypher). The signature covers every byte before the
@@ -145,6 +172,7 @@ The install is described in `app/update_install.h`. Everything lives in `<Hailst
 | `failed.txt` | a release that was rolled back, and is not offered again |
 | `note.txt` | a rollback's message for the version it starts |
 | `trash/` | files that were in use when moved, removed at the next start |
+| `feed-seen.txt` | the newest release each feed showed in a signed manifest ("A feed that went back"); under the data folder, which is this folder unless `HAILSTONE_DATA_DIR` names another |
 | `kept-<time>/` | what a rollback found in `previous/` that the journal did not name (see below); never removed by the client |
 
 The client installs the update itself once it has quit (end of `run_client`, after its window, the browser helper
@@ -155,8 +183,9 @@ and the plugins are gone):
    `tools/make_update.py`'s copy of it) are:
    - the files `hailstone.ini`, `hailstone-windows.ini` and `notes.txt`;
    - the folders `update/`, `servers/`, `logs/`, `cache/`, `screenshots/`, `bug-reports/`, `maps/`, `scripts/`,
-     `textures/`, `web/`, `addons/` and `tools/` (the last two the add-ons', docs/addons.md), and `ui-data/` and
-     `ui-addons/` (the player's interface data and the UI add-ons);
+     `textures/`, `web/`, `addons/`, `tools/` and `upscalers/` (the last three the add-ons', docs/addons.md), and
+     `ui-data/` and `ui-addons/` (the player's interface data and the UI add-ons). So every add-on kind's folder but
+     a plugin's is out of an update's reach, whatever its name (an upscaler add-on named `example` included);
    - `ui/settings/` and `ui/loadingbackgrounds/`.
 
    An update never writes or removes any of them.
@@ -169,7 +198,9 @@ and the plugins are gone):
      folder may hold files the update did not put there);
    - an update whose packages' declared sizes add up to more than 4 GiB.
 
-   Each unpacked file is flushed to the disk before it is renamed into `new/`.
+   Each unpacked file is flushed to the disk before it is renamed into `new/`. On Linux and macOS it takes the
+   package's permission bits without group or world write (and without setuid, setgid or sticky), so a package made
+   with loose permissions cannot leave a program others may change.
 2. Each old file is moved into `previous/` and its new one into place.
    - Each move's journal line is flushed before the move (write-ahead), so after a power cut every file in
      `previous/` has its line.
@@ -188,6 +219,37 @@ never write the same `.part` file, and a window that quits first never installs 
 
 ### Start and rollback
 
+One process at a time installs, rolls back or ends a pending update in a folder: `install_staged_update`,
+`update_at_start`, `update_started_fine` and `retire_old_release_files` take an exclusive lock on
+`update/install.lock` (`platform::ScopedFileLock`, released when the process ends). A process that cannot get it
+leaves the work to the one that holds it, so one process never undoes another's half-done install through the
+shared `journal.txt`, nor removes `previous/` while another rolls back from it:
+
+- an install reports an error, and the update stays staged for a later quit;
+- `update_at_start` does nothing;
+- `update_started_fine` is tried again at the next frame of the login screen (the lock is held only for moments: no
+  install can run while this process does, see below);
+- `retire_old_release_files` waits for the next start.
+
+**Every Hailstone running from the folder holds `update/running.lock` shared** (`claim_running`): from its start
+(`update_at_start` takes it before it lets go of the install lock, so no other start counts in between; a box set's
+window and a launcher's ticket launch take it in `main`) until its window, browser helper and plugins are gone. Whatever
+would change the files of another running Hailstone, or take its start for a failed one, first needs the same lock
+exclusively, under the install lock:
+
+- **The install at quit** waits while any other Hailstone runs from the folder, a box set's window or one started on
+  its own: the update stays staged and goes in at a later quit when none does. A player who pressed Restart gets this
+  version back, with the update still waiting.
+- **`update_at_start`** counts a start of the pending version, rolls it back after two failed starts, or undoes a
+  cut-off install, only when no other Hailstone runs. Three windows of a new version opened at once count as one
+  start; the others are running it, which is no failure, and none of them rolls it back from under the rest (nor
+  writes `failed.txt`, which would keep that release from being offered again). A cut-off install is put back at a
+  start while no other one runs.
+
+A Hailstone that cannot take its claim (it started at the very moment another was installing, or the folder cannot be
+written) runs without one and says so in the log; the old behaviour, an install that does not wait for it, then
+applies to it.
+
 `update_at_start`, the first thing `main` does:
 
 - **`installing`** (the client died mid-install): the journal is undone and the old version is back. If this binary
@@ -201,7 +263,7 @@ never write the same `.part` file, and a window that quits first never installs 
     `ui/`).
   - A file still in `previous/` after the undo (a damaged journal, a failed move back) may be the only copy, so
     `previous/` is renamed `kept-<time>/` with a warning, not removed.
-- **`pending`:** each start of the new version is counted, and reaching the login screen ends the count
+- **`pending`:** each start of the new version while no other Hailstone runs from the folder is counted, and reaching the login screen ends the count
   (`update_started_fine` removes `previous/`). If two starts never reached it, the third rolls the update back, writes
   `failed.txt`, starts the old version and quits. The old version shows why (`note.txt`).
 - **A different version than the pending one** (the player put one in by hand) ends the pending state.
@@ -229,6 +291,21 @@ updater and the add-on manager otherwise run as usual.
    leaves out the tests that only fail there (docs/ci.md "Builds in containers"): run those on Windows by hand.
 
    Run each platform's `hailstone_tests` (Windows under Wine) before going on; the macOS workflow runs its own.
+
+   `linux_build.sh` and `msvc_build.sh` configure every time with the release's settings before `CMAKE_ARGS`
+   (`tools/docker/release_options.sh`): `-DHAILSTONE_UPDATE_KEY=` the line of `update-key.pub`, Release, the
+   sanitizer and `HAILSTONE_ALLOW_IN_EQ_FOLDER` off, and the feed, index and page addresses back to their defaults.
+   A reused build folder therefore keeps none of an earlier configure's options (CMake caches
+   `HAILSTONE_UPDATE_KEY`, and read `update-key.pub` only at the folder's first configure). A configure whose key
+   differs from `update-key.pub`'s warns.
+
+   The build environment is pinned. msvc-wine is pinned to a commit, and MSVC and the Windows SDK to the release
+   install's versions (Visual Studio 17.14, toolset 14.44.35207; SDK 10.0.26100.0; `tools/docker/msvc_setup.sh`).
+   `linux.Dockerfile` starts from `ubuntu:24.04` by digest, and apt reads the archive as it was on the date in its
+   `APT_SNAPSHOT` (snapshot.ubuntu.com). Move both forward together, on purpose, when the image should take
+   updates: `docker pull ubuntu:24.04`, `docker image inspect ubuntu:24.04 --format '{{json .RepoDigests}}'`, and
+   a new snapshot date. What is left: Microsoft's manifest picks the servicing build within 17.14 and the SDK's
+   revision; `msvc_setup.sh` warns when the toolset installed is not 14.44.35207.
 2. Install each platform's client (without the server plugins, which are released as add-ons, each by a
    `tools/release.sh` in its own repository; this repository has none):
 
@@ -256,13 +333,18 @@ updater and the add-on manager otherwise run as usual.
    are left out. A symbolic link goes in as its target, which must lie inside `--dist` (a link out of it, or back into
    a folder holding it, stops the tool); `--out` may not lie inside `--dist`. A name the updater's zip reader would
    refuse (core/zip_read.cpp `is_safe_zip_path`) stops it too.
+
+   The `hailstone` (or `hailstone.exe`) binary must hold the public key of `update-key.pub` (or of `--key <file>`)
+   as CMake compiles it in: a binary built with another key, or none, is refused, since it would never take the
+   next release's update.
 4. Sign the manifest:
 
    ```sh
    build/hailstone_sign sign <secret-key> release/hailstone-update.txt
    ```
 
-   Then check it:
+   An old signature line is replaced. A manifest with lines after its signature line is refused rather than signed
+   without them: move them above it. Then check it:
 
    ```sh
    build/hailstone_sign verify update-key.pub release/hailstone-update.txt
@@ -312,4 +394,6 @@ its folder's permissions) and never written over an existing file.
   package already downloaded whole is kept.
 - **Other Hailstone windows** the client did not start (not the box set's) are not seen. On Linux they run on; on
   Windows their open files are moved like the quitting client's.
+- **A frozen feed.** A feed that keeps serving one signed manifest is not told apart from no new release, by choice
+  ("A feed that went back").
 - **The CI job.** Releases are published by hand; a tag-triggered CI job would need the signing key in CI.

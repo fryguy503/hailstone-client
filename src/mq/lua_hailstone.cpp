@@ -11,7 +11,7 @@
 //   actions: hailstone.right_click_item(slot [, class]), close_spell_book(), clear_spell_recovery(),
 //            set_window_pet(id), inspect_item(id [, augments]), set_max_camera_distance(d), hold_autoskill(on),
 //            use_ability(kind, name), train_aa(group)
-//   always:  hailstone.chat(text [, color]), server_dir(), server_rule(section, key), character_dir(),
+//   always:  hailstone.chat(text [, color]), chat_group(title, lines), server_dir(), server_rule(section, key), character_dir(),
 //            max_camera_distance()
 // The core calls the script's functions on the script's own state, outside its coroutine, with its capabilities and
 // within kHookMs; while the script itself is running (a call back into it) they give the stock answer. An error in
@@ -1362,6 +1362,46 @@ int l_chat(lua_State* L) {
     return 0;
 }
 
+bool post_chat_group(lua_State* L) {
+    if (lua_type(L, 1) != LUA_TSTRING || !lua_istable(L, 2) || !lua_checkstack(L, 2)) return false;
+    net::GameConnection* c = writable(Script::of(L));
+    if (!c) return false;
+    std::size_t title_bytes = 0;
+    const char* title = lua_tolstring(L, 1, &title_bytes);
+    const auto count = lua_rawlen(L, 2);
+    if (!title_bytes || title_bytes > net::kChatGroupMaxTitleBytes || !count || count > net::kChatGroupMaxRows)
+        return false;
+
+    std::array<std::string_view, net::kChatGroupMaxRows> rows;
+    std::size_t seen = 0;
+    lua_pushnil(L);
+    while (lua_next(L, 2)) {
+        const auto index = lua_tointeger(L, -2);
+        if (!lua_isinteger(L, -2) || index < 1 || static_cast<lua_Unsigned>(index) > count ||
+            lua_type(L, -1) != LUA_TSTRING) {
+            lua_pop(L, 2);
+            return false;
+        }
+        std::size_t bytes = 0;
+        const char* text = lua_tolstring(L, -1, &bytes);
+        if (!bytes || bytes > net::kChatGroupMaxRowBytes) {
+            lua_pop(L, 2);
+            return false;
+        }
+        rows[static_cast<std::size_t>(index - 1)] = std::string_view(text, bytes);
+        ++seen;
+        lua_pop(L, 1);
+    }
+    if (seen != count) return false;
+    return c->write_chat_group(std::string(title, title_bytes),
+                               std::vector<std::string>(rows.begin(), rows.begin() + static_cast<std::ptrdiff_t>(count)));
+}
+
+int l_chat_group(lua_State* L) {
+    lua_pushboolean(L, post_chat_group(L));
+    return 1;
+}
+
 // The script's folder under `parent` (the script's name as script_folder_name gives it), made now, into s.scratch;
 // false when `parent` is empty. A Lua social's dry run and its face make nothing on disk: they get the name only.
 // A script with a compiled plugin's name (an add-on "nms" beside the NMS server's plugin) gets
@@ -1695,6 +1735,7 @@ void register_hailstone(lua_State* L) {
              {"zone_name", l_zone_name},
              {"server", l_server},
              {"chat", l_chat},
+             {"chat_group", l_chat_group},
              {"server_dir", l_server_dir},
              {"server_rule", l_server_rule},
              {"hold_autoskill", l_hold_autoskill},

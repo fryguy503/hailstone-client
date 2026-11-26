@@ -3,6 +3,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -55,6 +56,19 @@ constexpr ImGuiTableFlags kTable = ImGuiTableFlags_RowBg | ImGuiTableFlags_Sizin
 bool is_hitch(float frame_ms, float typical_ms) {
     // Twenty milliseconds at least: below that a slow frame is not seen at 60 Hz.
     return typical_ms > 0.0f && frame_ms >= std::max(20.0f, typical_ms * 2.5f);
+}
+
+bool HitchBaseline::add(float frame_ms) {
+    if (!std::isfinite(frame_ms) || frame_ms < 0.0f) return false;
+    if (is_hitch(frame_ms, typical_ms)) {
+        if (++run < kHitchRunReset) return true;
+        typical_ms = frame_ms; // (this frame is still logged as the hitch it was measured as)
+        run = 0;
+        return true;
+    }
+    run = 0;
+    typical_ms = typical_ms > 0.0f ? typical_ms * 0.95f + frame_ms * 0.05f : frame_ms;
+    return false;
 }
 
 std::string hitch_text(float frame_ms, float typical_ms, const PhaseTimes& phases,
@@ -155,11 +169,9 @@ void PerfUi::begin_frame() {
         // Into vectors that come back from the ring (add_swap): no allocation a frame, even with the window closed.
         core::frame_sections::take_into(taken_sections_);
         core::frame_sections::take_bytes_into(taken_bytes_);
-        if (is_hitch(frame, typical_ms_)) {
-            if (log_hitches_) log::info("perf: {}", hitch_text(frame, typical_ms_, current_, taken_sections_));
-        } else {
-            typical_ms_ = typical_ms_ > 0.0f ? typical_ms_ * 0.95f + frame * 0.05f : frame;
-        }
+        const float typical = baseline_.typical_ms;
+        if (baseline_.add(frame) && log_hitches_)
+            log::info("perf: {}", hitch_text(frame, typical, current_, taken_sections_));
         if (!paused_) {
             frame_ms_[head_] = frame;
             phase_ms_[head_] = current_;
@@ -287,7 +299,7 @@ void PerfUi::draw(const PerfInputs& in) {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Write each frame of %.0f ms or more (2.5 times the typical frame, 20 ms at least)\n"
                           "to the log with where its time went.",
-                          static_cast<double>(std::max(20.0f, typical_ms_ * 2.5f)));
+                          static_cast<double>(std::max(20.0f, baseline_.typical_ms * 2.5f)));
 
     if (fg && (fg->requested || fg->active) &&
         ImGui::CollapsingHeader("Frame generation", ImGuiTreeNodeFlags_DefaultOpen) &&

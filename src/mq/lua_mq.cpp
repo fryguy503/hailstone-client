@@ -984,24 +984,25 @@ std::optional<fs::path> config_path(lua_State* L, const char* given) {
     return p;
 }
 
-// What the config directory holds: its files and their bytes, `except` left out (the file a write replaces). Stops
-// counting a little past kMaxConfigFiles.
-struct ConfigUsage {
-    std::size_t files = 0;
-    std::uintmax_t bytes = 0;
-};
-ConfigUsage config_usage(const fs::path& dir, const fs::path& except) {
-    ConfigUsage u;
+// What the config directory holds: its files and their bytes. Stops counting a little past kMaxConfigFiles (past
+// it every write is refused anyway).
+ScriptHost::Impl::ConfigUsage count_config(const fs::path& dir) {
+    ScriptHost::Impl::ConfigUsage u;
     std::error_code ec;
     for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end;
          !ec && it != end && u.files <= kMaxConfigFiles; it.increment(ec)) {
         std::error_code fec;
-        if (!it->is_regular_file(fec) || it->path() == except) continue;
+        if (!it->is_regular_file(fec)) continue;
         ++u.files;
         const auto size = it->file_size(fec);
         if (!fec) u.bytes += size;
     }
     return u;
+}
+
+bool path_within(const fs::path& dir, const fs::path& file) {
+    const fs::path rel = file.lexically_relative(dir);
+    return !rel.empty() && *rel.begin() != ".." && *rel.begin() != ".";
 }
 
 // mq._write_config(path, text): mq.pickle's file write, within kMaxConfigFileBytes for the file and kMaxConfigFiles
@@ -1025,15 +1026,43 @@ int l_write_config(lua_State* L) {
             return;
         }
         std::error_code ec;
-        const ConfigUsage used = config_usage(fs::weakly_canonical(script_config_dir(s), ec), *p);
-        if (used.files + 1 > kMaxConfigFiles || used.bytes + n > kMaxConfigBytes) {
+        const fs::path dir = fs::weakly_canonical(script_config_dir(s), ec);
+        auto& counts = s.host->config_usage;
+        auto it = counts.find(dir);
+        if (it == counts.end()) it = counts.emplace(dir, count_config(dir)).first;
+        // The file a write replaces is left out, as before it is written: one stat, never another walk.
+        std::error_code fec;
+        const bool replaces = fs::is_regular_file(*p, fec);
+        std::uintmax_t old_size = 0;
+        if (replaces) {
+            const auto size = fs::file_size(*p, fec);
+            if (!fec) old_size = size;
+        }
+        const auto& used = it->second;
+        const std::size_t other_files = used.files - std::min<std::size_t>(used.files, replaces ? 1 : 0);
+        const std::uintmax_t other_bytes = used.bytes - std::min(used.bytes, old_size);
+        if (other_files + 1 > kMaxConfigFiles || other_bytes + n > kMaxConfigBytes) {
             problem = 4;
             return;
         }
         fs::create_directories(p->parent_path(), ec);
         std::ofstream f(*p, std::ios::binary | std::ios::trunc);
         if (f) f.write(text, static_cast<std::streamsize>(n));
-        else problem = 2;
+        if (f) f.close();
+        // Every counted directory the file is in (the shared one holds each script's own folder) gets the write; one
+        // whose count is no longer known (a write that failed part way) is counted again at its next write.
+        for (auto c = counts.begin(); c != counts.end();) {
+            if (!path_within(c->first, *p)) {
+                ++c;
+            } else if (!f) {
+                c = counts.erase(c);
+            } else {
+                if (!replaces) ++c->second.files;
+                c->second.bytes = c->second.bytes - std::min(c->second.bytes, old_size) + n;
+                ++c;
+            }
+        }
+        if (!f) problem = 2;
     });
     if (problem == 1) return luaL_error(L, "mq.pickle: '%s' is outside the config directory", given);
     if (problem == 2) return luaL_error(L, "mq.pickle: cannot write '%s'", given);
@@ -1443,6 +1472,7 @@ ScriptHost::~ScriptHost() {
 }
 
 bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
+    config_usage.clear();
     sc.L = lua_newstate(limited_alloc, &sc, luaL_makeseed(nullptr));
     if (!sc.L) {
         why = "out of memory";
@@ -1594,6 +1624,11 @@ bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
 }
 
 bool ScriptHost::run(const std::string& name, const std::vector<std::string>& args, std::string* why) {
+    return run_file(name, args, why, false);
+}
+
+bool ScriptHost::run_file(const std::string& name, const std::vector<std::string>& args, std::string* why,
+                          bool zone_policy) {
     Impl& m = *impl_;
     auto refuse = [&](std::string text) {
         if (why) *why = text;
@@ -1662,7 +1697,7 @@ bool ScriptHost::run(const std::string& name, const std::vector<std::string>& ar
     lua_xmove(L, sc.co, 1); // the chunk onto the coroutine
     sc.co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
     watch(sc.co);
-    m.say(std::format("[Lua] running {} ({})", key, plugin::caps_text(caps)));
+    m.say(std::format("[Lua] running {} ({})", key, plugin::caps_text(caps)), zone_policy, "lua:" + key);
     log::info("lua: running {} from {}, sha256 {}, caps {}", key, entry->string(), to_hex(hash), plugin::caps_text(caps));
     m.scripts.push_back(std::move(s));
     return true;
@@ -1674,10 +1709,10 @@ bool ScriptHost::Impl::kept(const Script& s) const {
             env.policy->required_file(plugin::FileKind::Script, s.hash));
 }
 
-void ScriptHost::Impl::end(Script& s, const std::string& why) {
+void ScriptHost::Impl::end(Script& s, const std::string& why, bool zone_policy) {
     s.stop_requested = true;
     if (s.status == Script::Status::Running || s.status == Script::Status::Paused) s.status = Script::Status::Exited;
-    say("[Lua] " + s.name + " " + why);
+    say("[Lua] " + s.name + " " + why, zone_policy, "lua:" + lower(s.name), true);
 }
 
 bool ScriptHost::Impl::may_control(const Script& s) const { return (s.caps & ~plugin::caller_caps()) == 0; }
@@ -1945,7 +1980,7 @@ void ScriptHost::Impl::draw_windows(Script& s) {
     --s.busy;
 }
 
-void ScriptHost::policy_changed(const std::vector<std::string>& autoload) {
+void ScriptHost::policy_changed(const std::vector<std::string>& autoload, bool zone_policy) {
     Impl& m = *impl_;
     for (auto& sp : m.scripts) {
         Script& s = *sp;
@@ -1959,7 +1994,7 @@ void ScriptHost::policy_changed(const std::vector<std::string>& autoload) {
                 if ((allowed & caps) != caps) { caps = 0; break; }
             }
         if (caps == 0) {
-            m.end(s, "stopped: it may not run here");
+            m.end(s, "stopped: it may not run here", zone_policy);
         } else if (caps != s.caps) {
             s.caps = caps;
             constexpr std::uint32_t needed = plugin::kCapUi | plugin::kCapExtend;
@@ -1974,7 +2009,9 @@ void ScriptHost::policy_changed(const std::vector<std::string>& autoload) {
     for (auto& [social, sp] : m.buttons) {
         Script& s = *sp;
         if (r.mode != plugin::ButtonMode::Full) {
-            if (button_running(social)) m.say("[Lua] " + s.name + " stopped: this server does not let it run on");
+            if (button_running(social))
+                m.say("[Lua] " + s.name + " stopped: this server does not let it run on", zone_policy,
+                      "lua-button:" + lower(s.name), true);
             m.stop_threads(s);
         } else {
             if (s.caps != r.caps) invalidate_plugin_lifecycle(s);
@@ -1986,7 +2023,7 @@ void ScriptHost::policy_changed(const std::vector<std::string>& autoload) {
     // The server's scripts its hailstone.cfg starts ([scripts] run).
     if (m.env.policy && m.env.policy->current())
         for (const auto& name : m.env.policy->current()->run_scripts)
-            if (!running(name)) run(name, {});
+            if (!running(name)) run_file(name, {}, nullptr, zone_policy);
     // Required managed add-ons start independently of the player's autorun choices.
     m.required.clear();
     if (m.env.policy && m.env.policy->current() && !m.env.policy->current()->provisional) {
@@ -1998,13 +2035,13 @@ void ScriptHost::policy_changed(const std::vector<std::string>& autoload) {
             const auto text = file ? read_file(*file) : std::nullopt;
             if (text && sha256(*text) == entry.second &&
                 m.env.policy->caps(plugin::FileKind::Script, entry.second, entry.first) != 0)
-                run(entry.first, {});
+                run_file(entry.first, {}, nullptr, zone_policy);
         }
     }
     // The player's own the settings and the character's autorun list name.
-    m.start_allowed(autoload);
-    m.start_allowed(m.autorun);
-    m.start_managed();
+    m.start_allowed(autoload, zone_policy);
+    m.start_allowed(m.autorun, zone_policy);
+    m.start_managed(zone_policy);
 }
 
 std::size_t ScriptHost::retry_required_addons() {
@@ -2024,7 +2061,7 @@ std::size_t ScriptHost::retry_required_addons() {
     return started;
 }
 
-void ScriptHost::Impl::start_managed() {
+void ScriptHost::Impl::start_managed(bool zone_policy) {
     if (!env.policy || !env.policy->received()) return;
     for (const auto& addon : managed) {
         if (!addon.enabled || !addon.verified || self->running(addon.name)) continue;
@@ -2033,7 +2070,7 @@ void ScriptHost::Impl::start_managed() {
         if (!entry || !fs::equivalent(*entry, addon.entry, ec)) continue; // never start a shadowing server/manual file
         const auto hash = file_hash(*entry);
         if (!hash || *hash != addon.hash || env.policy->caps(plugin::FileKind::Script, *hash) == 0) continue;
-        self->run(addon.name, {});
+        self->run_file(addon.name, {}, nullptr, zone_policy);
     }
 }
 
@@ -2117,13 +2154,14 @@ bool ScriptHost::Impl::check_required_addons(std::string* problem) const {
     return true;
 }
 
-void ScriptHost::Impl::start_allowed(const std::vector<std::string>& names) {
+void ScriptHost::Impl::start_allowed(const std::vector<std::string>& names, bool zone_policy) {
     if (!env.policy || !env.policy->received()) return;
     for (const auto& name : names) {
         if (name.empty() || self->running(name)) continue;
         auto entry = resolve(lower(name));
         auto text = entry ? read_file(*entry) : std::nullopt;
-        if (text && env.policy->caps(plugin::FileKind::Script, sha256(*text), name) != 0) self->run(name, {});
+        if (text && env.policy->caps(plugin::FileKind::Script, sha256(*text), name) != 0)
+            self->run_file(name, {}, nullptr, zone_policy);
     }
 }
 
@@ -2190,7 +2228,7 @@ std::vector<ScriptHost::Found> ScriptHost::found() const {
 
 std::vector<fs::path> ScriptHost::folders() const { return impl_->dirs(); }
 
-void ScriptHost::set_autorun_file(const fs::path& file) {
+void ScriptHost::set_autorun_file(const fs::path& file, bool zone_policy) {
     Impl& m = *impl_;
     if (file == m.autorun_file) return;
     m.autorun_file = file;
@@ -2199,7 +2237,7 @@ void ScriptHost::set_autorun_file(const fs::path& file) {
     if (!file.empty() && ini.load(file))
         for (const auto& key : ini.keys("Autorun"))
             if (ini.get_int("Autorun", key, 0) != 0) m.autorun.push_back(lower(key));
-    m.start_allowed(m.autorun);
+    m.start_allowed(m.autorun, zone_policy);
 }
 
 bool ScriptHost::autorun(std::string_view name) const {

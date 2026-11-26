@@ -345,13 +345,16 @@ TEST_CASE("EQG texture variants come from the model's .lay layers" * doctest::sk
     auto t1 = diffuse(1);
     CHECK(t1["GUS_m00"] == "c_gus_bd_s01_c.dds");
     CHECK(t1["GUS_m01"] == "c_gus_gb_s00_c.dds");
+    // Texture 9 has no layer, no c_gus_*_s09 file: unchanged.
+    CHECK(diffuse(9)["GUS_m00"] == "c_gus_bd_s00_c.dds");
+    // Textures 4 and 5 are the reference folder's layers; a live install's dress them otherwise.
+    if (!hailstone::test::pinned_values("GUS textures 4 and 5")) return;
     // Texture 4: the black set on body and debris, not c_gus_bd_s04_c.dds.
     auto t4 = diffuse(4);
     CHECK(t4["GUS_m00"] == "c_gus_bk_s04_c.dds");
     CHECK(t4["GUS_m01"] == "c_gus_bk_s04_c.dds");
-    // Texture 5: mercury; texture 9 has no layer, no c_gus_*_s09 file: unchanged.
+    // Texture 5: mercury.
     CHECK(diffuse(5)["GUS_m00"] == "c_gus_ev_s05_c.dds");
-    CHECK(diffuse(9)["GUS_m00"] == "c_gus_bd_s00_c.dds");
 }
 
 TEST_CASE("dressing classic, Luclin and EQG models from the game files" * doctest::skip(!hailstone::test::game_dir())) {

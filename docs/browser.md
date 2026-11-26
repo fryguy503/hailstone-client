@@ -111,7 +111,11 @@ tools/hailstone-web/   the helper: links CEF, nothing of the client's but browse
   - Each is a u32 length and a type byte, at most 64 MB. A broken one counts as the helper's death.
   - Frames carry only the changed rectangles (CEF's `OnPaint` dirty rects), BGRA, over the pipe; shared memory is
     the change to make if full-screen frames turn out too slow.
-  - A popup (`OnPopupShow`, select lists) is a second, smaller image.
+  - A popup (`OnPopupShow`, select lists) is a second, smaller image. The helper places it inside the view, no larger
+    than it, moving it in where CEF has it reaching past an edge (the mouse over it is moved back for CEF), as CEF's
+    own off-screen example does. Tested through the real helper: a select at a 160x90 tab's corner, whose list CEF
+    puts at x 120, 226 wide, comes inside the tab, drawn, and a click on it picks an entry. Only the horizontal case
+    is exercised: Chromium itself kept that list's height and place inside the view.
 - **The helper's life** (`web/browser_host.h`). Started at the first tab. A helper that exits or sends a broken
   message is restarted a second later, with every open tab at its last address and size. After four deaths within a
   minute the client gives up, closes the tabs and opens pages in the system's browser. One that answers the hello
@@ -122,6 +126,9 @@ tools/hailstone-web/   the helper: links CEF, nothing of the client's but browse
     the owner's name lower-cased, other than letters, digits, `-` and `_` as `_`, plus its FNV-1a hash), with its
     own request context, so an add-on's page never sees the player's sign-ins or another add-on's.
   - The server's links (OP_Weblink) have `server-links/` below it.
+  - The folders go to the helper as UTF-8 (`core/path_utf8.h`), `--data=` too. The helper opens a script's, plugin's
+    or server link's tab only on a profile under `--data` (`web::profile_within`: no `..`); any other is closed as
+    Failed rather than given the player's cookies. The player's own tab without one takes CEF's global context.
   - A generic user agent naming Hailstone; no hardware identifiers.
 - **Scripts and plugins** (docs/plugins.md "Web pages"): `mq.web` for scripts, `hs.Web*` in a plugin's windows,
   `web_*` in the host table (ABI 3). The page sees only `window.hailstone.post()` and `window.hailstone.onmessage`,
@@ -183,6 +190,9 @@ Tabs and frames:
   them. A closed tab's images are let go when it closes.
 - A paint larger than 64 MB (a 4096x4096 tab's full frame is just over) goes from the helper as several Frames
   (`web::split_frame`: rectangles grouped, a too large one cut into bands of rows), with the protocol unchanged.
+- The client drops a view frame larger than the tab (a Frame's own size may be up to 65535 a side) and a popup
+  larger than the view, so a tab's images and textures stay within its size (at most 4096 a side). A paint still at
+  a tab's old size after it was made smaller is dropped too; the next comes at the new size.
 
 ### The helper (`tools/hailstone-web`)
 
@@ -190,6 +200,18 @@ Tabs and frames:
   folder below it. CEF writes nothing else (checked on Linux).
 - One program for all of CEF's processes. Each tab is an off-screen browser (`windowless_frame_rate` 30); a new
   window (`window.open`, `target=_blank`) opens in the same tab.
+- **`main` has no stack protector** (`NO_STACK_PROTECTOR`, as CEF's own examples and `CefExecuteProcess`), and
+  calls `CefExecuteProcess` itself. On Linux Chromium gives each of its other processes a new stack canary while it
+  runs (`--change-stack-guard-on-fork`), so a function of ours under that call with a canary check would abort the
+  process with glibc's `*** stack smashing detected ***` on the way out. Before, utility processes (an unzipper a
+  few seconds after the start, say) ended so when done, printing it to the client's standard error. The browser
+  process's own code runs after the call returns, in a function of its own.
+- **The client's pipes are the browser process's alone.** Before `CefInitialize` it moves them to private copies,
+  closed across exec on POSIX and not inheritable on Windows, and points standard input and output (and Windows'
+  standard handles) at the null device (`platform::take_protocol_stdio`). CEF's renderers, GPU and utility
+  processes inherit standard input and output, so a page's process cannot write messages into the client's stream
+  or read the client's, and a stray print cannot break the framing. CEF's other processes run the same program and
+  return from `CefExecuteProcess` before this point.
 - **Navigation checks.**
   - `OnBeforeBrowse` holds every main-frame navigation to the tab's rules (`about:blank` and CEF's own error pages
     are let through), and, in a script's or plugin's tab, every frame's. A refusal is a console line.

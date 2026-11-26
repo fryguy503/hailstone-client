@@ -143,17 +143,23 @@ TEST_CASE("a hidden first-person rider uses the drawn mount seat rather than its
 
 TEST_CASE("the shipped mounts' rider dags" * doctest::skip(!hailstone::test::game_dir())) {
     auto lib = CharacterLibrary::load(*hailstone::test::game_dir(), "");
-    // The Luclin horse names its rider dag after itself; the EQG mounts have CHEST03_MOUNT01.
+    // A model the folder lacks is skipped. The Luclin horse names its rider dag after itself; the EQG mounts have CHEST03_MOUNT01.
     for (const char* code : {"HSM", "HSN"}) {
         auto m = lib.model(code);
-        REQUIRE(m);
+        if (!m) {
+            MESSAGE("the game folder has no " << code << " model: not checked");
+            continue;
+        }
         int b = m->mount_point_bone("HUM");
         REQUIRE(b >= 0);
         CHECK(m->bone_names[static_cast<std::size_t>(b)] == std::string(code) + "RIDER_TRACK");
     }
     for (const char* code : {"HRS", "CWR", "UNM", "MWR"}) {
         auto m = lib.model(code);
-        REQUIRE(m);
+        if (!m) {
+            MESSAGE("the game folder has no " << code << " model: not checked");
+            continue;
+        }
         int b = m->mount_point_bone("HUM");
         REQUIRE(b >= 0);
         CHECK(m->bone_names[static_cast<std::size_t>(b)] == "CHEST03_MOUNT01");

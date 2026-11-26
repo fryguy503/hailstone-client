@@ -157,6 +157,7 @@ void WorldState::smooth(float dt, double now, const FloorFn& floor, const Region
         if (id != player_id && id != controlled_id && now - s.update_time <= mechanics::kSpawnStaleMs / 1000.0) {
             // Each step of the frame (core/step_clock.h) steps the body and lands it, as the original's frames do.
             mechanics::RemoteBody b{s.position, s.velocity, s.heading, s.speed_heading, s.speed_run};
+            const glm::vec3 feet_probe_offset(0.0f, 0.0f, s.heights.avatar_height - 0.25f);
             for (float ms : steps) {
                 const glm::vec3 before = b.position;
                 mechanics::step_remote_spawn(b, ms, s.is_npc);
@@ -185,10 +186,13 @@ void WorldState::smooth(float dt, double now, const FloorFn& floor, const Region
                         const float z = *f + s.heights.avatar_height;
                         const bool settle = moved || (s.fly_mode == 0 ? std::fabs(z - b.position.z) <= kRestSettleReach
                                                                      : z > b.position.z);
-                        // Test the swimmer's position before the floor correction. Follow uses this same Z to aim
-                        // its swim pitch, so a floor below the swimmer must not replace the depth from the server.
+                        // At the surface a player can have their body above water with their feet still in it.
+                        // Keep their reported depth if the floor would put their body underwater. On a shallow
+                        // bank with only the feet wet, the player can still settle onto the floor.
                         const bool lower_swimmer = settle && z < b.position.z && !s.is_npc && !s.is_corpse &&
-                                                   region && region(b.position) >= 5;
+                                                   region && (region(b.position) >= 5 ||
+                                                              (region(b.position - feet_probe_offset) >= 5 &&
+                                                               region({b.position.x, b.position.y, z}) >= 5));
                         if (settle && !lower_swimmer) {
                             b.position.z = z;
                             landed_floor = *f;
@@ -206,7 +210,7 @@ void WorldState::smooth(float dt, double now, const FloorFn& floor, const Region
             // FeetEnvironmentChange), so other spawns swim and tread water as the local player does.
             if (region) {
                 s.body_wet = region(s.position);
-                s.feet_wet = region(s.position - glm::vec3(0.0f, 0.0f, s.heights.avatar_height - 0.25f));
+                s.feet_wet = region(s.position - feet_probe_offset);
             }
         }
         glm::vec3 target = s.position;

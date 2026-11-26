@@ -115,6 +115,11 @@ std::optional<std::vector<MarketplaceEntry>> decode_marketplace_items(const AppP
     // MarketplaceItemList_Parse @0x7f90e0: a missing count leaves its argument slot (the reader's pointer) as the
     // count; refused here.
     if (!r.read(count)) return std::nullopt;
+    // Hailstone's limit, not confirmed in the original (docs/unknowns.md): a catalog counted past kMaxEntries is
+    // refused, so a packet of near-empty entries cannot grow into several times its size in memory. A store lists
+    // hundreds of items; ten thousand leaves room for a large one.
+    constexpr std::uint32_t kMaxEntries = 10000;
+    if (count > kMaxEntries) return std::nullopt;
     std::vector<MarketplaceEntry> out;
     for (std::uint32_t i = 0; i < count && !r.exhausted(); ++i) {
         const std::size_t at = r.position();

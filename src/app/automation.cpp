@@ -12,10 +12,13 @@
 
 #include "app/addon_install.h"
 #include "core/log.h"
+#include "core/path_utf8.h"
 #include "game/eq_names.h"
+#include "game/mq_colors.h"
 #include "game/nameplate_canvas.h"
 #include "mq/commands.h"
 #include "mq/lua_mq.h"
+#include "mq/map_filter.h"
 #include "mq/tlo.h"
 #include "net/game_connection.h"
 #include "plugin/native_plugins.h"
@@ -50,6 +53,8 @@ struct Automation::Impl {
     fs::path enforcement_profile;
     mq::Registry registry;
     mq::Context ctx;
+    mq::MapFilters map_filters;
+    mq::MapFilterTargetPathState map_filter_target_path;
     std::unique_ptr<mq::Commands> commands;
     std::unique_ptr<mq::ScriptHost> scripts;
     std::unique_ptr<plugin::NativePlugins> plugins;
@@ -76,6 +81,11 @@ struct Automation::Impl {
 
     void print(const std::string& text, std::uint32_t rgb = 0) {
         if (net::GameConnection* c = conn()) c->ui_message(text, rgb);
+        else log::info("{}", game::strip_mq_colors(text)); // the log is plain text (game/mq_colors.h)
+    }
+
+    void zone_notice(const std::string& text, const std::string& subject, bool stop) {
+        if (net::GameConnection* c = conn()) c->zone_client_message(text, subject, stop);
         else log::info("{}", text);
     }
 
@@ -115,17 +125,18 @@ struct Automation::Impl {
         } else {
             policy.clear();
         }
+        map_filters.set_vanilla_locked(has && c->server_rules()->map_vanilla);
         // The server's scripts and plugins are looked for first (servers/<profile>/scripts and plugins).
         // Out of the world (character select, a login, disconnected): the character's autorun list goes until a
         // character's zone-in sets it again (ClientApp's zone-in).
         if (!has || c->server_rules()->provisional) scripts->set_autorun_file({});
         scripts->set_server_dir(dir.empty() ? fs::path() : dir / "scripts");
         plugins->set_server_dir(dir.empty() ? fs::path() : dir / "plugins");
-        recheck();
+        recheck(has);
     }
 
     // What runs, checked again against the policy (the server's rules, or the add-ons' ceilings, changed).
-    void recheck() {
+    void recheck(bool zone_policy = false) {
         const auto& rules = policy.current();
         if (!rules || !rules->addons.enabled) {
             enforcement_identities_ready = false;
@@ -141,8 +152,8 @@ struct Automation::Impl {
         }
         std::vector<std::string> script_autoload;
         for (auto& s : mq::split_index(env.script_autoload)) script_autoload.push_back(s);
-        scripts->policy_changed(script_autoload);
-        plugins->policy_changed(autoload());
+        scripts->policy_changed(script_autoload, zone_policy);
+        plugins->policy_changed(autoload(), zone_policy);
     }
 
     // The server as the player knows it: the saved server's name, else the world's.
@@ -167,21 +178,28 @@ struct Automation::Impl {
 Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     Impl& m = *impl_;
     m.env = std::move(env);
+    if (m.env.config) m.map_filters.load(*m.env.config);
     mq::register_game_tlos(m.registry);
     m.ctx.window_open = [&m](std::string_view w) { return m.env.window_open && m.env.window_open(w); };
     m.ctx.plugin_loaded = [&m](std::string_view p) { return m.plugins && m.plugins->loaded(p); };
     m.ctx.ability = m.env.ability;
+    m.ctx.foreground = m.env.foreground;
     m.ctx.can_see = m.env.can_see;
     m.ctx.line_of_sight = m.env.line_of_sight;
+    m.ctx.config_path = path_utf8(m.env.data_dir / "scripts" / "config"); // the scripts' config_dir below
 
     mq::CommandEnv ce;
     ce.hooks = &m.hooks;
     ce.registry = &m.registry;
+    ce.map_filters = &m.map_filters;
     ce.context = [&m]() -> const mq::Context& { return m.context(); };
     ce.echo = [&m](const std::string& t) { m.print(t); };
     ce.run = [&m](const std::string& l) { m.run(l); };
     ce.set_target = [&m](std::uint32_t id) {
         if (net::GameConnection* c = m.conn()) c->set_target(id);
+    };
+    ce.set_door_target = [&m](std::optional<std::uint8_t> id) {
+        if (net::GameConnection* c = m.conn()) c->set_door_target(id);
     };
     ce.face = m.env.face;
     ce.keypress = m.env.keypress;
@@ -194,6 +212,7 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     se.registry = &m.registry;
     se.context = ce.context;
     se.print = ce.echo;
+    se.zone_notice = [&m](const std::string& t, const std::string& subject, bool stop) { m.zone_notice(t, subject, stop); };
     se.run = ce.run;
     se.dirs = search_dirs(m.env.data_dir / "scripts", m.env.install_dir / "scripts");
     se.config_dir = m.env.data_dir / "scripts" / "config";
@@ -233,6 +252,7 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     ne.registry = &m.registry;
     ne.context = ce.context;
     ne.print = [&m](const std::string& t, std::uint32_t rgb) { m.print(t, rgb); };
+    ne.zone_notice = se.zone_notice;
     ne.run = ce.run;
     ne.send = [&m](plugin::Stream s, const net::AppPacket& p) {
         if (net::GameConnection* c = m.conn()) {
@@ -246,6 +266,8 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     ne.nameplates = &m.nameplates;
     ne.web = m.env.web;
     ne.connection = [&m] { return m.conn(); };
+    ne.world_placement_scene = m.env.world_placement_scene;
+    ne.world_placement_input_allowed = m.env.world_placement_input_allowed;
     ne.max_camera_distance = m.env.max_camera_distance;
     ne.set_max_camera_distance = m.env.set_max_camera_distance;
     ne.hot_button = m.env.hot_button;
@@ -259,6 +281,7 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     ne.dirs = search_dirs(m.env.data_dir / "plugins", m.env.install_dir / "plugins");
     ne.cache_dir = m.env.data_dir / "cache" / "plugins";
     ne.config_dir = m.env.data_dir / "plugins";
+    ne.scripts_config_dir = se.config_dir; // the scripts' settings folder, as MacroQuest.Path[config]
     fs::create_directories(ne.dirs.front(), ec);
     m.plugins = std::make_unique<plugin::NativePlugins>(ne);
 }
@@ -299,6 +322,7 @@ std::shared_ptr<game::ExtensionChain> Automation::extensions() { return impl_->e
 game::NameplateCanvasRegistry& Automation::nameplates() { return impl_->nameplates; }
 plugin::UiBridge& Automation::plugin_ui() { return impl_->plugin_ui; }
 mq::ScriptHost& Automation::scripts() { return *impl_->scripts; }
+void Automation::set_zone_autorun_file(const fs::path& file) { impl_->scripts->set_autorun_file(file, true); }
 
 std::uint32_t Automation::plugin_caps(std::string_view tag) const {
     // By the owner's tag alone (plugin::UiBridge::owner_tag): a script named after a compiled plugin never gets the
@@ -326,6 +350,8 @@ bool Automation::autoskill_held() {
 }
 const mq::Registry& Automation::registry() const { return impl_->registry; }
 const mq::Context& Automation::context() { return impl_->context(); }
+mq::MapFilters& Automation::map_filters() { return impl_->map_filters; }
+const mq::MapFilters& Automation::map_filters() const { return impl_->map_filters; }
 
 std::optional<plugin::ConsentPrompt> Automation::plugin_consent() const {
     const Impl& m = *impl_;
@@ -349,6 +375,11 @@ void Automation::frame() {
     Impl& m = *impl_;
     m.sync_policy();
     m.refresh_consent();
+    const auto now = std::chrono::steady_clock::now();
+    net::GameConnection* connection = m.conn();
+    // Checked every frame: a GM status rule can change the answer without a new hailstone.cfg.
+    m.map_filters.set_suspended(connection && !connection->server_command_allowed("/mapfilter"));
+    if (connection) mq::update_map_filter_target_path(m.map_filters, *connection, m.map_filter_target_path, now);
     m.hooks.pulse();
     m.scripts->pulse();
 }
@@ -384,6 +415,26 @@ void Automation::world_finish(bool submitted, bool presented) {
 
 void Automation::world_unavailable() {
     if (impl_->plugins) impl_->plugins->world_unavailable();
+}
+
+bool Automation::world_placement_aiming() const {
+    return impl_->plugins && impl_->plugins->world_placement_aiming();
+}
+
+void Automation::world_placement_update(std::optional<plugin::WorldPlacementPoint> ground, bool pressed, bool released) {
+    if (impl_->plugins) impl_->plugins->world_placement_update(ground, pressed, released);
+}
+
+void Automation::world_placement_cancel() {
+    if (impl_->plugins) impl_->plugins->world_placement_cancel();
+}
+
+void Automation::world_placement_player_cancel() {
+    if (impl_->plugins) impl_->plugins->world_placement_player_cancel();
+}
+
+void Automation::world_placement_player_input() {
+    if (impl_->plugins) impl_->plugins->world_placement_player_input();
 }
 
 void Automation::shutdown() {

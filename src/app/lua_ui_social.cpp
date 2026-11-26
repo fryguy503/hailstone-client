@@ -1938,7 +1938,7 @@ int WhoResults(lua_State* L) {
             t.one.entries.assign(1, e);
             auto ext = h.conn->server_ext().who_lines(*h.conn, t.one);
             t.lines = ext ? std::move(*ext) : game::format_who_response(t.one, h.conn->strings(), false);
-            t.race = e.race ? game::race_name(e.race) : std::string();
+            t.race = game::who_race_name(h.conn->strings(), e.race);
             t.zone.clear();
             if (e.zone_string != 0xffffffff)
                 t.zone = (e.zone_id >> 15) & 1 ? e.zone_name : game::zone_short_name(e.zone_id);

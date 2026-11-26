@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "app/bug_report.h"
+#include "app/server_management_view.h"
 #include "game/ability_book.h"
 #include "game/char_select_camera.h"
 #include "game/hotbuttons.h"
@@ -34,15 +35,16 @@
 
 struct lua_State;
 
-namespace hailstone::net { class GameConnection; struct Item; struct ItemSlot; struct CharCreate; }
+namespace hailstone::net { class GameConnection; struct Item; struct ItemSlot; struct CharCreate; struct SlotClickKeys; }
 namespace hailstone::game { class HotButtonStore; struct HotButton; namespace mechanics { class Character; } }
 namespace hailstone { class GameDir; }
 namespace hailstone::assets { class CharacterLibrary; struct CharacterModel; }
-namespace hailstone::mq { class ScriptHost; class Registry; struct Context; }
+namespace hailstone::mq { class ScriptHost; class Registry; class MapFilters; struct Context; }
 namespace hailstone::ui {
 class UiTextures; class UiIni; struct ChatView; struct ServerSelectView; struct LoginView; struct CharacterSelectView;
 struct CharacterCreateView;
 struct AddonPolicyView;
+namespace lua { class LuaUi; }
 }
 namespace hailstone::game { struct ItemLink; struct QuantityOpen; struct Spawn; class CharCreateLook; class NameplateCanvasRegistry; }
 
@@ -67,6 +69,13 @@ struct UiHost {
     // questions (PluginConsent, confirmations, trades ...) give way to its windows. An add-on or hand-placed
     // interface gets the rest of the UI: it draws the game and acts in it as the player does.
     bool trusted_ui = true;
+    // The encounter authorizes management reads and writes. Only the bundled pack can drive these actions.
+    std::function<bool()> server_management_available;
+    std::function<bool()> open_server_management;
+    std::function<std::optional<ServerManagementView>(std::uint32_t known_serial, std::uint32_t known_catalog_serial)>
+        server_management;
+    std::function<bool(std::string_view expected_revision, const std::vector<ServerManagementEdit>&)> save_server_management;
+    std::function<void()> close_server_management;
     int game_state = 0;                    // CEverQuest::GameState: 1 character select, 2 creation, 5 in game
     const game::mechanics::Character* character = nullptr; // the player as the original computes it
     ui::UiTextures* textures = nullptr;
@@ -149,6 +158,7 @@ struct UiHost {
     std::string zone_short_name;
     std::string zone_long_name;             // the zone's name for the windows (OP_NewZone)
     std::uint32_t zone_entry = 0;           // advances on every successful entry, including the same zone again
+    mq::MapFilters* map_filters = nullptr;  // /mapfilter state read by the shared C++ map presenter
     float game_hour = -1.0f;                // the game clock (game/sky_clock.h hour: 1.0 .. 24.99), -1 unknown
     // Where the map edits made on this server go and are read first (servers/<profile>/maps, core/server_profile.h);
     // empty: maps/ in the character's folder (the user_dir of StockWindow::ini_loaded).
@@ -273,6 +283,12 @@ struct UiHost {
         std::function<void(bool yes)> done;
     };
     std::optional<Confirm> confirm;
+    // A permanent action's question (a character's delete, a bulk destroy) asked by code other than a shipped pack's
+    // own (a script, a plugin window, an interface Hailstone does not ship), which the client draws itself
+    // (draw_client_confirm): an interface Hailstone does not ship may never draw ConfirmationDialogBox, so the player
+    // would get no question, and script code could press that box's Yes itself (hs.ClickChild). No Lua code sees or
+    // answers this one. A Hailstone addition (the original ran no interfaces or scripts of other authors' code).
+    std::optional<Confirm> client_confirm;
     // CColorPickerWnd::Open(caller, colour): the colour to start from (0xRRGGBB) and the caller's notification 0x25
     // with the accepted colour (0xffRRGGBB). `serial` tells a new request from the shown one; `caller` lets a
     // closing caller take its request back.
@@ -363,6 +379,7 @@ struct UiHost {
     // Hailstone: the copy also brings the UI's window layout (the character's ui-<pack>.txt keys, LuaUi::
     // copy_character_layout) from that character's folder; an empty folder (defaults.ini) the shared layout.
     std::function<void(const std::filesystem::path& character_dir)> copy_ui_layout;
+    std::function<std::pair<ui::lua::LuaUi*, std::string_view>()> layout_profile_pack;
     std::function<std::optional<std::pair<std::uint32_t, std::vector<std::string>>>(
         const LayoutSource& from, const LayoutCopyParts& parts)> copy_layout;
     // The server select screen (eqmain's serverselect, app/lua_ui_login.cpp) while the client shows it: the client's
@@ -410,6 +427,20 @@ struct UiHost {
     std::function<void()> crash_report_close;
 };
 
+// A permanent action's question asked by code other than a shipped pack's own: the client's own window
+// (UiHost::client_confirm), shown whatever the interface draws and answered only by the player.
+void ask_client_confirm(UiHost& host, UiHost::Confirm c);
+// Whether either question is up (a second permanent action waits for the first's answer).
+bool confirm_open(const UiHost& host);
+// The player's answer to UiHost::client_confirm: closes it, then calls its handler.
+void answer_client_confirm(UiHost& host, bool yes);
+// Draws UiHost::client_confirm (ImGui), above every other window: the client, each frame after the interface's
+// windows (ClientApp::run_frame).
+void draw_client_confirm(UiHost& host);
+// Whether ConfirmationDialogBox now asks a question whose Yes destroys something for good (an item's destroy, a
+// guild's disband): code other than the pack's own may not press its Yes (hs.ClickChild, WindowButton, ClickChildAt).
+bool destructive_confirmation_up(const UiHost& host);
+
 // CQuantityWnd::Open (game/quantity_dialog.h) for a window: accepted at once calls `done`, else shows the dialog.
 void open_quantity(UiHost& host, const game::QuantityOpen& in, std::function<void(std::int32_t)> done,
                    std::function<bool()> owner_valid = {});
@@ -445,6 +476,7 @@ public:
     void toggle(std::string_view screen);
     // A right click on an inventory item: a bag opens or closes its container window, anything else is inspected.
     void right_click_item(const net::ItemSlot& slot);
+    void right_click_item(const net::ItemSlot& slot, net::SlotClickKeys keys); // with these modifier keys
     // Hailstone's menu on another player at x, y (app::open_player_menu); false when it did not open.
     bool open_player_menu(std::uint32_t spawn_id, float x, float y);
     // The OPEN_INV_BAGS / CLOSE_INV_BAGS / TOGGLE_INV_BAGS keys: every bag in the general slots opens or closes.
@@ -514,6 +546,7 @@ public:
                      const std::filesystem::path& seed);
     // Writes the character's file when a window moved or was shown or hidden.
     void save_layout();
+    void clear_layout_profile_undo();
     // The character's UI ini load_layout read (empty before one).
     const std::filesystem::path& layout_file() const;
 

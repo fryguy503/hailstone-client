@@ -12,8 +12,9 @@
 #include "platform/durable_file.h"
 
 namespace hailstone {
+namespace {
 
-bool write_file_atomic(const std::filesystem::path& path, std::string_view text) {
+AtomicCreate save_file_atomic(const std::filesystem::path& path, std::string_view text, bool replace) {
     namespace fs = std::filesystem;
     std::error_code ec;
     if (path.has_parent_path()) fs::create_directories(path.parent_path(), ec);
@@ -27,7 +28,16 @@ bool write_file_atomic(const std::filesystem::path& path, std::string_view text)
     if (!platform::write_file_synced(tmp, text)) {
         fs::remove(tmp, ec);
         log::warn("could not save {}: the write failed (disk full, or the folder is not writable)", path_utf8(path));
-        return false;
+        return AtomicCreate::Failed;
+    }
+    if (!replace) {
+        platform::create_file_synced(tmp, path, ec);
+        std::error_code rm_ec;
+        fs::remove(tmp, rm_ec);
+        if (!ec) return AtomicCreate::Created;
+        if (ec == std::errc::file_exists) return AtomicCreate::Exists;
+        log::warn("could not save {}: {}", path_utf8(path), ec.message());
+        return AtomicCreate::Failed;
     }
     platform::replace_file_synced(tmp, path, ec);
 #ifdef _WIN32
@@ -42,9 +52,19 @@ bool write_file_atomic(const std::filesystem::path& path, std::string_view text)
         log::warn("could not save {}: {}", path_utf8(path), ec.message());
         std::error_code rm_ec;
         fs::remove(tmp, rm_ec);
-        return false;
+        return AtomicCreate::Failed;
     }
-    return true;
+    return AtomicCreate::Created;
+}
+
+} // namespace
+
+bool write_file_atomic(const std::filesystem::path& path, std::string_view text) {
+    return save_file_atomic(path, text, true) == AtomicCreate::Created;
+}
+
+AtomicCreate create_file_atomic(const std::filesystem::path& path, std::string_view text) {
+    return save_file_atomic(path, text, false);
 }
 
 std::optional<std::string> read_text_file(const std::filesystem::path& path) {

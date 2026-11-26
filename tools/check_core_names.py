@@ -28,8 +28,9 @@ INI_EXT = {".ini", ".cfg"}
 DATA_EXT = {".json", ".txt", ".csv"}
 # A raw string's opening: an optional encoding prefix, R, '"', a delimiter of up to 16 characters, '('.
 RAW_STRING = re.compile(r'(?<![A-Za-z0-9_])(?:u8|u|U|L)?R"([^()\\\s"]{0,16})\(')
-# "nms" as a word or a word's start (kOpNms, encode_nms)...
-NAME = re.compile(r"(?<![A-Za-z0-9])[Nn][Mm][Ss]|(?<=[a-z0-9])(?:Nms|NMS)")
+# "nms" as a word or a word's start (encode_nms), or as a capitalised word inside a name, after a lower-case letter,
+# a digit or an upper-case one (kOpNms, HSNMS_OP, kHSNMSFlag)...
+NAME = re.compile(r"(?<![A-Za-z0-9])[Nn][Mm][Ss]|(?<=[A-Za-z0-9])(?:Nms|NMS)")
 # ...unless it is one of the old names in its own spelling: nmsc / nmsc_ / nmsc::, NMSC / NMSC_, the SDK's camel-case
 # Nmsc<Word> (NmscHook), or nms-client. Any other C after it is a word of its own: NMSChat, kNmsCombatOp, nmsCursor.
 OLD_NAME = re.compile(r"nmsc(?![a-z0-9])|NMSC(?![A-Za-z0-9])|Nmsc(?![a-z])|[Nn][Mm][Ss]-client")
@@ -38,6 +39,14 @@ OLD_NAME = re.compile(r"nmsc(?![a-z0-9])|NMSC(?![A-Za-z0-9])|Nmsc(?![a-z])|[Nn][
 ALLOWED = {
     "src/app/update_install.cpp": re.compile(r'\{"plugins/nms/[A-Za-z0-9_./-]+", [0-9]+, "[0-9a-f]{64}"\},'),
 }
+
+
+def digit_separator(text: str, i: int) -> bool:
+    """Whether the ' at i separates digits of a number (1'000, 0xFF'FF), not a character literal (u8'a', L'x')."""
+    j = i
+    while j > 0 and (text[j - 1].isalnum() or text[j - 1] in "_.'"):
+        j -= 1
+    return j < i and text[j].isdigit()
 
 
 def strip_c(text: str) -> str:
@@ -52,6 +61,9 @@ def strip_c(text: str) -> str:
             j = n if j < 0 else j + len(close)
             out.append(text[i:j])
             i = j
+        elif c == "'" and digit_separator(text, i):
+            out.append(c)
+            i += 1
         elif c in "\"'":
             j = i + 1
             while j < n and text[j] != c and text[j] != "\n":

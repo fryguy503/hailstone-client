@@ -10,6 +10,7 @@ import unittest
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+KEY = (ROOT / "update-key.pub").read_text().split()[0]  # what a release binary holds (make_update.py checks it)
 
 
 def load(name):
@@ -91,11 +92,29 @@ class PackageContentTests(unittest.TestCase):
                 with zipfile.ZipFile(out / "demo-1.0.2.zip") as z:
                     self.assertEqual(z.read("same.lua"), b"print('hi')\n")
 
+    def test_make_addon_refuses_a_platform_given_twice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = Path(tmp) / "a", Path(tmp) / "b"
+            for folder, library in ((a, "demo.so"), (b, "demo.dll")):
+                folder.mkdir()
+                (folder / library).write_text(library)
+            out = Path(tmp) / "out"
+            result = run("make_addon.py", "--name", "demo", "--kind", "plugin", "--version", "1.0.0", "--caps", "read",
+                         "--platform", f"linux-x64={a}", "--platform", f"linux-x64={b}", "--out", out)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("given twice", result.stderr)
+            self.assertFalse((out / "hailstone-addon.txt").exists())
+            result = run("make_addon.py", "--name", "demo", "--kind", "plugin", "--version", "1.0.0", "--caps", "read",
+                         "--platform", f"linux-x64={a}", "--platform", f"windows-x64={b}", "--out", out)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            lines = [l for l in (out / "hailstone-addon.txt").read_text().splitlines() if l.startswith("package ")]
+            self.assertEqual([l.split()[1] for l in lines], ["linux-x64", "windows-x64"])
+
     def test_make_update_leaves_dotfiles_out_and_refuses_out_inside_dist(self):
         with tempfile.TemporaryDirectory() as tmp:
             dist = Path(tmp) / "dist"
             dist.mkdir()
-            (dist / "hailstone").write_text("binary")
+            (dist / "hailstone").write_text("binary " + KEY)
             (dist / ".DS_Store").write_text("junk")
             (dist / ".git").mkdir()
             (dist / ".git" / "config").write_text("junk")

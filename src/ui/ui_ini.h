@@ -73,6 +73,8 @@ public:
     void erase(std::string_view section, std::string_view key);
     bool dirty() const { return dirty_; }
     bool save();
+    // Save a replacement character UI.ini before changing the live copy.
+    bool replace_file(IniFile file);
     // StoreIniInfo's writes: the changes go to the file at most every 2 s (of time, not of frames: at hundreds of
     // frames a second a frame count rewrote it several times a second while a window was dragged).
     static constexpr std::chrono::milliseconds kSaveInterval{2000};

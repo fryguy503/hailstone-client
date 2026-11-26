@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <string>
 #include <system_error>
+#include <utility>
 
 #include "core/wrap_math.h"
 
@@ -208,6 +209,13 @@ bool UiIni::save() {
     std::error_code ec;
     fs::create_directories(path_.parent_path(), ec);
     if (!file_.save(path_)) return false;
+    dirty_ = false;
+    return true;
+}
+
+bool UiIni::replace_file(IniFile file) {
+    if (path_.empty() || !file.save(path_)) return false;
+    file_ = std::move(file);
     dirty_ = false;
     return true;
 }

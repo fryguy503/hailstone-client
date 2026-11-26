@@ -14,26 +14,38 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "mq/tlo.h"
 #include "plugin/hooks.h"
 
 namespace hailstone::mq {
 
+class MapFilters;
+
 struct CommandEnv {
     plugin::Hooks* hooks = nullptr;
     const Registry* registry = nullptr;
+    MapFilters* map_filters = nullptr; // shared with the map presenter; a private default when a test leaves it null
     std::function<const Context&()> context;
     std::function<void(const std::string& text)> echo;    // a chat line (MQ's WriteChatColor)
     std::function<void(const std::string& line)> run;     // a command line through the client (GameConnection)
     std::function<void(std::uint32_t spawn_id)> set_target;
+    std::function<void(std::optional<std::uint8_t> door)> set_door_target; // /doortarget; null: none
     std::function<void(double degrees, bool fast)> face;  // MQ degrees: clockwise from north
     // /keypress: an EQ key command by its name ("forward", "jump", "hot1_1" ...), tapped (0), held (1) or let go (2);
     // false when the name is unknown.
     std::function<bool(std::string_view command, int mode)> keypress;
+    // /timed's clock, in milliseconds; null: the steady clock.
+    std::function<std::int64_t()> now_ms;
 };
+
+// /timed's limit on lines waiting at once: one more is refused with a chat line, so a script that queues without end
+// cannot grow the queue without end.
+inline constexpr std::size_t kMaxTimedCommands = 1000;
 
 // While one is held, command lines are not ${}-expanded: a window's button sends text the player did not type as a
 // command (a guild's URL, channel or MOTD, a member's name: what other players and the server wrote). MQ parses the
@@ -66,9 +78,21 @@ private:
     // The last line filter: the line as it finally goes, after the plugins' rewrites.
     void final_check(std::string& line, plugin::Flow& flow);
     void say(const std::string& text) const; // a chat line, unless /squelch is running
+    void map_filter(std::string_view args);
     // /docommand, /noparse and /squelch: the rest of the line run as a command, at most kMaxNestedCommands deep.
     void run_nested(std::string_view args);
+    // /timed: a line waiting for its time, with who sent it (run as them: CallerScope).
+    struct Timed {
+        std::int64_t due_ms = 0;
+        std::string line;
+        std::uint32_t caps = 0;
+        std::string caller;
+    };
+    std::int64_t now_ms() const;
+    void run_timed(); // each pulse: the lines due, in the order they fall due (sent order for the same time)
+    std::vector<Timed> timed_;
     CommandEnv env_;
+    std::unique_ptr<MapFilters> own_map_filters_;
     plugin::Hooks::Owner owner_ = 0;
     plugin::Hooks::Owner final_owner_ = 0; // final_check's, registered again so it stays the last filter
     bool redispatched_ = false;            // the next line through filter() is the one it sent on itself

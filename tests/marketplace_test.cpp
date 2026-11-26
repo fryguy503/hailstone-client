@@ -142,6 +142,19 @@ TEST_CASE("marketplace catalog: an unterminated string at the end reads as empty
     CHECK((*v)[0].is_new);
 }
 
+TEST_CASE("marketplace catalog: a count past 10,000 entries is refused") {
+    std::vector<std::byte> b;
+    put32(b, 10000);
+    put32(b, 7);
+    auto v = decode_marketplace_items(AppPacket(kOpMarketplaceItems, b), 0);
+    REQUIRE(v);
+    CHECK(v->size() == 1);
+    b.clear();
+    put32(b, 10001);
+    b.resize(1u << 20); // then a megabyte of zeros: near-empty entries
+    CHECK_FALSE(decode_marketplace_items(AppPacket(kOpMarketplaceItems, b), 0));
+}
+
 TEST_CASE("marketplace funding tiers round-trip") {
     MarketplaceFund f;
     f.amount = 1000;

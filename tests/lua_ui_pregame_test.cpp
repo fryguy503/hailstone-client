@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -421,6 +422,89 @@ TEST_CASE("hs.ServerSelect: each world's favourite mark, and ServerSelectDo favo
     CHECK(ui.host.server_select_action == static_cast<int>(ui::ServerSelectAction::Favorite));
 }
 
+// The client's own question (app::draw_client_confirm), asked for a permanent action by code other than a shipped
+// pack's own: drawn whatever the interface draws, and its handler runs only on the player's click of Yes (No and
+// the close box answer no).
+TEST_CASE("draw_client_confirm: the client's own question acts only on its Yes") {
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::GetIO().IniFilename = nullptr;
+    ImGui::GetIO().ConfigInputTrickleEventQueue = false;
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
+    {
+        app::UiHost host;
+        host.trusted_ui = false;
+        std::vector<bool> answers;
+        auto ask = [&] {
+            app::UiHost::Confirm c;
+            c.text = "Delete Cid permanently? This cannot be undone.";
+            c.done = [&answers](bool yes) { answers.push_back(yes); };
+            app::ask_client_confirm(host, std::move(c));
+        };
+        auto frame = [&](std::optional<ImVec2> mouse = std::nullopt, bool down = false) {
+            auto& io = ImGui::GetIO();
+            io.DisplaySize = ImVec2(800, 600);
+            io.DeltaTime = 1.0f / 60.0f;
+            if (mouse) io.AddMousePosEvent(mouse->x, mouse->y);
+            io.AddMouseButtonEvent(0, down);
+            ImGui::NewFrame();
+            app::draw_client_confirm(host);
+            ImGui::Render();
+        };
+        // Where the question's button `n` (0 Yes, 1 No) sits: the last line of the auto-sized window, 6 em each.
+        auto button = [&](int n) {
+            const ImGuiWindow* w = ImGui::FindWindowByName("Confirm###hailstone_client_confirm");
+            REQUIRE(w);
+            const ImGuiStyle& st = ImGui::GetStyle();
+            const float em = ImGui::GetFontSize();
+            return ImVec2(w->Pos.x + st.WindowPadding.x + em * 3.0f + static_cast<float>(n) * (em * 6.0f + st.ItemSpacing.x),
+                          w->Pos.y + w->Size.y - st.WindowPadding.y - ImGui::GetFrameHeight() * 0.5f);
+        };
+        auto click = [&](ImVec2 at) {
+            frame(at, false);
+            frame(at, true);
+            frame(at, false);
+        };
+
+        frame(); // nothing asked: no window
+        const ImGuiWindow* none = ImGui::FindWindowByName("Confirm###hailstone_client_confirm");
+        CHECK((none == nullptr || !none->Active));
+        ask();
+        REQUIRE(host.client_confirm);
+        CHECK_FALSE(host.confirm); // not the interface's ConfirmationDialogBox
+        frame();
+        frame();
+        const ImGuiWindow* w = ImGui::FindWindowByName("Confirm###hailstone_client_confirm");
+        REQUIRE(w);
+        CHECK(w->Active);
+        CHECK(answers.empty()); // shown frame after frame, no answer of its own
+        click(button(1));
+        REQUIRE(answers.size() == 1);
+        CHECK_FALSE(answers[0]);
+        CHECK_FALSE(host.client_confirm);
+        ask();
+        frame();
+        frame();
+        click(button(0));
+        REQUIRE(answers.size() == 2);
+        CHECK(answers[1]);
+        CHECK_FALSE(host.client_confirm);
+
+        // Under a pack Hailstone ships too (a script's request): the client's own window, not the pack's box.
+        host.trusted_ui = true;
+        ask();
+        CHECK_FALSE(host.confirm);
+        REQUIRE(host.client_confirm);
+        CHECK(app::confirm_open(host));
+        frame();
+        frame();
+        CHECK(answers.size() == 2);
+        click(button(0));
+        REQUIRE(answers.size() == 3);
+        CHECK(answers[2]);
+    }
+    ImGui::DestroyContext(ctx);
+}
+
 TEST_CASE("hs.CharacterSelect: the characters with their race and classes, and its buttons") {
     Ui ui;
     CHECK(ui("return hs.CharacterSelect()") == "nil");
@@ -442,7 +526,54 @@ TEST_CASE("hs.CharacterSelect: the characters with their race and classes, and i
     CHECK_FALSE(ui.host.char_select_action); // the scene follows the pick; nothing to ask
     CHECK(ui("return hs.CharacterSelectDo('enter')") == "true");
     CHECK(ui.host.char_select_action == static_cast<int>(A::EnterWorld));
+    // Delete from code other than a shipped pack's own (a script, under the shipped pack): the client asks in its own
+    // window (UiHost::client_confirm), naming the character, never in the pack's ConfirmationDialogBox, whose Yes a
+    // script could press; only the player's Yes deletes
+    CHECK(ui("return hs.CharacterSelectDo('delete')") == "true");
+    CHECK(ui.host.char_select_action == static_cast<int>(A::EnterWorld));
+    CHECK_FALSE(ui.host.confirm);
+    REQUIRE(ui.host.client_confirm);
+    CHECK(ui.host.client_confirm->text == "Delete Cid permanently? This cannot be undone.");
+    CHECK(ui("return hs.CharacterSelectDo('delete')") == "false"); // the question is already up
+    CHECK(ui("return hs.WindowButton('ConfirmationDialogBox', 'Yes_Button')") == "false"); // not the box's question
+    app::answer_client_confirm(ui.host, false);
+    CHECK(ui.host.char_select_action == static_cast<int>(A::EnterWorld));
     ui("hs.CharacterSelectDo('delete')");
+    REQUIRE(ui.host.client_confirm);
+    CHECK(ui("return hs.CharacterSelectDo('select', 1)") == "true"); // the pick moved before the answer
+    app::answer_client_confirm(ui.host, true);
+    CHECK(ui.host.char_select_action == static_cast<int>(A::EnterWorld));
+    ui("hs.CharacterSelectDo('select', 2) hs.CharacterSelectDo('delete')");
+    REQUIRE(ui.host.client_confirm);
+    app::answer_client_confirm(ui.host, true);
+    CHECK(ui.host.char_select_action == static_cast<int>(A::Delete));
+    // A shipped pack's own code asks in its own look first (ui/*/charselect.lua): its call deletes at once
+    ui.host.char_select_action.reset();
+    lua_pushboolean(ui.L, 1);
+    lua_setfield(ui.L, LUA_REGISTRYINDEX, ui::lua::kPackStateKey);
+    ui.host.trusted_ui = false; // ... but not an interface Hailstone does not ship
+    // whose question is the client's own window (UiHost::client_confirm), not the interface's ConfirmationDialogBox:
+    // that interface may never draw one, and its code could press that box's Yes itself
+    CHECK(ui("return hs.CharacterSelectDo('delete')") == "true");
+    CHECK_FALSE(ui.host.char_select_action);
+    CHECK_FALSE(ui.host.confirm);
+    REQUIRE(ui.host.client_confirm);
+    CHECK(ui.host.client_confirm->text == "Delete Cid permanently? This cannot be undone.");
+    CHECK(ui("return hs.CharacterSelectDo('delete')") == "false"); // the question is already up
+    app::answer_client_confirm(ui.host, false);
+    CHECK_FALSE(ui.host.client_confirm);
+    CHECK_FALSE(ui.host.char_select_action);
+    ui("hs.CharacterSelectDo('delete')");
+    REQUIRE(ui.host.client_confirm);
+    app::answer_client_confirm(ui.host, true);
+    CHECK_FALSE(ui.host.client_confirm);
+    CHECK(ui.host.char_select_action == static_cast<int>(A::Delete));
+    ui.host.char_select_action.reset();
+    app::answer_client_confirm(ui.host, true); // nothing is up: nothing happens
+    CHECK_FALSE(ui.host.char_select_action);
+    ui.host.trusted_ui = true;
+    CHECK(ui("return hs.CharacterSelectDo('delete')") == "true");
+    CHECK_FALSE(ui.host.confirm);
     CHECK(ui.host.char_select_action == static_cast<int>(A::Delete));
     ui("hs.CharacterSelectDo('create')");
     CHECK(ui.host.char_select_action == static_cast<int>(A::Create));
@@ -647,6 +778,11 @@ TEST_CASE("hs.LoginScreen about and hs.LoginDo openProject: the corner's build, 
     CHECK(ui("return hs.LoginScreen().about.text") == "Up to date");
     v.update.check = "unknown";
     CHECK(ui("return hs.LoginScreen().about.text") == "Could not check for updates");
+    v.update.check = "behind";
+    v.update.version = "0.3.0";
+    v.update.seen = "0.4.0";
+    CHECK(ui("local a = hs.LoginScreen().about return a.status .. '|' .. a.text") ==
+          "behind|Not up to date: the update feed went back to 0.3.0 (0.4.0 was out)");
     v.update.check = "newer";
     v.update.version = "0.5.0";
     CHECK(ui("return hs.LoginScreen().about.text") == "Version 0.5.0 is out");

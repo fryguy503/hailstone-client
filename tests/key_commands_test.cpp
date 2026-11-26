@@ -5,7 +5,10 @@
 #include <algorithm>
 #include <numbers>
 #include <utility>
+#include <vector>
 
+#include "app/player_movement.h"
+#include "game/keymap.h"
 #include "game/mechanics/controls.h"
 
 using namespace hailstone::game::mechanics;
@@ -392,4 +395,19 @@ TEST_CASE("Hailstone: a partly visible NPC needs a clear point inside the camera
     spawn.display_position.x = 5.0f; // its visible center is blocked and its clear eye is above the screen
     CHECK_FALSE(npc_in_target_view(spawn, &view_projection, over_wall));
     CHECK(npc_in_target_view(spawn, nullptr, over_wall));
+}
+
+TEST_CASE("While the game waits on the server, a movement key's release still reaches the controls, a press does not") {
+    hailstone::app::PlayerMovement m;
+    m.reset({0, 0, 0}, 0);
+    REQUIRE(m.command(kCmdForward, true, true));
+    REQUIRE(m.command(kCmdRight, true, true));
+    REQUIRE(m.moving_keys());
+    // During the wait: forward and the turn key let go, strafe and jump pressed, and a non-movement command's release.
+    const std::vector<hailstone::game::KeyMap::Event> frame = {
+        {kCmdForward, false}, {kCmdStrafeLeft, true}, {kCmdJump, true}, {kCmdRight, false}, {40, false}};
+    m.apply_releases(frame);
+    CHECK_FALSE(m.moving_keys());
+    CHECK_FALSE(m.controls_state().keys.turn_right);
+    CHECK_FALSE(m.controls_state().keys.strafe_left);
 }

@@ -14,6 +14,80 @@ bool finite_position(float x, float y, float z) {
 }
 }
 
+bool WorldPlacementHost::start(std::uint64_t owner, WorldPlacementScene scene) {
+    if (!owner || !scene.epoch || !scene.zone_id || aim_ || held_off_.contains(owner)) return false;
+    results_.erase(owner);
+    aim_ = Aim{owner, {scene, std::nullopt}};
+    return true;
+}
+
+bool WorldPlacementHost::get(std::uint64_t owner, std::optional<WorldPlacementScene> scene,
+                             HailstoneWorldPlacement* out) {
+    if (!out || out->size < sizeof(*out)) return false;
+    if (aim_ && aim_->result.scene != scene) cancel();
+    const auto result = results_.find(owner);
+    if (!scene && result == results_.end()) return false;
+
+    HailstoneWorldPlacement value{};
+    value.size = sizeof(value);
+    if (scene) {
+        value.zone_id = scene->zone_id;
+        value.instance_id = scene->instance_id;
+    }
+    if (result != results_.end()) {
+        value.status = HAILSTONE_WORLD_PLACEMENT_CANCELLED;
+        if (result->second.scene == scene && result->second.ground) {
+            value.status = HAILSTONE_WORLD_PLACEMENT_CONFIRMED;
+            std::copy(result->second.ground->begin(), result->second.ground->end(), value.position);
+        }
+        results_.erase(result);
+    } else if (aim_ && aim_->owner == owner) {
+        value.status = HAILSTONE_WORLD_PLACEMENT_AIMING_INVALID;
+        if (aim_->result.ground) {
+            value.status = HAILSTONE_WORLD_PLACEMENT_AIMING_VALID;
+            std::copy(aim_->result.ground->begin(), aim_->result.ground->end(), value.position);
+        }
+    }
+    *out = value;
+    return true;
+}
+
+void WorldPlacementHost::update(std::optional<WorldPlacementPoint> ground, bool pressed, bool released) {
+    if (!aim_) return;
+    if (ground && !finite_position((*ground)[0], (*ground)[1], (*ground)[2])) ground.reset();
+    aim_->result.ground = ground;
+    if (!ground) aim_->pressed = false;
+    else if (pressed) aim_->pressed = true;
+    if (released && std::exchange(aim_->pressed, false) && ground) {
+        results_.insert_or_assign(aim_->owner, aim_->result);
+        aim_.reset();
+    }
+}
+
+void WorldPlacementHost::cancel() {
+    if (!aim_) return;
+    aim_->result.ground.reset();
+    results_.insert_or_assign(aim_->owner, aim_->result);
+    aim_.reset();
+}
+
+void WorldPlacementHost::cancel(std::uint64_t owner) {
+    if (aim_ && aim_->owner == owner) cancel();
+    if (auto result = results_.find(owner); result != results_.end()) result->second.ground.reset();
+}
+
+void WorldPlacementHost::player_cancel() {
+    if (!aim_) return;
+    held_off_.insert(aim_->owner);
+    cancel();
+}
+
+void WorldPlacementHost::retire(std::uint64_t owner) {
+    if (aim_ && aim_->owner == owner) aim_.reset();
+    results_.erase(owner);
+    held_off_.erase(owner);
+}
+
 void WorldGeometryHost::begin(HailstoneWorldFrame frame, WorldQueries queries) {
     cancel();
     if (!frame.frame || !frame.epoch || !(frame.capabilities & HAILSTONE_WORLD_GEOMETRY)) return;

@@ -19,6 +19,7 @@
 #include "core/version.h"
 #include "core/zip_write.h"
 #include "platform/durable_file.h"
+#include "platform/shared_file.h"
 #include "scratch_dir.h"
 
 using namespace hailstone;
@@ -174,6 +175,13 @@ TEST_CASE("update manifest: signature, records and refusals") {
     CHECK(!parse_update_manifest(body, k.pub, &error));
     CHECK(error.find("not signed") != std::string::npos);
     CHECK(!parse_update_manifest(sign(k, body) + "version 9.9.9\n", k.pub));
+    // What follows the signature line (hailstone_sign refuses to sign a manifest with text there, not to drop it).
+    CHECK(update_manifest_after_signature(body).empty());
+    CHECK(update_manifest_after_signature(sign(k, body)).empty());
+    CHECK(update_manifest_after_signature(sign(k, body) + "\n\n") == "\n\n");
+    CHECK(update_manifest_after_signature(sign(k, body) + "package x\n") == "package x\n");
+    CHECK(update_manifest_after_signature("a\nsignature 00").empty()); // the last line, no newline
+    CHECK(update_manifest_after_signature("a\nsignature 00\r\nb") == "b");
 
     auto refused = [&](const std::string& b) { return !parse_update_manifest(sign(k, b), k.pub); };
     CHECK(refused("hailstone-update 2\nversion 1.0.0\n"));
@@ -195,12 +203,27 @@ TEST_CASE("update install: the player's files are never an update's") {
                           "scripts/a.lua", "textures/default/a.dds", "web/a/b", "notes.txt", "Servers/x",
                           "tools/texstudio/texstudio", "Tools/x/data.txt", "ui-data/modern/lib/style.lua",
                           "UI-DATA/addon.bundle.skin/lib/compiled/window.lua", "ui-data/", "ui-data", "UI-DATA",
-                          "ui-addons/skin/ui/dark/ui.ini", "UI-ADDONS/skin/ui/dark/window.lua", "ui-addons"})
+                          "ui-addons/skin/ui/dark/ui.ini", "UI-ADDONS/skin/ui/dark/window.lua", "ui-addons",
+                          "upscalers/example/example.so", "Upscalers/x/notice.txt"})
         CHECK_MESSAGE(is_player_path(p), p);
     for (const char* p : {"hailstone", "hailstone.exe", "shaders/a.spv", "ui/modern/login.lua", "browser/libcef.so",
                           "plugins/nms/nms.so", "icons/hailstone.png", "servers.txt", "ui-data-copy/file.lua",
-                          "ui-database/file.lua", "ui-data.lua", "ui-addons.lua"})
+                          "ui-database/file.lua", "ui-data.lua", "ui-addons.lua", "upscalers.txt"})
         CHECK_MESSAGE(!is_player_path(p), p);
+}
+
+TEST_CASE("update install: every add-on kind's folder but a plugin's is the player's") {
+    // A plugin folder an add-on installed into is left out by addon_owns_folder; every other kind of add-on has a
+    // folder of its own that no update writes or removes, whatever its name (upscalers/example/ included).
+    test::ScratchDir dir("updater_addon_kinds");
+    for (AddonKind kind : {AddonKind::Script, AddonKind::Tool, AddonKind::Upscaler, AddonKind::Ui}) {
+        const std::string file =
+            addon_folder(dir.path(), kind, "example").lexically_relative(dir.path()).generic_string() + "/a.txt";
+        CHECK_MESSAGE(is_player_path(file), file);
+    }
+    CHECK_FALSE(is_player_path(
+        addon_folder(dir.path(), AddonKind::Plugin, "example").lexically_relative(dir.path()).generic_string() +
+        "/a.txt"));
 }
 
 TEST_CASE("updater: check, download, install, start and the next update") {
@@ -389,6 +412,85 @@ TEST_CASE("updater: up to date, older, skipped, refused and missing") {
     CHECK(u.status().state == UpdateState::Failed);
 }
 
+// A feed that goes back (an older release's signed manifest served again, docs/updater.md "A feed that went back"):
+// the newest release seen is kept in the data folder, and an older manifest is reported rather than taken for "up to
+// date". A fresh folder, another feed address and a release the player went back to by hand are not affected.
+TEST_CASE("updater: a feed that went back is not called up to date") {
+    test::ScratchDir dir("updater_behind");
+    const fs::path inst = dir.path() / "inst";
+    const fs::path data = dir.path() / "data";
+    Keys k;
+    Feed feed;
+    const std::string core = zip_of({{"hailstone", "x"}});
+    feed.files[kBase + std::string("core.zip")] = core;
+    auto serve = [&](const std::string& version) {
+        feed.files[kFeed] = sign(k, "hailstone-update 1\nversion " + version + "\n" + package_line("core", "core.zip", core));
+    };
+    auto status_for = [&](const std::string& running, const fs::path& data_dir) {
+        auto env = env_for(inst, feed, k, running);
+        env.data_dir = data_dir;
+        env.auto_download = false;
+        Updater u(env);
+        u.check();
+        u.wait();
+        return u.status();
+    };
+
+    // A fresh folder has seen nothing: the first manifest is taken and kept.
+    CHECK(newest_seen_release(data, kFeed).empty());
+    serve("0.3.0");
+    CHECK(status_for("0.3.0", data).state == UpdateState::UpToDate);
+    CHECK(newest_seen_release(data, kFeed) == "0.3.0");
+    CHECK(get(data / "update/feed-seen.txt") == std::string("0.3.0 ") + kFeed + "\n");
+
+    // The feed goes back to 0.2.0: not up to date, nothing offered or downloaded, and the newest seen stays.
+    serve("0.2.0");
+    const UpdateStatus behind = status_for("0.3.0", data);
+    CHECK(behind.state == UpdateState::FeedBehind);
+    CHECK(behind.version == "0.2.0");
+    CHECK(behind.seen == "0.3.0");
+    CHECK(newest_seen_release(data, kFeed) == "0.3.0");
+    // ... also for a build older than both (one the player went back to by hand): 0.2.0 is not offered from it
+    CHECK(status_for("0.1.0", data).state == UpdateState::FeedBehind);
+    CHECK(!fs::exists(inst / "update/download/core.zip"));
+
+    // The feed comes forward again: the player who went back to 0.1.0 by hand is offered the newest, as before.
+    serve("0.3.0");
+    const UpdateStatus again = status_for("0.1.0", data);
+    CHECK(again.state == UpdateState::Available);
+    CHECK(again.version == "0.3.0");
+    serve("0.4.0");
+    CHECK(status_for("0.4.0", data).state == UpdateState::UpToDate);
+    CHECK(newest_seen_release(data, kFeed) == "0.4.0");
+
+    // Another folder (a portable copy made before, or a fresh install) has its own: 0.2.0 is only up to date there.
+    serve("0.2.0");
+    CHECK(status_for("0.2.0", dir.path() / "fresh").state == UpdateState::UpToDate);
+    // No data folder given (a test drive): nothing is kept or compared.
+    CHECK(status_for("0.2.0", fs::path()).state == UpdateState::UpToDate);
+
+    // Each feed address keeps its own (update.feed pointed at a test feed does not taint the release feed).
+    const std::string test_feed = "https://example.invalid/test/hailstone-update.txt";
+    CHECK(remember_seen_release(data, test_feed, "9.0.0"));
+    CHECK(newest_seen_release(data, test_feed) == "9.0.0");
+    CHECK(newest_seen_release(data, kFeed) == "0.4.0");
+    // An older version never replaces a newer one; a newer one does.
+    CHECK(remember_seen_release(data, kFeed, "0.3.5"));
+    CHECK(newest_seen_release(data, kFeed) == "0.4.0");
+    CHECK(remember_seen_release(data, kFeed, "0.5.0-alpha"));
+    CHECK(newest_seen_release(data, kFeed) == "0.5.0-alpha");
+    CHECK_FALSE(remember_seen_release(data, kFeed, "not a version"));
+    CHECK_FALSE(remember_seen_release(data, "https://example.invalid/a b", "1.0.0"));
+    CHECK_FALSE(remember_seen_release(fs::path(), kFeed, "1.0.0"));
+
+    // A damaged file counts as nothing seen for the lines it spoils; deleting it starts afresh.
+    put(data / "update/feed-seen.txt", std::string("garbage\nx.y.z ") + kFeed + "\n1.0.0 " + test_feed + "\n");
+    CHECK(newest_seen_release(data, kFeed).empty());
+    CHECK(newest_seen_release(data, test_feed) == "1.0.0");
+    fs::remove(data / "update/feed-seen.txt");
+    CHECK(newest_seen_release(data, test_feed).empty());
+}
+
 TEST_CASE("update install: refusals leave the folder as it was") {
     test::ScratchDir dir("updater_refuse");
     const fs::path inst = dir.path();
@@ -492,6 +594,152 @@ UpdatePackage stage_one(const fs::path& inst, const std::string& component, cons
     return p;
 }
 } // namespace
+
+TEST_CASE("update install: nothing is installed or rolled back while another process holds the install lock") {
+    test::ScratchDir dir("updater_install_lock");
+    const fs::path inst = dir.path();
+    put(inst / "hailstone", "old");
+    stage_one(inst, "core", zip_of({{"hailstone", "new"}}));
+    {
+        auto other = platform::ScopedFileLock::try_acquire(inst / "update/install.lock",
+                                                           platform::FileLockMode::Exclusive,
+                                                           platform::LockFolder::Ordinary);
+        REQUIRE(other);
+        CHECK_FALSE(install_staged_update(inst, "0.1.0").ok);
+        CHECK(get(inst / "hailstone") == "old");
+        CHECK(fs::exists(inst / "update/download/p.zip")); // the other process's staging is untouched
+        // A start does not roll back what the other process is in the middle of installing.
+        REQUIRE(write_file_atomic(inst / "update/state.txt", "installing 0.2.0 0.1.0\n"));
+        CHECK(update_at_start(inst, "0.2.0").message.empty());
+        CHECK(fs::exists(inst / "update/state.txt"));
+    }
+    fs::remove(inst / "update/state.txt");
+    CHECK(install_staged_update(inst, "0.1.0").ok); // the lock went with its owner
+    CHECK(get(inst / "hailstone") == "new");
+}
+
+namespace {
+std::optional<platform::ScopedFileLock> other_process_lock(const fs::path& inst, const char* name,
+                                                           platform::FileLockMode mode) {
+    std::error_code ec;
+    fs::create_directories(inst / "update", ec);
+    return platform::ScopedFileLock::try_acquire(inst / "update" / name, mode, platform::LockFolder::Ordinary);
+}
+} // namespace
+
+TEST_CASE("update start: windows of a new version opened together count as one start, and none rolls it back") {
+    test::ScratchDir dir("updater_running_count");
+    const fs::path inst = dir.path();
+    put(inst / "hailstone", "old");
+    stage_one(inst, "core", zip_of({{"hailstone", "new"}}));
+    REQUIRE(install_staged_update(inst, "0.1.0").ok);
+    {
+        // Three windows started one after another, each still running (its claim held) when the next starts.
+        StartNote first = update_at_start(inst, "0.2.0");
+        REQUIRE(first.running_claim);
+        StartNote second = update_at_start(inst, "0.2.0");
+        REQUIRE(second.running_claim);
+        StartNote third = update_at_start(inst, "0.2.0");
+        REQUIRE(third.running_claim);
+        CHECK_FALSE(third.restart);
+        CHECK(get(inst / "update/state.txt") == "pending 0.2.0 0.1.0 1\n");
+        CHECK(get(inst / "hailstone") == "new");
+        CHECK(failed_update_version(inst).empty());
+        // One reaching the login screen ends the pending state for all.
+        CHECK(update_started_fine(inst, "0.2.0"));
+        CHECK_FALSE(fs::exists(inst / "update/state.txt"));
+    }
+}
+
+TEST_CASE("update start: no start is counted or rolled back while another Hailstone runs from the folder") {
+    test::ScratchDir dir("updater_running_rollback");
+    const fs::path inst = dir.path();
+    put(inst / "hailstone", "old");
+    stage_one(inst, "core", zip_of({{"hailstone", "new"}}));
+    REQUIRE(install_staged_update(inst, "0.1.0").ok);
+    REQUIRE(write_file_atomic(inst / "update/state.txt", "pending 0.2.0 0.1.0 2\n"));
+    {
+        // Another Hailstone (a launcher's ticket launch, say) runs from these files.
+        auto other = other_process_lock(inst, "running.lock", platform::FileLockMode::Shared);
+        REQUIRE(other);
+        const StartNote note = update_at_start(inst, "0.2.0");
+        CHECK_FALSE(note.restart);
+        CHECK(note.running_claim);
+        CHECK(get(inst / "hailstone") == "new");
+        CHECK(get(inst / "update/state.txt") == "pending 0.2.0 0.1.0 2\n");
+        // Nor is a cut-off install put back under it.
+        REQUIRE(write_file_atomic(inst / "update/state.txt", "installing 0.2.0 0.1.0\n"));
+        CHECK_FALSE(update_at_start(inst, "0.2.0").restart);
+        CHECK(get(inst / "hailstone") == "new");
+        REQUIRE(write_file_atomic(inst / "update/state.txt", "pending 0.2.0 0.1.0 2\n"));
+    }
+    // Alone, the third start that never reached the login screen rolls it back.
+    StartNote note = update_at_start(inst, "0.2.0");
+    CHECK(note.restart);
+    CHECK(get(inst / "hailstone") == "old");
+    CHECK(failed_update_version(inst) == "0.2.0");
+}
+
+TEST_CASE("update install: an update waits while another Hailstone runs from the folder") {
+    test::ScratchDir dir("updater_running_install");
+    const fs::path inst = dir.path();
+    put(inst / "hailstone", "old");
+    stage_one(inst, "core", zip_of({{"hailstone", "new"}}));
+    {
+        // Started on its own (not a box set window this process waits for).
+        auto other = claim_running(inst);
+        REQUIRE(other);
+        const auto r = install_staged_update(inst, "0.1.0");
+        CHECK_FALSE(r.ok);
+        CHECK(r.error.find("running from this folder") != std::string::npos);
+        CHECK(get(inst / "hailstone") == "old");
+        CHECK(staged_update_version(inst) == "0.2.0"); // still staged, for a later quit
+        CHECK(staged_update_ok(inst));
+        CHECK_FALSE(fs::exists(inst / "update/state.txt"));
+    }
+    REQUIRE(install_staged_update(inst, "0.1.0").ok);
+    CHECK(get(inst / "hailstone") == "new");
+}
+
+TEST_CASE("update start: the end of a pending update and the old files' removal wait for the install lock") {
+    test::ScratchDir dir("updater_started_fine_lock");
+    const fs::path inst = dir.path();
+    REQUIRE(write_file_atomic(inst / "update/state.txt", "pending 0.2.0 0.1.0 1\n"));
+    put(inst / "update/previous/hailstone", "old");
+    put(inst / "update/journal.txt", "moved hailstone\n");
+    const std::string old_file = "-- as an old release shipped it", old_hash = to_hex(sha256(old_file));
+    const std::vector<RetiredFile> retired = {{"ui/modern/eqmain.lua", old_file.size(), old_hash}};
+    put(inst / "ui/modern/eqmain.lua", old_file);
+    {
+        // Another process rolling back reads journal.txt and previous/: neither goes from under it.
+        auto other = other_process_lock(inst, "install.lock", platform::FileLockMode::Exclusive);
+        REQUIRE(other);
+        CHECK_FALSE(update_started_fine(inst, "0.2.0"));
+        CHECK(fs::exists(inst / "update/state.txt"));
+        CHECK(get(inst / "update/previous/hailstone") == "old");
+        CHECK(fs::exists(inst / "update/journal.txt"));
+        REQUIRE(fs::remove(inst / "update/state.txt"));
+        CHECK(retire_old_release_files(inst, retired).empty());
+        CHECK(fs::exists(inst / "ui/modern/eqmain.lua"));
+        REQUIRE(write_file_atomic(inst / "update/state.txt", "pending 0.2.0 0.1.0 1\n"));
+    }
+    CHECK(update_started_fine(inst, "0.2.0"));
+    CHECK_FALSE(fs::exists(inst / "update/state.txt"));
+    CHECK_FALSE(fs::exists(inst / "update/previous"));
+    CHECK(retire_old_release_files(inst, retired) == std::vector<std::string>{"ui/modern/eqmain.lua"});
+}
+
+TEST_CASE("update install: an upscaler add-on's folder is never written or removed by an update") {
+    test::ScratchDir dir("updater_upscaler_folder");
+    const fs::path inst = dir.path();
+    put(inst / "hailstone", "old");
+    put(inst / "upscalers/example/example.so", "the add-on's");
+    // A core package that ships upscalers/example/ is refused whole, before anything moves.
+    stage_one(inst, "core", zip_of({{"hailstone", "new"}, {"upscalers/example/example.so", "the release's"}}));
+    CHECK_FALSE(install_staged_update(inst, "0.1.0").ok);
+    CHECK(get(inst / "hailstone") == "old");
+    CHECK(get(inst / "upscalers/example/example.so") == "the add-on's");
+}
 
 TEST_CASE("update install: each move is in the journal, written before it") {
     test::ScratchDir dir("updater_journal");
@@ -678,6 +926,7 @@ TEST_CASE("update install: a cut-off install and a version that does not start a
         CHECK(update_at_start(inst, "0.2.0").message.empty()); // start 2
         auto note = update_at_start(inst, "0.2.0");          // start 3: the first two never reached the login
         CHECK(note.restart);
+        note.running_claim.reset(); // main quits after starting the old version
         CHECK(get(inst / "hailstone") == "old");
         CHECK(!fs::exists(inst / "icons/n.png"));
         CHECK(failed_update_version(inst) == "0.2.0");

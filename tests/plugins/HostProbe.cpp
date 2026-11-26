@@ -2,6 +2,7 @@
 // where a plugin should not, to check that the client holds.
 //   /probethread   calls host functions from a std::thread, then reports what they answered (ability_state too,
 //   when the host table has it)
+//   /probechatgroup   writes a valid group and tries invalid and off-thread local chat submissions
 //   /probethrow    lets an exception out (not a std::exception); so do ${Probe.Throw} and OnUpdateImGui
 //   /probestate n  web_state(tab 1) with a struct whose size says n bytes, as a plugin built with a shorter one
 //   /probemessage n  web_message(tab 1) into a buffer of n bytes (0: no buffer)
@@ -23,6 +24,8 @@
 //   /probeabilities [n]  get_ability_data_bulk the same way, through HS_Bulk_ListHeader and HS_Bulk_AbilityRecord
 //   /probespells n id...  get_spells_data_bulk for those ids into n bytes, through HS_Bulk_SpellFixedRecord and the
 //   strings and effect lines after each
+//   /probecommand <name>  command_exists with the rest of the line as it is, when the host table has it
+//   /probescriptsdir  get_scripts_config_dir, when the host table has it
 //   /probespellsbyname [n] name  get_spells_by_name_data_bulk for that name the same way, printed as /probespells
 //   does
 //   /<name>buf ... (the plugin's own name, lower case, so two copies loaded at once each have theirs): the bulk
@@ -73,8 +76,22 @@ static_assert(offsetof(PluginHostApi, spell_id_limit) ==
               offsetof(PluginHostApi, release_bulk_buffer) + sizeof(PluginHostApi::caps));
 static_assert(offsetof(PluginHostApi, spell_data_ready) ==
               offsetof(PluginHostApi, spell_id_limit) + sizeof(PluginHostApi::caps));
-static_assert(offsetof(PluginHostApi, get_large_dialog) ==
+static_assert(offsetof(PluginHostApi, command_exists) ==
               offsetof(PluginHostApi, spell_data_ready) + sizeof(PluginHostApi::caps));
+static_assert(offsetof(PluginHostApi, lend_thread) ==
+              offsetof(PluginHostApi, command_exists) + sizeof(PluginHostApi::caps));
+static_assert(offsetof(PluginHostApi, get_scripts_config_dir) ==
+              offsetof(PluginHostApi, lend_thread) + sizeof(PluginHostApi::caps));
+static_assert(offsetof(PluginHostApi, world_placement_start) ==
+              offsetof(PluginHostApi, get_scripts_config_dir) + sizeof(PluginHostApi::caps));
+static_assert(offsetof(PluginHostApi, world_placement_get) ==
+              offsetof(PluginHostApi, world_placement_start) + sizeof(PluginHostApi::caps));
+static_assert(offsetof(PluginHostApi, world_placement_cancel) ==
+              offsetof(PluginHostApi, world_placement_get) + sizeof(PluginHostApi::caps));
+static_assert(offsetof(PluginHostApi, write_chat_group) ==
+              offsetof(PluginHostApi, world_placement_cancel) + sizeof(PluginHostApi::caps));
+static_assert(offsetof(PluginHostApi, get_large_dialog) ==
+              offsetof(PluginHostApi, write_chat_group) + sizeof(PluginHostApi::caps));
 static_assert(offsetof(PluginHostApi, answer_large_dialog) == offsetof(PluginHostApi, get_large_dialog) + sizeof(PluginHostApi::caps));
 static_assert(sizeof(HailstoneLargeDialog) == 40);
 
@@ -138,6 +155,22 @@ void probe_thread(void*, const char*) {
 }
 
 void probe_throw(void*, const char*) { throw 42; }
+
+void probe_chat_group(void*, const char*) {
+    if (!HAILSTONE_HOST_HAS(host, write_chat_group)) return;
+    const char* rows[] = {"First probe row.", "Second probe row."};
+    const int accepted = host->write_chat_group(host->host, "Probe Status", rows, 2);
+    const int too_many = host->write_chat_group(host->host, "Probe Status", rows, UINT32_MAX);
+    const int no_title = host->write_chat_group(host->host, nullptr, rows, 2);
+    const int empty = host->write_chat_group(host->host, "Probe Status", rows, 0);
+    const std::string long_row(2048, 'x');
+    const char* malformed[] = {"A valid prefix.", long_row.c_str()};
+    const int too_long = host->write_chat_group(host->host, "Probe Status", malformed, 2);
+    int off_thread = -1;
+    std::thread([&] { off_thread = host->write_chat_group(host->host, "Probe Status", rows, 2); }).join();
+    WriteChatf("[Probe] chat group: accepted %d, count %d, title %d, empty %d, row %d, thread %d",
+               accepted, too_many, no_title, empty, too_long, off_thread);
+}
 
 void probe_state(void*, const char* args) {
     HailstoneWebState st;
@@ -676,6 +709,38 @@ void probe_map_prefix(void*, const char* args) {
         find_mode==HAILSTONE_NPC_FIND_SERVER_ONLY,actor_guides==HAILSTONE_MAP_ACTOR_GUIDES);
 }
 void probe_map_cycle(void*,const char*) { host->set_active(host->host,0);host->set_active(host->host,1); }
+void probe_world_placement(void*, const char* args) {
+    if (!HAILSTONE_HOST_HAS(host, world_capabilities) || !HAILSTONE_HOST_HAS(host, world_placement_start) ||
+        !HAILSTONE_HOST_HAS(host, world_placement_get) || !HAILSTONE_HOST_HAS(host, world_placement_cancel)) return;
+    const std::string_view command = args ? args : "";
+    if (command == "start") {
+        WriteChatf("[Probe] placement start: %d", host->world_placement_start(host->host));
+        return;
+    }
+    if (command == "cancel") {
+        host->world_placement_cancel(host->host);
+        return;
+    }
+    HailstoneWorldPlacement value{};
+    value.size = sizeof(value);
+    if (command == "lent" && HAILSTONE_HOST_HAS(host, lend_thread)) {
+        value.status = 99;
+        int started = -1, read = -1;
+        const int lent = host->lend_thread(host->host, 1);
+        std::thread([&] {
+            started = host->world_placement_start(host->host);
+            read = host->world_placement_get(host->host, &value);
+            host->world_placement_cancel(host->host);
+        }).join();
+        const int ended = host->lend_thread(host->host, 0);
+        WriteChatf("[Probe] placement lent: %d %d %d %u %d", lent, started, read, value.status, ended);
+        return;
+    }
+    const auto capabilities = host->world_capabilities(host->host);
+    const int result = host->world_placement_get(host->host, &value);
+    WriteChatf("[Probe] placement: %u %d %u %u %u", capabilities, result, value.status,
+               value.zone_id, value.instance_id);
+}
 void probe_map(void*, const char* args) {
     HailstoneMapPolicy policy;
     std::memset(&policy, 0x5a, sizeof(policy));
@@ -809,6 +874,90 @@ void probe_nameplate(void*, const char* args) {
     nameplate_strides = std::strcmp(args, "stride") == 0;
     const int registered = host->nameplate_register(host->host, probe_nameplate_frame, &unregister_in_nameplate);
     WriteChatf("[Probe] nameplate register %d", registered);
+}
+
+// /probecommand <name>: command_exists, added later in ABI 3, on the arguments as given (a space and all).
+void probe_command(void*, const char* args) {
+    if (!HAILSTONE_HOST_HAS(host, command_exists)) {
+        WriteChatf("[Probe] command: not in this client");
+        return;
+    }
+    WriteChatf("[Probe] command '%s' %d", args ? args : "", host->command_exists(host->host, args));
+}
+
+// /probescriptsdir: get_scripts_config_dir, added later in ABI 4, into a buffer that fits.
+void probe_scripts_dir(void*, const char*) {
+    if (!HAILSTONE_HOST_HAS(host, get_scripts_config_dir)) {
+        WriteChatf("[Probe] scripts dir: not in this client");
+        return;
+    }
+    char dir[1024];
+    const int n = host->get_scripts_config_dir(host->host, dir, sizeof dir);
+    WriteChatf("[Probe] scripts dir %d %s", n, n > 0 ? dir : "");
+}
+
+// /probelendinner: run by /probelend nested through do_command, a callback inside a host call the client's thread
+// makes while this plugin lends: lend_thread refuses there (a lent thread could not call the host until it returns).
+int g_inner_lend = -1;
+void probe_lend_inner(void*, const char*) { g_inner_lend = host->lend_thread(host->host, 1); }
+
+// /probelend: lend_thread, then a thread of the plugin calls the host while this waits for it, then the lending ends
+// and another thread is refused again. /probelend keep: lends and returns without ending it (the callback's return
+// ends it; /probelendafter checks). /probelend nested: lends, then runs /probelendinner through do_command; the
+// lending goes on after it (a thread's call still works).
+void probe_lend(void*, const char* args) {
+    if (!HAILSTONE_HOST_HAS(host, lend_thread)) {
+        WriteChatf("[Probe] lend: not in this client");
+        return;
+    }
+    if (args && std::strcmp(args, "keep") == 0) {
+        WriteChatf("[Probe] lend keep %d", host->lend_thread(host->host, 1));
+        return;
+    }
+    if (args && std::strcmp(args, "nested") == 0) {
+        const int lent = host->lend_thread(host->host, 1);
+        g_inner_lend = -1;
+        host->do_command(host->host, "/probelendinner");
+        int added = -1;
+        std::thread([&] { added = host->add_command(host->host, "/afternested", nothing, nullptr); }).join();
+        const int ended = host->lend_thread(host->host, 0);
+        WriteChatf("[Probe] lend nested %d, inner %d, thread: add_command %d, end %d", lent, g_inner_lend, added, ended);
+        return;
+    }
+    const int lent = host->lend_thread(host->host, 1);
+    const int again = host->lend_thread(host->host, 1); // already lent: 2
+    int added = -1, nested = -1, parsed_len = -1;
+    char parsed[32] = {};
+    std::thread t([&] {
+        added = host->add_command(host->host, "/fromlent", nothing, nullptr);
+        parsed_len = host->parse(host->host, "lent", parsed, sizeof parsed);
+        nested = host->lend_thread(host->host, 1); // only the client's own thread lends itself: 0
+        host->write_chat(host->host, "[Probe] written from the lent thread", 0);
+    });
+    t.join();
+    const int ended = host->lend_thread(host->host, 0);
+    int after = -1;
+    std::thread([&] { after = host->add_command(host->host, "/afterlend", nothing, nullptr); }).join();
+    WriteChatf("[Probe] lend %d %d, thread: add_command %d, parse %d '%s', lend %d; end %d, after: add_command %d", lent,
+               again, added, parsed_len, parsed, nested, ended, after);
+}
+
+// /probechatthread: write_chat and write_chat_color from a thread of the plugin's own (not lent): queued for the next
+// pulse, where another host function from there is refused.
+void probe_chat_thread(void*, const char*) {
+    int added = -1;
+    std::thread([&] {
+        host->write_chat(host->host, "[Probe] chat from a worker 1", 0);
+        if (HAILSTONE_HOST_HAS(host, write_chat_color)) host->write_chat_color(host->host, "[Probe] chat from a worker 2", 15);
+        added = host->add_command(host->host, "/fromworker", nothing, nullptr);
+    }).join();
+    WriteChatf("[Probe] chat thread: add_command %d", added);
+}
+
+void probe_lend_after(void*, const char*) {
+    int added = -1;
+    std::thread([&] { added = host->add_command(host->host, "/afterkeep", nothing, nullptr); }).join();
+    WriteChatf("[Probe] after keep: add_command %d", added);
 }
 
 // /probeability <kind> <name>: ability_state then use_ability, both added later in ABI 3.
@@ -1112,6 +1261,7 @@ HAILSTONE_API void InitializePlugin(void) {
     AddCommand("/probedialogthread", probe_dialog_thread, nullptr);
     AddCommand("/probethread", probe_thread, nullptr);
     AddCommand("/probethrow", probe_throw, nullptr);
+    AddCommand("/probechatgroup", probe_chat_group, nullptr);
     AddCommand("/probestate", probe_state, nullptr);
     AddCommand("/probemessage", probe_message, nullptr);
     AddCommand("/probetcp", probe_tcp, nullptr);
@@ -1128,6 +1278,7 @@ HAILSTONE_API void InitializePlugin(void) {
     AddCommand("/probecursor", probe_cursor, nullptr);
     AddCommand("/probebinary", probe_binary, nullptr);
     AddCommand("/probebinarythread", probe_binary_thread, nullptr);
+    AddCommand("/probeworldplacement", probe_world_placement, nullptr);
     AddCommand("/probedecode", probe_decode, nullptr);
     AddCommand("/probeservices", probe_services, nullptr);
     AddCommand("/probeselectraid", probe_select, nullptr);
@@ -1141,6 +1292,12 @@ HAILSTONE_API void InitializePlugin(void) {
     AddCommand("/probeability", probe_ability, nullptr);
     AddCommand("/probeabilities", probe_abilities, nullptr);
     AddCommand("/probespells", probe_spells, nullptr);
+    AddCommand("/probecommand", probe_command, nullptr);
+    AddCommand("/probescriptsdir", probe_scripts_dir, nullptr);
+    AddCommand("/probelend", probe_lend, nullptr);
+    AddCommand("/probelendafter", probe_lend_after, nullptr);
+    AddCommand("/probelendinner", probe_lend_inner, nullptr);
+    AddCommand("/probechatthread", probe_chat_thread, nullptr);
     AddCommand("/probespellsbyname", probe_spells_by_name, nullptr);
     for (const char* what : buffer_commands)
         AddCommand(own_command(what).c_str(), probe_buffer, const_cast<char*>(what));
@@ -1156,6 +1313,7 @@ HAILSTONE_API void ShutdownPlugin(void) {
     RemoveCommand("/probedialogthread");
     RemoveCommand("/probethread");
     RemoveCommand("/probethrow");
+    RemoveCommand("/probechatgroup");
     RemoveCommand("/probestate");
     RemoveCommand("/probemessage");
     RemoveCommand("/probetcp");
@@ -1172,6 +1330,7 @@ HAILSTONE_API void ShutdownPlugin(void) {
     RemoveCommand("/probecursor");
     RemoveCommand("/probebinary");
     RemoveCommand("/probebinarythread");
+    RemoveCommand("/probeworldplacement");
     RemoveCommand("/probedecode");
     RemoveCommand("/probeservices");
     RemoveCommand("/probeselectraid");
@@ -1184,6 +1343,8 @@ HAILSTONE_API void ShutdownPlugin(void) {
     RemoveCommand("/probenameplate");
     RemoveCommand("/probeability");
     RemoveCommand("/probeabilities");
+    RemoveCommand("/probecommand");
+    RemoveCommand("/probescriptsdir");
     for (const char* what : buffer_commands) RemoveCommand(own_command(what).c_str());
     RemoveTopLevelObject("Probe");
 }

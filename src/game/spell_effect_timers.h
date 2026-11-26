@@ -6,6 +6,7 @@
 // stage when it passes stage1_ms + stage1_length_ms, after which it is dropped. The effect is a spellsnew.eff index,
 // and the emitters' key uses the spawn and effect IDs. The caller plays the stages it is handed.
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
@@ -35,6 +36,20 @@ public:
     std::vector<SpellEffectStagePlay> take();
     void clear();
     bool empty() const { return entries_.empty(); }
+    // Hailstone: drops the entries whose caster or target `gone(id)` says has left (despawned, or its id now another
+    // spawn's), so their later stages play neither on nothing nor on a new spawn under the same id.
+    template <class Gone> void drop_spawns(const Gone& gone) {
+        std::erase_if(entries_, [&](const Entry& e) {
+            return gone(e.caster) || (e.target != 0xffffffffu && gone(e.target));
+        });
+    }
+    // Each entry's caster and target (not 0xffffffff), repeats included.
+    template <class Visit> void for_each_spawn(const Visit& visit) const {
+        for (const Entry& e : entries_) {
+            visit(e.caster);
+            if (e.target != 0xffffffffu) visit(e.target);
+        }
+    }
 
 private:
     struct Entry {

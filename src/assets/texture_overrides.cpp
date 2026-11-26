@@ -70,8 +70,11 @@ std::optional<Image> as_stored(Image img, bool wld_bmp_rows, bool bmp) {
     return out;
 }
 
+// An override is one texture: a file past this is not one the decoder should be handed whole.
+constexpr std::uint64_t kMaxOverrideSize = 256u << 20;
+
 std::optional<Image> read_override(const std::filesystem::path& file, std::string& why) {
-    auto bytes = read_file(file);
+    auto bytes = read_file(file, kMaxOverrideSize);
     if (!bytes) {
         why = "cannot be read";
         return std::nullopt;

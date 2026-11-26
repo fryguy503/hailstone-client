@@ -153,8 +153,9 @@ const ModelPoint* find_point(std::span<const ModelPoint> points, std::string_vie
 }
 
 const SpellPoints::Model& SpellPoints::of(const CharacterModel& model) {
-    auto [it, fresh] = models_.try_emplace(&model);
-    if (!fresh) return it->second;
+    if (auto it = models_.find(model.serial.value()); it != models_.end()) return it->second;
+    if (models_.size() >= kMaxModels) models_.clear();
+    auto it = models_.try_emplace(model.serial.value()).first;
     Model& out = it->second;
     out.bone.fill(-1);
     std::vector<ModelPoint> wld;

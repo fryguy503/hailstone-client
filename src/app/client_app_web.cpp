@@ -19,7 +19,7 @@ web::BrowserHost* ClientApp::browser() {
     const std::filesystem::path helper = platform::install_dir() / "browser" / kHelper;
     std::error_code ec;
     if (!std::filesystem::exists(helper, ec)) {
-        log::info("web: no {}: web pages open in the system's browser", helper.string());
+        log::info("web: no {}: web pages open in the system's browser", path_utf8(helper));
         return nullptr;
     }
     const std::filesystem::path data = platform::data_dir() / "web";
@@ -27,8 +27,10 @@ web::BrowserHost* ClientApp::browser() {
     // hailstone.ini browser.sandbox: auto (the helper decides: docs/browser.md), on, off.
     std::string sandbox = config_.get_string("browser.sandbox", "auto");
     if (sandbox != "on" && sandbox != "off") sandbox = "auto";
+    // UTF-8 (SDL takes the arguments so): path::string() is the ANSI code page on Windows, and throws for a name it
+    // cannot spell there.
     browser_ = std::make_unique<web::BrowserHost>([helper, data, sandbox] {
-        return web::process_transport({helper.string(), "--data=" + data.string(), "--sandbox=" + sandbox});
+        return web::process_transport({path_utf8(helper), "--data=" + path_utf8(data), "--sandbox=" + sandbox});
     });
     web_textures_ = std::make_unique<ui::WebTextures>(vk_);
     return browser_.get();

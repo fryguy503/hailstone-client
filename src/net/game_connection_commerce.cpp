@@ -15,11 +15,13 @@
 // one at a time as the player puts each one down.
 
 #include <algorithm>
+#include <array>
 #include <format>
 #include <glm/geometric.hpp>
 
 #include "core/log.h"
 #include "core/saturate.h"
+#include "game/item_links.h"
 #include "game/item_options.h"
 #include "game/merchant.h"
 #include "game/world_state.h"
@@ -542,7 +544,8 @@ void GameConnection::commerce_item(std::uint32_t packet_type, Item item) {
     if (at != trade_->theirs.end() && at->second.id == item.id) {
         at->second.stack_count = item.stack_count;
     } else {
-        chat(ChatEvent::Kind::System, strings_.format(9028, std::vector<std::string>{trade_->partner_name, item.name}));
+        const std::array args{trade_->partner_name, game::make_item_link(item, server_ext().wide_item_links(*this))};
+        chat(ChatEvent::Kind::System, strings_.format(9028, args));
         trade_->theirs[item.slot.slot] = std::move(item);
     }
     trade_->my_ready = trade_->their_ready = false;

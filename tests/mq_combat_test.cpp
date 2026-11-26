@@ -260,6 +260,12 @@ TEST_CASE("TLO: Target.Buff and the rest from OP_TargetBuffs, the states by spel
     CHECK(p("${Target.Cursed}") == "NULL");
     CHECK(p("${Target.Corrupted}") == "NULL");
     sp.target_buffs.pop_back();
+    CHECK(p("${Target.Silenced}") == "NULL");
+    sp.target_buffs.push_back({2, buff(3005, 1, 5)}); // Test Silence: SPA 96
+    CHECK(p("${Target.Silenced}") == "Test Silence");
+    CHECK(p("${Target.Silenced.ID}") == "3");
+    CHECK(p("${Bool[${Target.Silenced}]}") == "TRUE");
+    sp.target_buffs.pop_back();
 
     // Another spawn's buffs are not known; a buff value from before reads as nothing once they are another's.
     CHECK(p("${Spawn[id 11].BuffsPopulated}") == "FALSE");
@@ -273,7 +279,70 @@ TEST_CASE("TLO: Target.Buff and the rest from OP_TargetBuffs, the states by spel
     CHECK(p("${Me.BuffCount}") == "2"); // Holy Armor and the song
     CHECK(p("${Me.Mezzed}") == "NULL");
     CHECK(p("${Me.Poisoned}") == "NULL");
+    CHECK(p("${Me.Silenced}") == "NULL");
     CHECK(p("${Me.MyBuff[Holy Armor]}") == "NULL"); // no caster recorded
+}
+
+TEST_CASE("TLO: Debuff and Debuff[pet] sum the counters on the player's and the pet's buffs") {
+    mq_test::World world{"hailstone_mq_debuff_test"};
+    mq::Registry reg;
+    mq::register_game_tlos(reg);
+    mq::Context ctx;
+    ctx.registry = &reg;
+    ctx.conn = world.conn.get();
+    auto p = [&](std::string_view text) { return mq::parse_macro_data(ctx, text); };
+    using A = net::GameConnectionTestAccess;
+    auto buff = [](std::uint32_t spell) {
+        game::BuffSlot b;
+        b.spell = spell;
+        b.tics = 10;
+        b.received_ms = net::GameConnection::now_ms();
+        return b;
+    };
+
+    // Holy Armor and the song carry no counters.
+    CHECK(p("${Debuff.Count} ${Debuff}") == "0 0");
+    CHECK(p("${Debuff.Poisoned} ${Debuff.Diseased} ${Debuff.Cursed} ${Debuff.Corrupted}") == "0 0 0 0");
+
+    // Without counters known, a buff counts those its spell starts with; a negative base (a cure's) counts none.
+    auto& sp = A::spells(*world.conn);
+    sp.buffs[1] = buff(3004); // Test Plague: 4 disease, in its second effect slot
+    sp.buffs[2] = buff(3006); // Test Venom: 3 poison, 2 curse, -5 disease
+    CHECK(p("${Debuff.Diseased} ${Debuff.Poisoned} ${Debuff.Cursed} ${Debuff.Corrupted}") == "4 3 2 0");
+    CHECK(p("${Debuff.Count} ${Debuff}") == "9 9");
+    // A beneficial spell's counter effect is not counted.
+    sp.buffs[5] = buff(3007); // Test Ward: beneficial, 1 corruption
+    CHECK(p("${Debuff.Corrupted} ${Debuff.Count}") == "0 9");
+    sp.buffs[5] = game::BuffSlot{};
+    // Once known, the counters left (the effect's slot data).
+    sp.buffs[1].counters_known = true;
+    sp.buffs[1].slot_data[1] = 1;
+    CHECK(p("${Debuff.Diseased} ${Debuff.Count}") == "1 6");
+
+    // Silenced: a buff with SPA 96; it carries no counters.
+    CHECK(p("${Debuff.Silenced}") == "FALSE");
+    sp.buffs[4] = buff(3005); // Test Silence
+    CHECK(p("${Debuff.Silenced} ${Debuff.Count}") == "TRUE 6");
+    sp.buffs[4] = game::BuffSlot{};
+    CHECK(p("${Debuff.Silenced}") == "FALSE");
+
+    // No pet: Debuff[pet] is NULL; an index other than pet is NULL too.
+    CHECK(p("${Debuff[pet]}") == "NULL");
+    CHECK(p("${Debuff[pet].Count}") == "NULL");
+    CHECK(p("${Debuff[target]}") == "NULL");
+
+    // A pet: its buffs (OP_PetBuffWindow, no slot data) count their starting counters.
+    world.add(20, "Tester_pet00", true, 30, {0, 0, 0});
+    A::world(*world.conn).spawns[20].pet_owner_id = 1;
+    CHECK(p("${Debuff[pet].Count} ${Debuff[PET]}") == "0 0");
+    A::pet_buffs(*world.conn) = {{0, buff(3006)}, {3, buff(3004)}, {5, buff(11)}};
+    CHECK(p("${Debuff[pet].Poisoned} ${Debuff[pet].Diseased} ${Debuff[pet].Cursed} ${Debuff[pet].Corrupted}") ==
+          "3 4 2 0");
+    CHECK(p("${Debuff[pet].Count}") == "9");
+    CHECK(p("${Debuff[pet].Silenced}") == "FALSE");
+    A::pet_buffs(*world.conn).push_back({6, buff(3005)});
+    CHECK(p("${Debuff[pet].Silenced} ${Debuff.Silenced}") == "TRUE FALSE");
+    CHECK(p("${Debuff.Count}") == "6"); // the player's unchanged
 }
 
 TEST_CASE("TLO: Spawn.LineOfSight and LineOfSight[y,x,z:y,x,z]") {

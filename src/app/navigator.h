@@ -20,6 +20,7 @@
 // the mesh is still unfinished waits for its tiles (and asks the server again) rather than giving up.
 
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -116,6 +117,7 @@ public:
     // PathFollower::ahead), so the swim keeps to the path's height (diving, or rising to it); `aim` without it.
     // The follower's unsticking strafe, or 0 when a drop is beside the walk.
     int safe_strafe(const Frame& f, const nav::SteerOutput& out) const;
+    static bool swim_needs_air(const Frame& f);
     std::optional<float> swim_pitch(const Frame& f, const glm::vec3& aim,
                                     std::optional<glm::vec3> along = std::nullopt) const;
     FollowAssist assist_follow(const glm::vec3& feet, const glm::vec3& target_feet, bool clear_line, double now);
@@ -134,8 +136,14 @@ public:
     void draw_overlay(ImDrawList* dl, const glm::mat4& view_proj, const glm::vec4& area) const;
 
     // NavControl
-    std::string go_to_point(const glm::vec3& world, float distance, std::string label, bool straight) override;
+    std::string go_to_point(const glm::vec3& world, float distance, std::string label, bool straight,
+                            bool flat = false) override;
     std::string go_to_spawn(std::uint32_t id, float distance) override;
+    std::string moveto_spawn(std::uint32_t id, float distance) override;
+    // How often a /moveto id takes its spawn's place again, and how far up or down it looks at it (Hailstone's own
+    // numbers; the look keys' own limit is 1.5).
+    static constexpr double kMoveToTrackSeconds = 1.0;
+    static constexpr float kMoveToLookSteepest = 1.4f;
     // A Find-owned walk: its caller must remain eligible before any destination read or movement. Ordinary
     // navigation never supplies this guard; replacing the goal also replaces its guard.
     std::string go_to_spawn_guarded(std::uint32_t id, float distance, std::function<bool()> eligible);
@@ -146,6 +154,12 @@ public:
     std::string walk_to_click(const glm::vec3& world, float distance);
     std::string stick(std::uint32_t id, const nav::StickOptions& options) override;
     void unstick(std::string_view why) override;
+    std::string afollow(std::uint32_t id, const nav::AFollowOptions& options) override;
+    void afollow_off(std::string_view why) override;
+    // /afollow's trail: a point each time the spawn has moved this far from the last (MQ2AdvPath's spacing); a move
+    // further than kAFollowWarp from one frame to the next is a warp (a gate, a summon, a teleporter), not a walk.
+    static constexpr float kAFollowSpacing = 5.0f;
+    static constexpr float kAFollowWarp = 100.0f;
     void stop(std::string_view why) override;
     void set_paused(bool paused) override;
     // /stick's default distance: this share of the melee range, so the spawn's small moves and the position updates'
@@ -158,6 +172,7 @@ public:
     // path ends where it gets nearest.
     std::optional<std::vector<glm::vec3>> plan_between(const glm::vec3& from, const glm::vec3& to);
     nav::PathOptions& options() override { return options_; }
+    float& moveto_distance() override { return moveto_distance_; }
     void rebuild() override;
     void set_overlay(bool on) override {
         overlay_ = on;
@@ -181,7 +196,14 @@ private:
         std::uint8_t door = 0;
         bool click = false;
         bool straight = false;
+        bool flat = false;  // arrival ignores height (go_to_point's `flat`)
+        bool moveto = false; // a /moveto: go_to_point with `straight` (a meshless click or a stick's walk is not one)
+        bool track_spawn = false; // a /moveto id: `spawn`'s place is taken again each kMoveToTrackSeconds
+        double track_at = 0.0;    // with track_spawn: when next
         bool quiet = false; // a click to move: no word in the chat when the mesh only goes part of the way
+        bool trail = false;    // /afollow's walk: through `via`, zone lines allowed (the spawn walked into it)
+        bool no_doors = false; // /afollow nodoor: the walk clicks no door
+        std::vector<glm::vec3> via; // a straight walk's points before `point`, in order (/afollow's trail)
         float distance = 2.0f;
         std::string label;
         std::function<bool()> eligible;
@@ -192,9 +214,30 @@ private:
         nav::StickOptions options;
         std::string label;
     };
+    // /afollow: the spawn, its trail (after_warp: recorded after it warped away from the point before), and what the
+    // walk saw of the player last frame (a jump further than kAFollowWarp is the player's own warp).
+    struct TrailPoint {
+        glm::vec3 at{0.0f};
+        bool after_warp = false;
+    };
+    struct AFollow {
+        std::uint32_t spawn = 0;
+        std::uint64_t incarnation = 0, context = 0;
+        nav::AFollowOptions options;
+        std::string label;
+        std::deque<TrailPoint> trail;
+        std::optional<glm::vec3> last_leader, last_feet;
+        bool leader_gone = false;
+        bool waiting_warp = false;
+        bool dirty = false; // the trail changed since the walk was planned
+    };
     std::string begin(Goal g);
     nav::SteerOutput walk_frame(const Frame& f);
     nav::SteerOutput stick_frame(const Frame& f);
+    nav::SteerOutput afollow_frame(const Frame& f);
+    bool afollow_current() const; // the spawn followed is still the one given, in this zone
+    float afollow_left(const glm::vec3& feet) const; // the trail's flat length from the feet, and the gap to the spawn
+    bool doors_on() const { return options_.open_doors && !goal_.no_doors; }
     bool stick_current() const;
     float stick_distance() const;
     bool plan(const glm::vec3& from);
@@ -245,6 +288,8 @@ private:
     std::uint64_t server_owner_ = 0;
     game::ServerPathLease server_lease_;
     nav::PathOptions options_;
+    float moveto_distance_ = 10.0f;
+    bool moveto_arrived_ = false; // NavStatus::moveto_arrived
     nav::PathFollower follower_;
     nav::PathFollower follow_path_;     // /follow's detour (assist_follow), apart from /nav's walk
     glm::vec3 follow_planned_to_{0.0f}; // where the spawn stood when the detour was planned
@@ -252,6 +297,7 @@ private:
     double follow_retry_at_ = 0.0;      // after a detour failed, the original's step alone until then
     Goal goal_;
     std::optional<Stick> stick_;
+    std::optional<AFollow> afollow_;
     std::string last_finish_; // finish()'s message: a stick's walk that ended with one (no path, stuck) ends the stick
     bool paused_ = false;
     bool overlay_ = false;

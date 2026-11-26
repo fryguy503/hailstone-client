@@ -22,6 +22,7 @@
 #include "platform/tcp_socket.h"
 #include "plugin/native_nameplates.h"
 #include "plugin/native_plugins.h"
+#include "plugin/policy.h"
 #include "mq_test_world.h"
 #include "plugin_consent_helper.h"
 #include "app/addon_requirements.h"
@@ -52,9 +53,11 @@ struct Host {
     mq::Context ctx;
     net::GameConnection* connection_override = nullptr;
     std::vector<std::string> printed, sent;
+    std::vector<std::string> printed_by; // plugin::caller_name() for each printed line
     std::vector<std::pair<int, std::string>> used, checked; // use_ability, ability_state (kind and name)
     bool ability_ready = true;
     std::vector<plugin::AbilityBulkRow> ability_rows; // get_ability_data_bulk's rows
+    std::optional<plugin::WorldPlacementScene> placement_scene;
     std::vector<std::pair<plugin::Stream, net::AppPacket>> packets;
     std::unique_ptr<mq::Commands> commands;
     std::unique_ptr<plugin::NativePlugins> plugins;
@@ -82,14 +85,20 @@ struct Host {
         ne.policy = &policy;
         ne.registry = &reg;
         ne.context = ce.context;
-        ne.print = [this](const std::string& t, std::uint32_t) { printed.push_back(t); };
+        ne.print = [this](const std::string& t, std::uint32_t) {
+            printed.push_back(t);
+            printed_by.emplace_back(plugin::caller_name());
+        };
         ne.run = ce.run;
         ne.send = [this](plugin::Stream s, const net::AppPacket& p) { packets.emplace_back(s, p); };
         ne.dirs = {plugin_dir};
         ne.cache_dir = world.dir / "cache";
         ne.config_dir = world.dir / "config";
+        ne.scripts_config_dir = world.dir / "scripts" / "config";
         ne.web = web;
         ne.connection = [this] { return connection_override ? connection_override : world.conn.get(); };
+        ne.world_placement_scene = [this] { return placement_scene; };
+        ne.world_placement_input_allowed = [this] { return placement_scene.has_value(); };
         ne.extensions = extensions.get();
         ne.nameplates = &canvas;
         ne.use_ability = [this](mq::AbilityKind kind, std::string_view name) {
@@ -196,8 +205,15 @@ static_assert(sizeof(void*) != 8 ||
                offsetof(PluginHostApi, release_bulk_buffer) == 936 &&
                offsetof(PluginHostApi, spell_id_limit) == 944 &&
                offsetof(PluginHostApi, spell_data_ready) == 952 &&
-               offsetof(PluginHostApi, get_large_dialog) == 960 &&
-               offsetof(PluginHostApi, answer_large_dialog) == 968));
+               offsetof(PluginHostApi, command_exists) == 960 &&
+               offsetof(PluginHostApi, lend_thread) == 968 &&
+               offsetof(PluginHostApi, get_scripts_config_dir) == 976 &&
+               offsetof(PluginHostApi, world_placement_start) == 984 &&
+               offsetof(PluginHostApi, world_placement_get) == 992 &&
+               offsetof(PluginHostApi, world_placement_cancel) == 1000 &&
+               offsetof(PluginHostApi, write_chat_group) == 1008 &&
+               offsetof(PluginHostApi, get_large_dialog) == 1016 &&
+               offsetof(PluginHostApi, answer_large_dialog) == 1024));
 
 namespace {
 net::AppPacket native_game_popup(bool buttons = true) {
@@ -308,6 +324,55 @@ TEST_CASE("native plugins: capability loss inside a popup send cannot authorize 
     REQUIRE(rig.until_state(net::ConnectionState::Disconnected));
     CHECK_FALSE(rig.conn.camped_out());
     CHECK(rig.conn.link_death().has_value());
+}
+
+TEST_CASE("native plugins: placement is advertised without a render frame and remains owner scoped") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll);
+    REQUIRE(h.plugins->load("HostProbe"));
+
+    h.run("/probeworldplacement status");
+    // Only the placement bit: no geometry frame yet.
+    CHECK(h.printed_line("[Probe] placement: 32 0 0 0 0"));
+    h.placement_scene = plugin::WorldPlacementScene{1, 85, 2};
+    h.run("/probeworldplacement status");
+    CHECK(h.printed_line("[Probe] placement: 32 1 0 85 2"));
+    h.run("/probeworldplacement start");
+    CHECK(h.printed_line("[Probe] placement start: 1"));
+    REQUIRE(h.plugins->world_placement_aiming());
+    h.plugins->world_placement_update(plugin::WorldPlacementPoint{12, -7, 2}, true, true);
+    h.run("/probeworldplacement status");
+    CHECK(h.printed_line("[Probe] placement: 32 1 3 85 2"));
+
+    h.run("/probeworldplacement start");
+    REQUIRE(h.plugins->world_placement_aiming());
+    h.approve(plugin::kCapAll & ~plugin::kCapExtend);
+    h.plugins->policy_changed({});
+    CHECK_FALSE(h.plugins->world_placement_aiming());
+    h.run("/probeworldplacement status");
+    CHECK(h.printed_line("[Probe] placement: 0 0 0 0 0"));
+}
+
+TEST_CASE("native plugins: placement stays on the actual client thread during a lend") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll);
+    h.placement_scene = plugin::WorldPlacementScene{1, 85, 2};
+    REQUIRE(h.plugins->load("HostProbe"));
+
+    h.run("/probeworldplacement lent");
+    CHECK(h.printed_line("[Probe] placement lent: 1 0 0 99 1"));
+    CHECK_FALSE(h.plugins->world_placement_aiming());
+
+    h.run("/probeworldplacement start");
+    REQUIRE(h.plugins->world_placement_aiming());
+    h.printed.clear();
+    h.run("/probeworldplacement lent");
+    CHECK(h.printed_line("[Probe] placement lent: 1 0 0 99 1"));
+    CHECK(h.plugins->world_placement_aiming());
+    h.run("/probeworldplacement cancel");
+    CHECK_FALSE(h.plugins->world_placement_aiming());
+    h.run("/probeworldplacement status");
+    CHECK(h.printed_line("[Probe] placement: 32 1 4 85 2"));
 }
 
 TEST_CASE("native plugins: nameplate frame lease and canvas ownership") {
@@ -1437,6 +1502,21 @@ TEST_CASE("native plugins: web pages of the plugin's own (ABI 3), under 'web', c
 }
 #endif
 
+TEST_CASE("native plugins: write_chat_group writes bounded local chat without chat permission") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapCommands);
+    REQUIRE(h.plugins->load("HostProbe"));
+    h.run("/probechatgroup");
+    CHECK(h.printed_line("[Probe] chat group: accepted 1, count 0, title 0, empty 0, row 0, thread 0"));
+    auto event = h.world.conn->poll_chat();
+    REQUIRE(event);
+    CHECK(event->text == "Probe Status");
+    const std::vector<std::string> expected{"First probe row.", "Second probe row."};
+    CHECK(event->group == expected);
+    CHECK_FALSE(h.world.conn->poll_chat());
+    CHECK(h.packets.empty());
+}
+
 TEST_CASE("native plugins: host functions from another thread do nothing; the caller's capabilities are none there") {
     Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
     h.approve(plugin::kCapAll);
@@ -1463,6 +1543,68 @@ TEST_CASE("native plugins: host functions from another thread do nothing; the ca
     CHECK(name == "another thread");
     CHECK(plugin::caller_caps() == plugin::kCapRead);
     CHECK(plugin::caller_name() == "script");
+}
+
+TEST_CASE("native plugins: chat written from a plugin's own thread shows at the next pulse") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll);
+    REQUIRE(h.plugins->load("HostProbe"));
+    h.run("/probechatthread");
+    // The worker's other host call is refused; its chat lines wait for the client's thread.
+    CHECK(h.printed_line("[Probe] chat thread: add_command 0"));
+    CHECK_FALSE(h.hooks.has_command("/fromworker"));
+    // write_chat goes to the chat as printed; write_chat_color, with a connection, into its chat as a game colour.
+    auto colour_line = [&] {
+        bool found = false;
+        while (auto e = h.world.conn->poll_chat())
+            if (e->text == "[Probe] chat from a worker 2") found = true;
+        return found;
+    };
+    CHECK_FALSE(h.printed_line("[Probe] chat from a worker 1"));
+    CHECK_FALSE(colour_line());
+    h.hooks.pulse();
+    CHECK(h.printed_line("[Probe] chat from a worker 1"));
+    // Shown as the plugin's line, so the chat keeps its MacroQuest colour codes (GameConnection::chat strips them
+    // from anyone else's).
+    for (std::size_t i = 0; i < h.printed.size(); ++i)
+        if (h.printed[i] == "[Probe] chat from a worker 1") CHECK(h.printed_by[i] == "HostProbe");
+    CHECK(colour_line());
+    // Shown once.
+    const auto shown = h.printed.size();
+    h.hooks.pulse();
+    CHECK(h.printed.size() == shown);
+    CHECK_FALSE(colour_line());
+}
+
+TEST_CASE("native plugins: lend_thread lets the plugin's own thread call the host while its callback waits") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll);
+    REQUIRE(h.plugins->load("HostProbe"));
+    // Lent: the thread's calls work (a nested lend from it is refused); ended, another thread is refused again.
+    h.run("/probelend");
+    CHECK(h.printed_line(
+        "[Probe] lend 1 2, thread: add_command 1, parse 4 'lent', lend 0; end 1, after: add_command 0"));
+    CHECK(h.printed_line("[Probe] written from the lent thread"));
+    CHECK(h.hooks.has_command("/fromlent"));
+    CHECK_FALSE(h.hooks.has_command("/afterlend"));
+    // Lent and never given back: it ends when the callback that lent it returns.
+    h.run("/probelend keep");
+    CHECK(h.printed_line("[Probe] lend keep 1"));
+    h.run("/probelendafter");
+    CHECK(h.printed_line("[Probe] after keep: add_command 0"));
+    CHECK_FALSE(h.hooks.has_command("/afterkeep"));
+    // A callback inside a host call the client's thread makes while the plugin lends (do_command running the plugin's
+    // own command) is refused a lend, not told 2: that call holds the lock, so waiting there for a lent thread would
+    // never end. The lending itself goes on after it.
+    h.run("/probelend nested");
+    CHECK(h.printed_line("[Probe] lend nested 1, inner 0, thread: add_command 1, end 1"));
+    CHECK(h.hooks.has_command("/afternested"));
+    // The client's thread is the client's again, and only it.
+    CHECK(plugin::on_main_thread());
+    CHECK_FALSE(plugin::on_lent_thread());
+    bool other = true;
+    std::thread([&] { other = plugin::on_main_thread(); }).join();
+    CHECK_FALSE(other);
 }
 
 TEST_CASE("native plugins: a connection opened with 'net' closes when the policy takes 'net' away") {
@@ -1641,6 +1783,24 @@ TEST_CASE("native plugins: get_buff_data_bulk and get_pet_buff_data_bulk, laid o
     CHECK(h.printed_line("[Probe] buff slot 62: spell 99999, caster 0, tics 9, hits 0, spell type 0, counter type -1, "
                          "counters 0, slot type 2"));
     CHECK(h.printed_line("[Probe] buffs 1827 bytes, 58 empty")); // slots 0-62 of 29 bytes
+    // The counters left, once the client knows them: the counter effect's slot data (Test Plague's disease counter is
+    // its second slot). Before that (the profile, a zone-in list), the counters the spell starts with, 4 above.
+    sp.buffs[5].slot_data[1] = 2;
+    h.printed.clear();
+    h.run("/probebuffs");
+    CHECK(h.printed_line("[Probe] buff slot 5: spell 3004, caster 10, tics 5, hits 2, spell type 0, counter type 0, "
+                         "counters 4, slot type 0"));
+    sp.buffs[5].counters_known = true;
+    h.printed.clear();
+    h.run("/probebuffs");
+    CHECK(h.printed_line("[Probe] buff slot 5: spell 3004, caster 10, tics 5, hits 2, spell type 0, counter type 0, "
+                         "counters 2, slot type 0"));
+    sp.buffs[5].slot_data[1] = 0; // every counter cured, the buff still on
+    h.printed.clear();
+    h.run("/probebuffs");
+    CHECK(h.printed_line("[Probe] buff slot 5: spell 3004, caster 10, tics 5, hits 2, spell type 0, counter type 0, "
+                         "counters 0, slot type 0"));
+    sp.buffs[5].counters_known = false;
     // Nothing counts down while the buff timers are on hold (SPA 436): the count as the server sent it.
     sp.buff_timers_on_hold = true;
     h.printed.clear();
@@ -1732,6 +1892,14 @@ TEST_CASE("native plugins: get_buff_name_data_bulk, laid out as docs/plugins.md 
                          "counter type -1, counters 0, slot type 2"));
     // slots 0-62 of 29 bytes, and the names "Groupie" and "Tester"
     CHECK(h.printed_line("[Probe] buff names 1840 bytes, 58 empty, 0 bytes left"));
+    // The counters left once known, as get_buff_data_bulk's.
+    sp.buffs[5].slot_data[1] = 3;
+    sp.buffs[5].counters_known = true;
+    h.printed.clear();
+    h.run("/probebuffnames");
+    CHECK(h.printed_line("[Probe] buff name slot 5: spell 3004, caster Groupie, tics 5, hits 2, spell type 0, "
+                         "counter type 0, counters 3, slot type 0"));
+    sp.buffs[5].counters_known = false;
     // get_buff_data_bulk is unchanged: the caster's id, 29 bytes a slot.
     h.run("/probebuffs");
     CHECK(h.printed_line("[Probe] buff slot 5: spell 3004, caster 12, tics 5, hits 2, spell type 0, counter type 0, "
@@ -2584,6 +2752,104 @@ TEST_CASE("native plugins: use_ability and ability_state, by kind and name, held
     CHECK(denied.printed_line("[Plugin] HostProbe: use_ability needs the server's 'actions' permission"));
     CHECK(denied.used.empty());
     CHECK(denied.checked.empty());
+}
+
+TEST_CASE("native plugins: command_exists answers as a typed line would run") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapCommands); // no other capability needed
+    REQUIRE(h.plugins->load("HostProbe"));
+    auto answer = [&](const std::string& name) {
+        h.printed.clear();
+        h.run("/probecommand " + name);
+        return h.printed.empty() ? std::string() : h.printed.back();
+    };
+    // Added ones: the plugin's own (any case, the '/' optional) and the client's MQ commands.
+    CHECK(answer("/probecommand") == "[Probe] command '/probecommand' 1");
+    CHECK(answer("PROBECOMMAND") == "[Probe] command 'PROBECOMMAND' 1");
+    CHECK(answer("/echo") == "[Probe] command '/echo' 1");
+    // The game's own, a prefix too ("/wh" runs /who).
+    CHECK(answer("sit") == "[Probe] command 'sit' 2");
+    CHECK(answer("/wh") == "[Probe] command '/wh' 2");
+    // None: unknown, "/" alone (a prefix of everything), a word with a space.
+    CHECK(answer("/nosuchcommandhere") == "[Probe] command '/nosuchcommandhere' 0");
+    CHECK(answer("/") == "[Probe] command '/' 0");
+    CHECK(answer("/sit down") == "[Probe] command '/sit down' 0");
+    // A GM command exists only for a GM.
+    CHECK(answer("/becomenpc") == "[Probe] command '/becomenpc' 0");
+    net::GameConnectionTestAccess::world(*h.world.conn).spawns.at(1).gm = true;
+    CHECK(answer("/becomenpc") == "[Probe] command '/becomenpc' 2");
+    // An added command comes before the game's, as Hooks::command runs it first.
+    const auto owner = h.hooks.new_owner("test");
+    REQUIRE(h.hooks.add_command(owner, "/sit", [](std::string_view) {}));
+    CHECK(answer("/sit") == "[Probe] command '/sit' 1");
+    h.hooks.remove(owner);
+    CHECK(answer("/sit") == "[Probe] command '/sit' 2");
+    // Unloaded, the plugin's command is gone.
+    REQUIRE(h.plugins->unload("HostProbe"));
+    CHECK_FALSE(h.hooks.has_command("/probecommand"));
+}
+
+TEST_CASE("native plugins: get_scripts_config_dir gives the scripts' settings folder, made on demand") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapCommands); // only for /probescriptsdir: the function needs no capability
+    REQUIRE(h.plugins->load("HostProbe"));
+    const fs::path dir = h.world.dir / "scripts" / "config";
+    REQUIRE_FALSE(fs::exists(dir));
+    h.printed.clear();
+    h.run("/probescriptsdir");
+    const std::string text = dir.string();
+    CHECK(h.printed_line("[Probe] scripts dir " + std::to_string(text.size()) + " " + text));
+    CHECK(fs::is_directory(dir));
+}
+
+TEST_CASE("native plugins: the SDK's C++ wrapper, capturing lambdas as commands and TLOs") {
+    Host h(false, nullptr, HAILSTONE_CPP_PLUGIN);
+    h.approve(plugin::kCapAll);
+    REQUIRE(h.plugins->load("CppWrapper"));
+    auto only = [&](const std::string& line) {
+        h.printed.clear();
+        h.run(line);
+        return h.printed;
+    };
+    using Lines = std::vector<std::string>;
+
+    // One handler for two names: each call sees `this` and the name it was added under.
+    CHECK(only("/cppgreet one two") == Lines{"[Cpp] hi /cppgreet 'one two' 1"});
+    CHECK(only("/CPPHELLO") == Lines{"[Cpp] hi /cpphello '' 2"});
+
+    // A handler that replaces or removes itself finishes its call; the next call finds the change.
+    CHECK(only("/cppreplace") == Lines{"[Cpp] original"});
+    CHECK(only("/cppreplace") == Lines{"[Cpp] replaced"});
+    CHECK(only("/cppremoveself") == Lines{"[Cpp] removed 1"});
+    CHECK_FALSE(h.hooks.has_command("/cppremoveself"));
+
+    // An exception stays in the plugin.
+    CHECK(only("/cppthrow").empty());
+    CHECK(h.plugins->loaded("CppWrapper"));
+    CHECK(only("/cppgreet") == Lines{"[Cpp] hi /cppgreet '' 3"});
+
+    // TLOs: the answer, an index, an unknown member, and an answer replaced in place (any case of the name).
+    CHECK(h.p("${CppWrap}") == "first");
+    CHECK(h.p("${CppWrap[abc].Index}") == "abc");
+    CHECK(h.p("${CppWrap.Nope}") == "NULL");
+    CHECK(only("/cppretlo second") == Lines{"[Cpp] retlo 1"});
+    CHECK(h.p("${CppWrap}") == "second");
+
+    // The readers fill the size themselves.
+    CHECK(only("/cppplayer") == Lines{"[Cpp] player Tester 1 spawn yes"});
+    CHECK(only("/cppexists /cppgreet") == Lines{"[Cpp] exists 1"});
+    CHECK(only("/cppexists sit") == Lines{"[Cpp] exists 2"});
+    CHECK(only("/cppexists /nosuchcommandhere") == Lines{"[Cpp] exists 0"});
+
+    // hs::Commands takes its commands with it; the others stay.
+    CHECK(only("/cppdrop") == Lines{"[Cpp] dropped"});
+    CHECK_FALSE(h.hooks.has_command("/cppgreet"));
+    CHECK_FALSE(h.hooks.has_command("/cpphello"));
+    CHECK(h.hooks.has_command("/cppreplace"));
+
+    REQUIRE(h.plugins->unload("CppWrapper"));
+    CHECK_FALSE(h.hooks.has_command("/cppreplace"));
+    CHECK_FALSE(h.reg.has_tlo("CppWrap"));
 }
 
 TEST_CASE("native plugins: get_ability_data_bulk, its layout, truncation and the read gate") {

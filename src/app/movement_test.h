@@ -27,6 +27,19 @@ namespace hailstone::assets { struct Zone; }
 
 namespace hailstone::app {
 
+// The parsed --move-test spec. kind is empty for an unknown test, or one whose numbers are not finite (sscanf and
+// strtof read "nan" and "inf"; such a height or heading would put NaN in the body for good).
+struct MovementTestSpec {
+    std::string kind;
+    std::optional<glm::vec3> start;
+    bool trace = false;
+    float height = 0.0f;                    // fall:H
+    float walk_degrees = 0.0f, walk_secs = 3.0f; // walk:D[:S]
+    float wander_secs = 0.0f;               // wander:S[:N]
+    std::uint32_t wander_seed = 12345;
+};
+MovementTestSpec parse_movement_test(std::string spec);
+
 class MovementTest {
 public:
     explicit MovementTest(std::string spec);

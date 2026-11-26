@@ -815,9 +815,12 @@ void VkContext::save_pipeline_cache_file() {
         log::warn("could not write the pipeline cache {}", pipeline_cache_path_.string());
 }
 
-void VkContext::create_swapchain(VkSwapchainKHR old) {
+void VkContext::create_swapchain(VkSwapchainKHR old, const VkSurfaceCapabilitiesKHR* known_caps) {
     VkSurfaceCapabilitiesKHR caps;
-    vk_check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_, surface_, &caps), "surface capabilities");
+    if (known_caps)
+        caps = *known_caps;
+    else
+        vk_check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_, surface_, &caps), "surface capabilities");
 
     std::uint32_t count = 0;
     vkGetPhysicalDeviceSurfaceFormatsKHR(physical_, surface_, &count, nullptr);
@@ -1495,7 +1498,13 @@ void VkContext::destroy_swapchain() {
     swapchain_ = VK_NULL_HANDLE;
 }
 
-void VkContext::recreate_swapchain() {
+bool VkContext::recreate_swapchain() {
+    // Asked before anything is let go: a surface minimised since the window's state was last read (Windows: 0x0)
+    // cannot have a swapchain, and a throw from vkCreateSwapchainKHR would leave none and no scene targets. The
+    // frame is skipped and resize_pending_ stays set, so the next frame asks again.
+    VkSurfaceCapabilitiesKHR caps;
+    vk_check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_, surface_, &caps), "surface capabilities");
+    if (surface_extent_empty(Extent{caps.currentExtent.width, caps.currentExtent.height})) return false;
     wait_idle();
     destroy_scene_targets();
     for (VkImageView v : views_) vkDestroyImageView(device_, v, nullptr);
@@ -1512,8 +1521,9 @@ void VkContext::recreate_swapchain() {
         for (VkSemaphore s : semaphores) vkDestroySemaphore(device, s, nullptr);
         if (old) vkDestroySwapchainKHR(device, old, nullptr);
     });
-    create_swapchain(old);
+    create_swapchain(old, &caps);
     resize_pending_ = false;
+    return true;
 }
 
 void VkContext::create_frames() {
@@ -1725,7 +1735,7 @@ std::optional<FrameInfo> VkContext::begin_frame_commands() {
     }
     if (swapchain_outdated({w, h}, {made_for_.width, made_for_.height}, surface, {extent_.width, extent_.height}))
         resize_pending_ = true;
-    if (resize_pending_) recreate_swapchain();
+    if (resize_pending_ && !recreate_swapchain()) return std::nullopt;
     // The 3D view's rectangle (set_scene_rect): a new size makes the scene targets again, once it has settled
     // (render/swapchain_size.h SceneResizeDebounce): dragging a /viewport edge would otherwise wait for the device
     // and rebuild every target every frame. Until then the old rectangle is drawn whole; a move alone is taken at
@@ -2568,7 +2578,7 @@ void VkContext::composite_into(VkCommandBuffer cmd, std::uint32_t image_index, V
     vkCmdEndRendering(cmd);
 }
 
-std::optional<std::uint32_t> VkContext::finish_frame_gen(const FrameInfo& frame) {
+std::optional<std::uint32_t> VkContext::finish_frame_gen(const FrameInfo& frame, bool readback) {
     VkCommandBuffer cmd = frame.cmd;
     image_barrier(cmd, overlay_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -2615,9 +2625,12 @@ std::optional<std::uint32_t> VkContext::finish_frame_gen(const FrameInfo& frame)
                           frame_gen_->synth_set(slot), &push, sizeof(push));
             }
             composite_into(cmd, index, frame_gen_->composite_set(slot, ready));
+            // Its second scope reaches the copy stage when end_frame may read it back: that barrier's first scope
+            // (the copy stage) then follows this layout transition. A second scope of NONE orders nothing after it.
             image_barrier(cmd, images_[index], VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                           VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                          VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_NONE, 0);
+                          VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                          readback ? VK_PIPELINE_STAGE_2_COPY_BIT : VK_PIPELINE_STAGE_2_NONE, 0);
             generated = index;
             fg_generated_last_ = ready;
             ++(ready ? fg_stats_.generated : fg_stats_.skipped_cut);
@@ -2653,7 +2666,8 @@ FrameOutcome VkContext::end_frame(const FrameInfo& frame) {
     std::optional<std::uint32_t> generated;
     if (overlay_open_) {
         overlay_open_ = false;
-        generated = finish_frame_gen(frame);
+        // A --screenshot-generated readback may follow (shot_generated below, which needs this too).
+        generated = finish_frame_gen(frame, !screenshot_path_.empty() && screenshot_generated_);
         gpu_mark(frame, "frame generation");
     } else {
         picture_ready_ = false; // a frame without its picture: the next one has nothing to start from
@@ -2698,18 +2712,24 @@ FrameOutcome VkContext::end_frame(const FrameInfo& frame) {
     if (readback) {
         // The images copied: the frame's own, and first its in-between frame's (already in PRESENT_SRC:
         // finish_frame_gen) with --screenshot-generated.
+        // The in-between frame's composite writes were made available by finish_frame_gen's barrier, whose second
+        // scope (the copy stage, asked for by its readback flag) this one's first scope chains to; the real frame's
+        // are made available here.
         struct Shot {
             VkImage image;
             VkImageLayout layout;
+            VkPipelineStageFlags2 src_stage;
+            VkAccessFlags2 src_access;
         };
         std::vector<Shot> shots;
-        if (shot_generated) shots.push_back({images_[*generated], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR});
-        shots.push_back({image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
+        if (shot_generated)
+            shots.push_back({images_[*generated], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_COPY_BIT, 0});
+        shots.push_back({image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT});
         for (std::size_t i = 0; i < shots.size(); ++i) {
             image_barrier(frame.cmd, shots[i].image, VK_IMAGE_ASPECT_COLOR_BIT, shots[i].layout,
-                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                          VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
-                          VK_ACCESS_2_TRANSFER_READ_BIT);
+                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, shots[i].src_stage, shots[i].src_access,
+                          VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
             VkBufferImageCopy region{};
             region.bufferOffset = shot_bytes * i;
             region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};

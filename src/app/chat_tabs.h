@@ -5,9 +5,11 @@
 #include <span>
 #include <string_view>
 
+#include "game/chat_windows.h"
+
 namespace hailstone::app::chat_tabs {
 
-inline constexpr int kMaxSlots = 32;
+inline constexpr int kMaxSlots = game::kChatWindowSlots;
 inline constexpr std::uint32_t kDefaultHighlightColor = 0xff0000;
 
 // Groups are visible frames. Tabs keep their identity, filters, and lines independently of those frames.

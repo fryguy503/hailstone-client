@@ -5,6 +5,7 @@
 // Several of the server's numbers are big-endian (EQEmu's "backwards byte order", noted per field).
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -20,6 +21,9 @@ namespace hailstone::net {
 inline constexpr int kTributeSlots = 5;         // RoF2 invtype::TRIBUTE_SIZE
 inline constexpr int kTributeTiers = 10;        // MAX_TRIBUTE_TIERS
 inline constexpr std::uint32_t kTributeNone = 0xffffffff;
+// The tributes (and their descriptions) kept per list, personal or guild: far more than any server's tribute table
+// (EQEmu's PEQ database has under a hundred of each); new ids past it are dropped against a flood of made-up ones.
+inline constexpr std::size_t kTributesKept = 4096;
 
 // OP_SendTributes (4 bytes, unused; client → zone, on the first zone-in): the server answers one OP_TributeInfo per personal
 // tribute.

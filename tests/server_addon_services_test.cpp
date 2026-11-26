@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include <lua.hpp>
+#include <limits>
 #include <stdexcept>
 
 #include "app/guide_path.h"
@@ -464,4 +465,34 @@ TEST_CASE("server addon observations: replacement actors retire received resourc
     net::GameConnectionTestAccess::apply_spawn(c, replacement);
     CHECK_FALSE(group.mana_percent.contains(10)); CHECK_FALSE(group.endurance_percent.contains(10));
     CHECK(c.world().spawns.at(10).hp_known);
+}
+
+// A map point that no zone holds (not finite, or past any map) is not sent as a find: hs.FindMapLocation refuses it
+// (a float cast of such a double is undefined), and GameConnection::find_map_location refuses it too.
+TEST_CASE("Map find: a non-finite or out-of-range map point is not sent to the server") {
+    test::Rig w(test::MockConfig::standard(), test::quick_options());
+    REQUIRE(w.to_zone());
+    auto& c = w.conn;
+    app::UiHost host;
+    host.in_game = host.ui_ready = host.feet_valid = true;
+    host.game = &w.game;
+    host.conn = &c;
+    app::UiApi api(host);
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+    lua_newtable(L);
+    api.register_functions(L);
+    lua_setglobal(L, "hs");
+    REQUIRE(luaL_dostring(L, "hs.FindMapLocation(0/0, 10) hs.FindMapLocation(10, math.huge) "
+                             "hs.FindMapLocation(1e300, 10) hs.FindMapLocation(-1e7, 10)") == LUA_OK);
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    c.find_map_location({nan, 0, 0});
+    c.find_map_location({0, std::numeric_limits<float>::infinity(), 0});
+    c.find_map_location({0, 0, 2e6f});
+    // then one sound point: it alone reaches the server
+    REQUIRE(luaL_dostring(L, "hs.FindMapLocation(100, -200)") == LUA_OK);
+    REQUIRE(w.until([&] { return test::MockEqServer::count(w.server.zone_log, net::Op::FindPersonRequest) >= 1; }));
+    w.until([] { return false; }, std::chrono::milliseconds(200));
+    CHECK(test::MockEqServer::count(w.server.zone_log, net::Op::FindPersonRequest) == 1);
+    lua_close(L);
 }

@@ -17,6 +17,7 @@
 #include "audio/individual_sounds.h"
 #include "audio/sound_control.h"
 #include "game/sound_rules.h"
+#include "game/spawn_states.h"
 #include "game/world_state.h"
 
 namespace hailstone {
@@ -83,7 +84,7 @@ private:
     audio::AudioSystem& audio_;
     std::vector<assets::SpellEffectSounds> spell_effects_;           // SpellsNew.eff
     std::vector<std::array<std::int32_t, 3>> old_effects_;           // spells.eff's stage sounds
-    std::unordered_map<std::uint32_t, SpawnState> spawns_;
+    game::SpawnStates<SpawnState> spawns_; // by spawn id and incarnation
     std::uint32_t my_id_ = 0; // the local player's spawn id, this frame
     std::vector<std::uint32_t> alive_; // the spawns with a loop this frame (kept for its capacity)
     audio::CrtRand rand_{static_cast<std::uint32_t>(0x5eed)};

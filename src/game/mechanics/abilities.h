@@ -27,6 +27,8 @@
 
 #include "game/mechanics/melee.h"
 
+namespace hailstone::game { class EqStrings; }
+
 namespace hailstone::game::mechanics {
 
 class Character;
@@ -145,6 +147,7 @@ struct SkillContext {
     float speed_x = 0, speed_y = 0, speed_z = 0; // SpeedX/Y/Z (units per physics tick)
     bool cursor_has_item = false;     // the fishing check's slot 0x21
     std::int32_t form_slam = 0xff; // current appearance's innate Slam slot (0xff = unavailable)
+    std::uint32_t form_race = 0;   // the player spawn's race now (GetRace, vtable +0x88: +0xeb4); 0 = the profile's
     std::uint8_t pvp_ruleset = 0;     // 0xdcee70
     bool can_see_target = true;       // PlayerBase::CanSee (the zone's line of sight)
     bool tracking_window_open = false;
@@ -165,11 +168,17 @@ struct SkillContext {
 };
 
 // A chat line: an eqstr id with %1.. arguments, in a chat colour (0x10e skills, 0xd, 0x12f, 0x111).
+// An argument is literal text (a spawn's name stays as it is, whatever it starts with) unless arg_eqstr gives it an
+// id: the original copies getString(id) into that argument, so it reads as that eqstr's text.
 struct SkillMessage {
     std::uint32_t eqstr = 0;
     std::vector<std::string> args;
     std::uint32_t color = 0x10e;
+    std::vector<std::optional<std::uint32_t>> arg_eqstr; // per argument; shorter than args when the rest are text
 };
+
+// The message's text from the string tables, with each eqstr argument looked up.
+std::string format_skill_message(const EqStrings& strings, const SkillMessage& m);
 
 // A packet UseSkill sends (the bytes are in net/ability_packets.h).
 struct SkillSend {
@@ -241,12 +250,15 @@ double bearing(double y1, double x1, double y2, double x2);
 float melee_range(const SkillActor* a, const SkillActor* b);
 // PlayerZoneClient::CanIHit @0x5a2940 (the caller passes the player's SPA 40 total).
 bool can_i_hit(const SkillContext& ctx, float extra_range, SkillResult& out);
-// PlayerZoneClient::CanUseCombatSkill @0x5a2f10 for slot 100.
-bool can_use_combat_skill(const SkillContext& ctx, std::uint32_t skill);
+// PlayerZoneClient::CanUseCombatSkill @0x5a2f10 for slot 100. `slam`: the attack is Slam's (UseSkill's skill 111),
+// whose Bash needs no shield (a deliberate change, docs/mechanics.md "Slam").
+bool can_use_combat_skill(const SkillContext& ctx, std::uint32_t skill, bool slam = false);
 // PlayerZoneClient::DoAttack @0x5a5000 for the local player (game/mechanics/melee.h) on this context:
 // slots 13 / 14 (auto attack; the swings go to SkillResult::swings) and 100 (a combat skill: OP_CombatAbility).
 // `skill` is the argument as passed (DoAttack compares its low byte). Returns the original's al.
-bool do_attack(const SkillContext& ctx, SkillState& state, std::uint8_t slot, std::uint32_t skill, SkillResult& out);
+// `slam` as for can_use_combat_skill.
+bool do_attack(const SkillContext& ctx, SkillState& state, std::uint8_t slot, std::uint32_t skill, SkillResult& out,
+               bool slam = false);
 // DoAttack(100, skill, target).
 bool do_attack_skill(const SkillContext& ctx, SkillState& state, std::uint32_t skill, SkillResult& out);
 // DoPassageOfTime @0x45daf0's swing timers on this context, in its order: the attack-on reset (@0x45db76,

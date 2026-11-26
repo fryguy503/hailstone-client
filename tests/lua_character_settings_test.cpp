@@ -30,6 +30,38 @@ std::string read(const fs::path& p) {
 }
 } // namespace
 
+TEST_CASE("Layout profiles: pack placement and chat settings restore without changing task or shared preferences") {
+    using hailstone::ui::lua::LuaUi;
+    hailstone::test::ScratchDir scratch("lua_named_layouts");
+    const auto shared = scratch.path() / "pack.txt";
+    const auto character = scratch.path() / "character" / "ui-pack.txt";
+    std::ofstream(shared) << "hud.pos.GroupWindow=10,10\nchat.timestamps=off\npalette=Midnight\n";
+    auto* ctx = ImGui::CreateContext();
+    {
+        LuaUi lua(scratch.path(), shared);
+        lua.set_character_settings(character);
+        REQUIRE(lua.set_setting("hotbar.vertical.HotButtonWnd", "1"));
+        const auto profile = lua.capture_layout_profile_settings();
+        REQUIRE(lua.set_setting("tasks.tracked.12", "1"));
+        REQUIRE(lua.set_setting("hud.pos.GroupWindow", "150,150"));
+        REQUIRE(lua.set_setting("chat.timestamps", "on"));
+        REQUIRE(lua.set_setting("hotbar.vertical.HotButtonWnd", "0"));
+        REQUIRE(lua.set_setting("hud.unlocked", "1"));
+        REQUIRE(lua.apply_layout_profile_settings(profile + "tasks.tracked.12=0\npalette=Ember\n"));
+        CHECK(lua.setting("hud.pos.GroupWindow") == "10,10");
+        CHECK(lua.setting("chat.timestamps") == "off");
+        CHECK(lua.setting("hotbar.vertical.HotButtonWnd") == "1");
+        CHECK(lua.setting("tasks.tracked.12") == "1");
+        CHECK(lua.setting("hud.unlocked") == "1");
+        CHECK(lua.setting("palette") == "Midnight");
+        lua.set_character_settings({});
+        lua.set_character_settings(character);
+        CHECK(lua.setting("hotbar.vertical.HotButtonWnd") == "1");
+        CHECK(lua.setting("tasks.tracked.12") == "1");
+    }
+    ImGui::DestroyContext(ctx);
+}
+
 TEST_CASE("Lua UI: the window layout per character, the other settings shared") {
     using hailstone::ui::lua::LuaUi;
     CHECK(LuaUi::character_setting("hud.pos.AAWindow"));

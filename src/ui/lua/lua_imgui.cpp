@@ -11,6 +11,7 @@
 #include "imgui.h"
 #include "imgui_internal.h" // stack sizes, to refuse pops and ends that ImGui would only assert on
 #include "ui/imgui_layer.h"
+#include "ui/layout_profile.h"
 #include "ui/lua/lua_draw_scope.h"
 #include "ui/lua/lua_host.h"
 #include "ui/texture_ids.h"
@@ -172,6 +173,12 @@ bool refused_to(lua_State *L, const ImGuiWindow *w) {
 bool consent_window_name(const char *name) {
 	return ImHashStr(name) == ImHashStr(kConsentWindowName);
 }
+
+ImGuiID profile_window_marker() {
+	static const ImGuiID key = ImHashStr("hailstone.LayoutProfile.PackWindowFrame");
+	return key;
+}
+
 // A refused Begin leaves nothing behind for the next window: the script's SetNextWindow* calls are dropped, so they
 // cannot move or resize the window begun next (the consent prompt, when it follows).
 void refuse_begin(bool child) {
@@ -188,7 +195,8 @@ int Begin(lua_State *L) {
 	bool hasOpen = !lua_isnoneornil(L, 2);
 	bool open = B(L, 2, true);
 	const int flags = WindowFlags(L, 3);
-	if (g_guard && !pack_code(L) && (consent_window_name(name) || refused_to(L, ImGui::FindWindowByName(name)))) {
+	const bool own_pack = pack_code(L);
+	if (g_guard && !own_pack && (consent_window_name(name) || refused_to(L, ImGui::FindWindowByName(name)))) {
 		refuse_begin(false);
 		lua_pushboolean(L, false);
 		lua_pushboolean(L, open);
@@ -200,10 +208,14 @@ int Begin(lua_State *L) {
 	apply_pending_collapse(name);
 	bool visible = ImGui::Begin(name, hasOpen ? &open : nullptr, flags);
 	style.WindowMenuButtonPosition = menuButton;
-	begun().push_back({ImGui::GetCurrentWindow(), false, ImGui::GetWindowDrawList()->_ClipRectStack.Size});
+	ImGuiWindow* window = ImGui::GetCurrentWindow();
+	begun().push_back({window, false, ImGui::GetWindowDrawList()->_ClipRectStack.Size});
+	if (own_pack) {
+		window->StateStorage.SetInt(profile_window_marker(), open && !window->Hidden ? ImGui::GetFrameCount() : -1);
+	}
 	if (g_guard && g_guardLuaFrame == ImGui::GetFrameCount() && LuaUi::drawing_window() == g_guardLuaWindow &&
-		pack_code(L))
-		guard(ImGui::GetCurrentWindow());
+		own_pack)
+		guard(window);
 	lua_pushboolean(L, visible);
 	lua_pushboolean(L, open);
 	return 2;
@@ -414,12 +426,14 @@ int SliderInt(lua_State *L) {
 // options: history = function(older) -> text, called on Up (older true) / Down to replace the text;
 // tab = function(text, shift) -> text, called on Tab (shift: Shift+Tab) with what the input holds, to replace it
 // (nil leaves it); moveToEnd = true puts the text cursor at the end (instead of selecting everything when focused
-// from code).
+// from code); colorSpans = function(text) -> {{firstByte, lastByte, {r, g, b, a}}, ...} for a hidden-label field.
+// Color ranges refer to the edited text, are sorted and disjoint, and use inclusive, 1-based UTF-8 byte positions.
 struct InputTextOptions {
 	lua_State *L;
 	int history; // stack index of the history function, 0 for none
 	int tab;     // stack index of the tab function, 0 for none
 	bool moveToEnd;
+	int colorSpans;
 };
 // The tab function (1) with the text being edited (2: the callback's data) and Shift, inside the callback's
 // protected call: pushing the text can raise (the state's memory limit), and nothing may raise across ImGui's frames.
@@ -457,6 +471,96 @@ int InputTextCallback(ImGuiInputTextCallbackData *d) {
 	}
 	return 0;
 }
+
+struct InputTextSpan {
+	size_t begin, end;
+	ImU32 color;
+};
+struct InputTextPaint {
+	std::string_view text;
+	std::vector<InputTextSpan> spans;
+};
+
+// Push the post-edit text inside the protected call, for the same reason as TabCall.
+int InputTextColorCall(lua_State *L) {
+	auto& paint = *static_cast<InputTextPaint *>(lua_touserdata(L, 2));
+	lua_settop(L, 1);
+	lua_pushlstring(L, paint.text.data(), paint.text.size());
+	lua_call(L, 1, 1);
+	if (!lua_istable(L, -1)) return 0;
+	const auto size = static_cast<lua_Integer>(paint.text.size());
+	const auto count = static_cast<lua_Integer>(std::min<lua_Unsigned>(lua_rawlen(L, -1), paint.text.size()));
+	lua_Integer previous = 0;
+	const auto boundary = [&](size_t at) { return at == paint.text.size() || (paint.text[at] & 0xC0) != 0x80; };
+	for (lua_Integer i = 1; i <= count; ++i) {
+		lua_rawgeti(L, -1, i);
+		if (lua_istable(L, -1)) {
+			lua_rawgeti(L, -1, 1);
+			lua_rawgeti(L, -2, 2);
+			const lua_Integer first = lua_tointeger(L, -2), last = lua_tointeger(L, -1);
+			lua_pop(L, 2);
+			lua_rawgeti(L, -1, 3);
+			if (first > previous && last >= first && last <= size && lua_istable(L, -1)) {
+				const auto begin = static_cast<size_t>(first - 1), end = static_cast<size_t>(last);
+				if (boundary(begin) && boundary(end)) {
+					float rgba[4];
+					for (lua_Integer channel = 1; channel <= 4; ++channel) {
+						lua_rawgeti(L, -1, channel);
+						const double value = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : 1.0;
+						rgba[channel - 1] = std::isfinite(value) ? static_cast<float>(std::clamp(value, 0.0, 1.0)) : 1.0f;
+						lua_pop(L, 1);
+					}
+					paint.spans.push_back({begin, end, ImGui::GetColorU32(ImVec4(rgba[0], rgba[1], rgba[2], rgba[3]))});
+					previous = last;
+				}
+			}
+			lua_pop(L, 1);
+		}
+		lua_pop(L, 1);
+	}
+	return 0;
+}
+
+void DrawInputTextColors(const InputTextOptions& options, std::string_view text, float scroll) {
+	if (text.empty()) return;
+	const ImRect frame(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+	InputTextPaint paint{text, {}};
+	lua_State *L = options.L;
+	lua_pushcfunction(L, InputTextColorCall);
+	lua_pushvalue(L, options.colorSpans);
+	lua_pushlightuserdata(L, &paint);
+	if (lua_pcall(L, 2, 0, 0) != LUA_OK) lua_pop(L, 1);
+
+	// Same origin and clipping as single-line InputTextEx. Snap once so splitting the text into runs keeps the
+	// native glyph positions, including with fractional font advances and horizontal scrolling.
+	const auto& style = ImGui::GetStyle();
+	ImVec2 pos(frame.Min.x + style.FramePadding.x - scroll, frame.Min.y + style.FramePadding.y);
+	ImDrawList *draw = ImGui::GetWindowDrawList();
+	const ImDrawFlags savedFlags = draw->Flags;
+	if (!(savedFlags & ImDrawFlags_TextNoPixelSnap)) pos = ImTrunc(pos);
+	draw->Flags |= ImDrawFlags_TextNoPixelSnap;
+	ImFont *font = ImGui::GetFont();
+	const float fontSize = ImGui::GetFontSize();
+	const ImU32 plain = ImGui::GetColorU32(ImGuiCol_Text);
+	const ImVec4 clip = frame.AsVec4();
+	text = text.substr(0, text.find('\n'));
+	const auto run = [&](size_t begin, size_t end, ImU32 color) {
+		if (begin == end) return;
+		const char *first = text.data() + begin, *last = text.data() + end;
+		draw->AddText(font, fontSize, pos, color, first, last, 0.0f, &clip);
+		pos.x += font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, first, last).x;
+	};
+	size_t offset = 0;
+	for (const auto& span : paint.spans) {
+		if (span.begin >= text.size()) break;
+		run(offset, span.begin, plain);
+		offset = std::min(span.end, text.size());
+		run(span.begin, offset, span.color);
+	}
+	run(offset, text.size(), plain);
+	draw->Flags = savedFlags;
+}
+
 // The buffer ImGui edits in place: the text, cut to `cap` bytes, and room up to cap with a NUL ending it inside the
 // buf_size ImGui is given (cap + 1), however long the text was.
 std::string TextBuffer(const char *cur, size_t len, int cap) {
@@ -497,7 +601,7 @@ int InputText(lua_State *L) {
 	cap = cap < 1 ? 1 : cap > 65535 ? 65535 : cap;
 	ImGuiInputTextFlags flags = I(L, 4, 0) & ~(ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_CallbackCharFilter |
 		ImGuiInputTextFlags_CallbackEdit | ImGuiInputTextFlags_CallbackCompletion);
-	InputTextOptions o{L, 0, 0, false};
+	InputTextOptions o{L, 0, 0, false, 0};
 	if (lua_istable(L, 5)) {
 		// Read raw, before the buffer exists: a metamethod lua_getfield ran could raise past its destructor.
 		unview(L, 5); // (a plugin's view of the pack's options table)
@@ -526,9 +630,41 @@ int InputText(lua_State *L) {
 		if (o.moveToEnd) {
 			flags |= ImGuiInputTextFlags_CallbackAlways;
 		}
+		lua_pushliteral(L, "colorSpans");
+		lua_rawget(L, 5);
+		constexpr ImGuiInputTextFlags unsupported = ImGuiInputTextFlags_Password | ImGuiInputTextFlags_ElideLeft |
+			static_cast<ImGuiInputTextFlags>(ImGuiInputTextFlags_Multiline);
+		if (lua_isfunction(L, -1) && label[0] == '#' && label[1] == '#' && !(flags & unsupported)) {
+			o.colorSpans = lua_gettop(L);
+		}
+		else {
+			lua_pop(L, 1);
+		}
 	}
 	std::string buf = TextBuffer(cur, len, cap);
+	const ImGuiID id = o.colorSpans ? ImGui::GetID(label) : 0;
+	const bool wasActive = id && ImGui::GetActiveID() == id;
+	if (wasActive && o.moveToEnd && !(flags & ImGuiInputTextFlags_ReadOnly)) {
+		// A link can arrive while chat already has focus. ImGui normally keeps editing its private copy.
+		auto *state = ImGui::GetInputTextState(id);
+		if (state && state->TextA.Size > 0 && std::string_view(state->TextA.Data) != buf.c_str()) {
+			state->ReloadUserBufAndMoveToEnd();
+			state->CursorFollow = true;
+		}
+	}
+	if (o.colorSpans) ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0, 0, 0, 0));
 	bool changed = ImGui::InputText(label, buf.data(), buf.size(), flags, &InputTextCallback, &o);
+	if (o.colorSpans) {
+		ImGui::PopStyleColor();
+		if (!ImGui::GetCurrentWindowRead()->SkipItems && ImGui::GetItemID() == id && ImGui::IsItemVisible()) {
+			const auto *state = ImGui::GetInputTextState(id);
+			// InputText still uses the old scroll on its deactivation frame unless Escape cancelled editing.
+			const ImGuiKey padCancel = ImGui::GetIO().ConfigNavSwapGamepadButtons ? ImGuiKey_GamepadFaceDown : ImGuiKey_GamepadFaceRight;
+			const bool cancelled = ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(padCancel);
+			const bool scrolled = state && (ImGui::IsItemActive() || (wasActive && !cancelled));
+			DrawInputTextColors(o, buf.c_str(), scrolled ? state->Scroll.x : 0.0f);
+		}
+	}
 	PushBuffer(L, std::move(buf));
 	lua_pushboolean(L, changed); // with InputTextFlags.EnterReturnsTrue: Enter was pressed
 	return 2;
@@ -1386,6 +1522,32 @@ bool pack_code(lua_State *L) {
 	const bool pack = lua_getfield(L, LUA_REGISTRYINDEX, kPackStateKey) == LUA_TBOOLEAN && lua_toboolean(L, -1);
 	lua_pop(L, 1);
 	return pack;
+}
+
+std::vector<LayoutProfileRect> snapshot_pack_window_rects(int width, int height) {
+	std::vector<LayoutProfileRect> rectangles;
+	if (!GImGui || width <= 0 || height <= 0) return rectangles;
+	const int earliest = std::max(0, ImGui::GetFrameCount() - 1);
+	const ImGuiID marker = profile_window_marker();
+	for (const ImGuiWindow* window : GImGui->Windows) {
+		if (window->StateStorage.GetInt(marker, -1) < earliest) continue;
+		if (window->Flags & (ImGuiWindowFlags_ChildWindow | ImGuiWindowFlags_Popup | ImGuiWindowFlags_Tooltip)) continue;
+		std::string_view name(window->Name);
+		name = name.substr(0, name.find("##"));
+		if (name.empty() || name == "Layout Profiles" || name == "Layout Preview") continue;
+		const auto edge = [](float start, float size, int limit) {
+			return static_cast<int>(std::round(std::clamp(static_cast<double>(start) + size, 0.0,
+			                                            static_cast<double>(limit))));
+		};
+		if (!std::isfinite(window->Pos.x) || !std::isfinite(window->Pos.y) ||
+		    !std::isfinite(window->Size.x) || !std::isfinite(window->Size.y)) continue;
+		const int x = edge(window->Pos.x, 0, width), y = edge(window->Pos.y, 0, height);
+		const int w = edge(window->Pos.x, window->Size.x, width) - x;
+		const int h = edge(window->Pos.y, window->Size.y, height) - y;
+		if (w > 0 && h > 0) rectangles.push_back({std::string(name), x, y, w, h});
+		if (rectangles.size() == kLayoutProfileMaxRects) break;
+	}
+	return rectangles;
 }
 
 bool ContextOnly(std::string_view name) {

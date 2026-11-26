@@ -802,6 +802,7 @@ PlayerMovement::Frame PlayerMovement::update(const MovementKeys& keys, float yaw
     ci.forward_sits = conn.client_option(game::ClientOption::AllowAutoStand);
     ci.loot_window_open = conn.loot_session().has_value();
     ci.auto_duck = auto_duck_.active != 0;
+    if (!at_helm_ && body.body_wet >= 5) ci.follow_swim = keys.follow_swim;
     ch.sitting = eye ? cp && cp->stand_state == net::kStandSitting : conn.sitting();
     ch.looting = eye ? cp && cp->stand_state == net::kStandLooting : st.stand_state == net::kStandLooting;
     // Feigning (115) reaches ProcessControls as itself: neither standing nor ducking, it cannot move, and the
@@ -876,7 +877,7 @@ PlayerMovement::Frame PlayerMovement::update(const MovementKeys& keys, float yaw
     // Step measures whole milliseconds since its last run; on the game clock, its step (16 or 17 ms, whatever time a
     // dropped stretch after a hitch took).
     if (last_step_ == 0) last_step_ = now - static_cast<std::uint32_t>(elapsed_ms);
-    ctl_.step(env, static_cast<float>(step_ms ? step_ms : now - last_step_), ch, hover_floor);
+    ctl_.step(env, static_cast<float>(step_ms ? step_ms : now - last_step_), ch, hover_floor, ci.follow_swim);
     if (!eye && !mount) mech::apply_drunken_motion(body, drunken_motion_);
     last_step_ = now;
 
@@ -1045,7 +1046,8 @@ PlayerMovement::Frame PlayerMovement::update(const MovementKeys& keys, float yaw
     out.wet = body.body_wet != 0;
     out.flying = body.fly_mode != mech::FlyMode::Ground;
     out.running = conn.running();
-    out.speed_run = body.speed_run;
+    // A positive reported run speed would make observers predict horizontal movement during a vertical swim.
+    out.speed_run = ci.follow_swim && ci.follow_swim->vertical_only ? 0.0f : body.speed_run;
     out.speed_heading = body.speed_heading;
     out.body_wet = body.body_wet;
     out.feet_wet = region_type(regions, body.feet);

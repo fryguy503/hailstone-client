@@ -10,6 +10,7 @@
 #include <array>
 #include <optional>
 
+#include "assets/character.h"
 #include "assets/eqg_character.h"
 #include "game/anim_layers.h"
 #include "game/animation_types.h"
@@ -172,9 +173,11 @@ namespace {
 } // namespace
 
 SpawnAnimChoice choose_spawn_animation(SpawnAnimState& st, const SpawnAnimInput& in,
-                                       const std::function<bool(std::string_view)>& has_clip, bool clip_done,
+                                       const std::function<const assets::AnimationClip*(std::string_view)>& find_clip,
+                                       bool clip_done,
                                        const std::function<int()>& roll, const std::function<int()>& rand) {
     const mech::Fpu fpu(mech::FpuPrecision::Single24);
+    auto has_clip = [&](std::string_view code) { return find_clip(code) != nullptr; };
     SpawnAnimChoice keep{st.clip, st.reverse, st.rate, st.loop, false, 100.0f, st.anim, in.follow_up};
     keep.column = st.column;
     auto start = [&](const std::string& clip, std::uint8_t anim, bool reverse, float rate, bool loop,
@@ -366,7 +369,10 @@ SpawnAnimChoice choose_spawn_animation(SpawnAnimState& st, const SpawnAnimInput&
     }
     auto has_anim = [&](AnimationType a) {
         std::string_view c = mech::old_anim_clip(num(a));
-        return !c.empty() && has_clip(c);
+        const auto* clip = c.empty() ? nullptr : find_clip(c);
+        // South Karana's classic gnoll has a one-frame walk. Let the usual walk/run replacement handle static clips.
+        const bool gait = a == AnimationType::Walk || a == AnimationType::Run;
+        return clip && (!gait || clip->frame_count > 1);
     };
     // 0x4b15b0: an animation the model lacks takes 0x4b1210's replacement (the seated ones play nothing).
     if (!has_anim(anim)) {

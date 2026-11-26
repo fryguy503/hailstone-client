@@ -294,7 +294,7 @@ TEST_CASE("An Eye's view, control and physics incarnation retire at a zone hand-
     rig.tick();
     REQUIRE(c.eye_id() == 987);
     c.set_speed_run(0.7f);
-    c.receive_world_packet_for_test(net::encode(net::ZoneServerInfo{"127.0.0.1", 9000}));
+    net::GameConnectionTestAccess::zone_hand_off(c, 9000);
     CHECK(c.eye_id() == 0);
     CHECK(c.controlled_id() == 0);
     CHECK(c.world().view_id == 0);

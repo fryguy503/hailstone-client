@@ -109,8 +109,11 @@ struct ScriptHost::Impl {
         return env.now_ms ? env.now_ms()
                           : std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count();
     }
-    void say(const std::string& text) const {
-        if (env.print) env.print(text);
+    // `subject` names the script a zoning notice is about; `stop` marks one that stops it (ScriptEnv::zone_notice).
+    void say(const std::string& text, bool zone_policy = false, const std::string& subject = {},
+             bool stop = false) const {
+        if (zone_policy && env.zone_notice) env.zone_notice(text, subject, stop);
+        else if (env.print) env.print(text);
     }
     Script* find(std::string_view name) const;
     // Where scripts are looked for: the server's scripts/ (set_server_dir) first, then env.dirs.
@@ -128,7 +131,7 @@ struct ScriptHost::Impl {
     // the player's own. refuse_control says so in the chat window when it may not.
     bool may_control(const Script& s) const;
     bool refuse_control(const Script& s) const;
-    void end(Script& s, const std::string& why);
+    void end(Script& s, const std::string& why, bool zone_policy = false);
     std::optional<fs::path> resolve(const std::string& name) const;
     void lua_command(std::string_view args);
     // Closes and removes the stopped scripts and socials none of whose code runs; not while pulse() or imgui()
@@ -154,9 +157,9 @@ struct ScriptHost::Impl {
     fs::path autorun_file;
     std::vector<std::string> autorun;
     // Starts those of `names` that are not running and the rules allow, quietly (not asked for by a command).
-    void start_allowed(const std::vector<std::string>& names);
+    void start_allowed(const std::vector<std::string>& names, bool zone_policy);
     std::vector<ManagedScript> managed;
-    void start_managed();
+    void start_managed(bool zone_policy = false);
     // found()'s hashes, by file, kept while the file's size and time stay the same (the window asks each frame).
     struct HashEntry {
         std::uintmax_t size = 0;
@@ -165,6 +168,16 @@ struct ScriptHost::Impl {
     };
     mutable std::map<fs::path, HashEntry> hashes;
     std::optional<Sha256Digest> file_hash(const fs::path& file) const;
+
+    // What each config directory holds, for mq.pickle's limits (l_write_config), by canonical directory: counted
+    // once (a walk of the directory, stopping a little past kMaxConfigFiles), then kept by the writes themselves, so
+    // a write does not walk the directory again. open_state forgets the counts: files the player added or removed
+    // meanwhile count from a script's start.
+    struct ConfigUsage {
+        std::size_t files = 0;
+        std::uintmax_t bytes = 0;
+    };
+    std::map<fs::path, ConfigUsage> config_usage;
 
     // The Lua socials' states (press_button), by social.
     std::map<int, std::unique_ptr<Script>> buttons;

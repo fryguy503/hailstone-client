@@ -19,7 +19,9 @@ TEST_CASE("PfsArchive rejects data that is not PFS") {
 }
 
 TEST_CASE("PfsArchive reads a classic zone archive" * doctest::skip(!hailstone::test::game_dir())) {
-    auto archive = PfsArchive::open(hailstone::test::game_dir()->find("qeynos2.s3d").value());
+    const auto path = hailstone::test::game_file("qeynos2.s3d");
+    if (!path) return;
+    auto archive = PfsArchive::open(*path);
     CHECK(archive.contains("qeynos2.wld"));
     CHECK(archive.contains("QEYNOS2.WLD"));
     CHECK(archive.contains("objects.wld"));
@@ -33,16 +35,20 @@ TEST_CASE("PfsArchive reads a classic zone archive" * doctest::skip(!hailstone::
 
 TEST_CASE("pfs_name_crc names every file of a classic archive" * doctest::skip(!hailstone::test::game_dir())) {
     // qeynos2.s3d has 152 directory entries: 151 files plus the name table.
-    auto archive = PfsArchive::open(hailstone::test::game_dir()->find("qeynos2.s3d").value());
+    const auto path = hailstone::test::game_file("qeynos2.s3d");
+    if (!path) return;
+    auto archive = PfsArchive::open(*path);
     CHECK(archive.names().size() == 151);
 }
 
 TEST_CASE("PfsArchive handles archives with stale names and a 0xffffffff name table" *
           doctest::skip(!hailstone::test::game_dir())) {
     auto gd = hailstone::test::game_dir();
-    auto velketor = PfsArchive::open(gd->find("velketor_chr.s3d").value());
-    CHECK_FALSE(velketor.contains("kael_chr.wld"));
-    CHECK(velketor.contains("velketor_chr.wld"));
+    if (const auto path = hailstone::test::game_file("velketor_chr.s3d")) {
+        auto velketor = PfsArchive::open(*path);
+        CHECK_FALSE(velketor.contains("kael_chr.wld"));
+        CHECK(velketor.contains("velketor_chr.wld"));
+    }
     if (const auto special = gd->find("gequip_nms.s3d")) {
         auto gequip = PfsArchive::open(*special);
         CHECK(gequip.contains("bat04.dds"));
@@ -233,6 +239,29 @@ void write_pfs_fixture(const std::filesystem::path& path, const std::vector<std:
     REQUIRE(out.good());
 }
 } // namespace
+
+TEST_CASE("read_file reads a regular file whole, and refuses a directory, a missing file and one past its cap") {
+    hailstone::test::ScratchDir dir("read_file");
+    const auto file = dir.path() / "five.bin";
+    {
+        std::ofstream out(file, std::ios::binary);
+        out << "12345";
+    }
+    auto bytes = hailstone::read_file(file);
+    REQUIRE(bytes);
+    CHECK(bytes->size() == 5);
+    CHECK(std::to_integer<char>((*bytes)[4]) == '5');
+    CHECK(hailstone::read_file(file, 5));
+    CHECK_FALSE(hailstone::read_file(file, 4));
+    CHECK_FALSE(hailstone::read_file(dir.path()));
+    CHECK_FALSE(hailstone::read_file(dir.path() / "missing.bin"));
+    std::filesystem::create_directory(dir.path() / "folder.s3d");
+    CHECK_THROWS_AS(PfsArchive::open(dir.path() / "folder.s3d", PfsArchive::Storage::Heap), std::runtime_error);
+    std::ofstream(dir.path() / "empty.bin", std::ios::binary).close();
+    auto empty = hailstone::read_file(dir.path() / "empty.bin");
+    REQUIRE(empty);
+    CHECK(empty->empty());
+}
 
 TEST_CASE("PfsArchive mapped snapshots match private parsing and retain their backing") {
     using namespace hailstone;

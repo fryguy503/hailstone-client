@@ -32,8 +32,9 @@
 #include "plugin/policy.h"
 #include "plugin/world_geometry.h"
 
+namespace hailstone { class Config; }
 namespace hailstone::net { class GameConnection; }
-namespace hailstone::mq { class ScriptHost; class Registry; struct Context; }
+namespace hailstone::mq { class ScriptHost; class Registry; class MapFilters; struct Context; }
 namespace hailstone::game { class ExtensionChain; class NameplateCanvasRegistry; struct SpellData; }
 namespace hailstone::plugin { class UiBridge; class WebAccess; }
 namespace hailstone::nav { class NavControl; }
@@ -43,9 +44,12 @@ namespace hailstone::app {
 struct AutomationEnv {
     std::filesystem::path install_dir; // the folder of the binary (platform::install_dir())
     std::filesystem::path data_dir;    // the folder Hailstone writes to (platform::data_dir())
+    Config* config = nullptr;    // shared client settings, including the global map filters
     std::string autoload = "*";       // plugins.autoload
     std::string script_autoload;      // scripts.autoload: the player's scripts started when the rules allow them
     std::function<net::GameConnection*()> connection;
+    std::function<std::optional<plugin::WorldPlacementScene>()> world_placement_scene;
+    std::function<bool()> world_placement_input_allowed;
     std::function<std::string()> server_name;
     std::function<std::string()> server_profile; // the saved server's id (servers/<id>/), "" for a test login
     std::function<std::string()> profile_name;   // the saved server's name as the player knows it ("" none)
@@ -65,6 +69,8 @@ struct AutomationEnv {
     std::function<void(int bar, int page)> set_hot_bar_page;
     // The player's abilities for Me.AbilityReady and the rest (mq::Context::ability); null: none known.
     std::function<std::optional<mq::AbilityState>(mq::AbilityKind, std::string_view)> ability;
+    // Whether the game's window has the keyboard focus (EverQuest.Foreground); null: false.
+    std::function<bool()> foreground;
     // Line of sight for Spawn.LineOfSight and LineOfSight[...] (mq::Context::can_see, line_of_sight); null: none.
     // The player's autoskill list with each ability's name (hailstone.autoskill_list); null: none.
     std::function<std::vector<std::pair<game::AutoskillRule, std::string>>()> autoskill_list;
@@ -93,8 +99,11 @@ public:
     plugin::UiBridge& plugin_ui();
     // The script host (the Lua socials run there too) and MQ's TLOs and types.
     mq::ScriptHost& scripts();
+    void set_zone_autorun_file(const std::filesystem::path& file);
     const mq::Registry& registry() const;
     const mq::Context& context(); // what the TLOs read now
+    mq::MapFilters& map_filters();
+    const mq::MapFilters& map_filters() const;
     // An owner's capabilities by its tag (plugin::UiBridge::owner_tag): "plugin:<name>" a compiled plugin's while it
     // is loaded, "script:<name>" a running Lua plugin's; 0 otherwise (a bare name too). Its windows in the UI pack act
     // with them (LuaUi::caller_tag).
@@ -135,6 +144,11 @@ public:
     void world_recorded(std::size_t batch, std::uint32_t vertices);
     void world_finish(bool submitted, bool presented);
     void world_unavailable();
+    bool world_placement_aiming() const;
+    void world_placement_update(std::optional<plugin::WorldPlacementPoint> ground, bool pressed, bool released);
+    void world_placement_cancel();
+    void world_placement_player_cancel(); // NativePlugins::world_placement_player_cancel
+    void world_placement_player_input();
     void shutdown();
 
     struct Impl;

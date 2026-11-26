@@ -667,7 +667,11 @@ TEST_CASE("NPC journal: OP_SpecialMesg lines kept while logging, the lists, a ca
     CHECK(t.api->click_list("JournalNPCWnd", "NPCList", 0, 0));
     REQUIRE(t.api->list_texts("JournalNPCWnd", "DialogList").size() == 1);
     CHECK(t.api->click_list("JournalNPCWnd", "DialogList", 0, 0));
-    CHECK(t.api->child_text("JournalNPCWnd", "Text") == "Guard Gehnus says 'Hail, traveler.'");
+    // The line is eqstr 554's, which a live install words "%1 says, '%T2'".
+    const std::string said = t.api->child_text("JournalNPCWnd", "Text").value_or("");
+    CHECK(said.starts_with("Guard Gehnus says"));
+    CHECK(said.ends_with("'Hail, traveler.'"));
+    if (test::pinned_values("eqstr 554's wording")) CHECK(said == "Guard Gehnus says 'Hail, traveler.'");
     // a category from the category window, given to the entry
     t.api->show("JournalCatWnd", true);
     CHECK(t.api->set_child_text("JournalCatWnd", "NameInput", "Quests"));
