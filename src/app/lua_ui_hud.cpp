@@ -18,6 +18,7 @@
 #include "game/combat.h"
 #include "game/combat_ability_menu.h"
 #include "app/lua_ui_hotbar.h"
+#include "app/ui_input.h"
 #include "ui/ui_ini.h"
 #include "game/hot_button_menu.h"
 #include "game/hot_button_sets.h"
@@ -189,13 +190,13 @@ bool open_member_roles(UiHost& host, const std::string& name, float x, float y) 
 }
 
 ImVec2 role_menu_position(const UiHost& host) {
-    ImVec2 pos = ImGui::GetMousePos();
+    ImVec2 pos = ui_mouse_pos();
     // Name and icon drawing need not submit an item; an earlier item may even belong to a tooltip.
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && ImGui::IsMousePosValid(&pos)) return pos;
+    if (ui_mouse_pos_valid(&pos) && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) return pos; // (no ImGui: no mouse)
     const auto& r = host.click_rect;
     if (r[2] >= 0) return ImVec2(r[2], (r[1] + r[3]) / 2);
-    if (!ImGui::IsMousePosValid(&pos)) {
-        const auto& size = ImGui::GetIO().DisplaySize;
+    if (!ui_mouse_pos_valid(&pos)) {
+        const auto& size = ui_display_size();
         pos = ImVec2(size.x / 2, size.y / 2);
     }
     return pos;
@@ -627,7 +628,7 @@ public:
                 c.forget_gem(g);
             } else if (auto rows = spell_select_rows(host, g); !rows.empty()) {
                 const auto& r = host.click_rect;
-                const ImVec2 mp = ImGui::GetMousePos();
+                const ImVec2 mp = ui_mouse_pos();
                 host.open_menu(r[2] >= 0 ? r[2] : mp.x, r[2] >= 0 ? (r[1] + r[3]) / 2 : mp.y, std::move(rows));
             }
         } else if (host.cursor_spell) {
@@ -831,7 +832,7 @@ void open_hot_button_menu(UiHost& host, int bar, int button, float x, float y) {
                 const net::Item* it = at ? host.conn->inventory().at(*at) : nullptr;
                 if (it && host.inspect_item) host.inspect_item(*it);
                 else if (!it && r.type == game::HotButtonType::KronoSlot)
-                    host.conn->request_item_link(net::kKronoItemId, "Krono", 0, ImGui::GetIO().KeyShift);
+                    host.conn->request_item_link(net::kKronoItemId, "Krono", 0, ui_keys().shift);
             }
         });
     if (!locked && shown.clear) add(text(game::kStrHbClear), [save] { save(game::HotButton{}); }); // 0x550c50
@@ -1002,8 +1003,8 @@ public:
         case A::Menu: {
             // CHotButton_ShowContextMenu: at the mouse (a pad's slot: where hs.ClickHotButton put it; no mouse: the
             // screen's centre)
-            ImVec2 mp = ImGui::GetMousePos();
-            if (!ImGui::IsMousePosValid(&mp)) mp = ImVec2(ImGui::GetIO().DisplaySize.x / 2, ImGui::GetIO().DisplaySize.y / 2);
+            ImVec2 mp = ui_mouse_pos();
+            if (!ui_mouse_pos_valid(&mp)) mp = ImVec2(ui_display_size().x / 2, ui_display_size().y / 2);
             const auto& r = host.click_rect;
             open_hot_button_menu(host, bar_, n - 1, r[0] >= 0 ? r[0] : mp.x, r[0] >= 0 ? r[1] : mp.y);
             break;

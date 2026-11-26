@@ -12,6 +12,7 @@ local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
 local AS = dofile("lib/assign.lua")
+local vitals = dofile("lib/vitals.lua")
 local C = T.C
 
 local P = {}
@@ -56,11 +57,14 @@ end
 function P.status(x0, leftW, name)
   local wx, wy = ui.GetWindowPos()
   local frac = API.character.Gauge(16)
-  local pct = API.character.Label(69) or ""
+  local mode = vitals.petMode()
+  local readout = name and vitals.text(mode, 16) or ""
   local clicked, _, bx0, by0, bx1, by1 = T.button("##pethp", "", leftW, T.px(92), { disabled = name == nil }, pad)
   T.font(24)
-  T.textIn(bx0 + T.px(18), by0 + T.px(6), bx1 - T.px(18), by0 + T.px(46), name or "No Pet", C.text, 0)
-  T.textIn(bx0 + T.px(18), by0 + T.px(6), bx1 - T.px(18), by0 + T.px(46), pct ~= "" and (pct .. "%") or "", C.dim, 1)
+  local readoutW = ui.CalcTextSize(readout)
+  local label = T.fit(name or "No Pet", bx1 - bx0 - T.px(44) - readoutW)
+  T.textIn(bx0 + T.px(18), by0 + T.px(6), bx1 - T.px(18), by0 + T.px(46), label, C.text, 0)
+  T.textIn(bx0 + T.px(18), by0 + T.px(6), bx1 - T.px(18), by0 + T.px(46), readout, C.dim, 1)
   T.unfont()
   if name then T.bar(bx0 + T.px(18), by1 - T.px(34), bx1 - T.px(18), by1 - T.px(16), frac, C.good) end
   if clicked then API.windows.ClickChild(PW, "PetHPGauge", "left") end -- targets the pet
@@ -77,7 +81,7 @@ function P.status(x0, leftW, name)
   if hasTarget and tfrac then T.bar(x0 + leftW * 0.5, ty + T.px(40), x0 + leftW - T.px(18), ty + T.px(58), tfrac, C.hp) end
   -- the other pets (Pet2HPGauge / Pet3HPGauge: shown only while the server has such a pet)
   local oy = ty + T.px(80)
-  for _, id in ipairs({ "Pet2HPGauge", "Pet3HPGauge" }) do
+  for i, id in ipairs({ "Pet2HPGauge", "Pet3HPGauge" }) do
     if API.windows.ChildShown(PW, id) == true then
       local ofrac, oname = API.windows.ChildGauge(PW, id)
       if ofrac then
@@ -85,10 +89,9 @@ function P.status(x0, leftW, name)
         local oc, _, ox0, oy0, ox1, oy1 = T.button("##" .. id, "", leftW, T.px(56), {}, pad)
         T.font(20)
         T.textIn(ox0 + T.px(18), oy0, ox0 + leftW * 0.45, oy1, T.fit(oname or "", leftW * 0.4), C.text, 0)
-        T.textIn(ox0 + leftW * 0.45, oy0, ox0 + leftW * 0.5 - T.px(8), oy1,
-          math.floor(ofrac * 100 + 0.5) .. "%", C.dim, 1)
+        T.bar(ox0 + leftW * 0.45, oy0 + T.px(17), ox1 - T.px(18), oy0 + T.px(39), ofrac, C.good,
+          nil, vitals.text(mode, 16, i + 1))
         T.unfont()
-        T.bar(ox0 + leftW * 0.5, oy0 + T.px(20), ox1 - T.px(18), oy0 + T.px(36), ofrac, C.good)
         if oc then API.windows.ClickChild(PW, id, "left") end -- targets that pet
         oy = oy1
       end

@@ -196,8 +196,17 @@ A voice is busy while the mixer plays it.
 Two global 2D emitters are created disabled: rain (wave 159 `rainloop.wav`) and wind (wave 158 `wind_lp1.wav`). Each
 has gain 0.5, looping, no delay, no range limit, fading in over 2000 ms and out over 3000 ms, pool 0.
 
-Rain is enabled while raining (weather kind 0) and wind while windy (kind 1, snow), neither indoors. An install may
-ship `sounds\rainloop.wav` and `wind_lp1.wav` as 80-byte files without samples, so nothing is heard.
+Rain is enabled while raining (weather kind 0) and wind while windy (kind 1, snow), neither indoors. A zero-intensity
+`OP_Weather` stops the active weather kind, including when EQEmu sends an all-zero clear packet during snow. That is a
+deliberate change to RoF2, which leaves the wind loop playing after such a clear (docs/graphics.md "Weather"). Repeated
+stop messages preserve the fade in progress. Weather keeps updating in background and minimised windows so the loops
+finish fading. The emitter fades also apply to listener changes within a zone.
+
+Leaving a zone, including when camping to character select, stops both loops immediately and clears the zone's weather
+state. The original's CEverQuest_ClearZoneWorldState @0x4939b0 calls Weather_StopEffect, EmitterSetRaining(0) and
+EmitterSetWind(0), so its emitters fade out over their 3000 ms release. Hailstone cuts the loops at once, during the
+load screen, as a deliberate presentation choice. An install may ship `sounds\rainloop.wav` and `wind_lp1.wav` as
+80-byte files without samples, so nothing is heard.
 
 ## Which sound for which event
 
@@ -372,9 +381,9 @@ The synthesiser is TinySoundFont with `synthusr.sf2`, so it will not sound ident
    - `pet_footsteps`: the same animations of an NPC spawn with an owner (`pet_owner_id` set); `other_footsteps`: of
      every other spawn. A creature whose walk sound is a loop of its own (`AnimationSounds::loop_is_step`) has that loop
      at the same volume; its ambient loop is not touched.
-   - `open_bag`: the open wave (0x86 or 0x91) of a bag in a carried slot; `open_bank`: of a bag in a bank or shared
+   - `open_bag`: the opening and closing sounds of a bag in a carried slot; `open_bank`: of a bag in a bank or shared
      bank slot. No sound for the bank window itself opening is known (a quick search of the
-     decompiled client found none, docs/unknowns.md), so the bank volume is that of its bags. Closing a bag is not covered.
+     decompiled client found none, docs/unknowns.md), so the bank volume is that of its bags.
    - `money`: wave 0x8a (the cash register: merchant, trader, barter, loot, split and coin moves). The quest reward's
      coin sound (0x8d) is not.
    - `thunder`: the storm's thunder (0x8f, 0x90). The "struck down" thunder of a GM kill is not.

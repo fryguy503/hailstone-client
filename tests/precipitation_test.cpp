@@ -209,3 +209,37 @@ TEST_CASE("precipitation: Weather_StartEffect drives the field: kind, wind, and 
     CHECK(w.particles().kind() == 0);
     CHECK(w.particles().active().empty());
 }
+
+TEST_CASE("precipitation: leaving a zone drops its weather but keeps the particle definitions") {
+    Weather w;
+    w.set_precipitation_definitions(defs());
+    const auto random = [] { return std::int32_t{50}; };
+    w.handle_message(0, 20);
+    for (int i = 0; i <= 66; ++i) w.update(i * 0.02, true, random);
+    w.update_particles(frame(0.0f, 0.0f));
+    REQUIRE(w.raining());
+    REQUIRE(w.lightning());
+    REQUIRE(w.thunder() != 0);
+    REQUIRE_FALSE(w.particles().active().empty());
+
+    w.handle_message(1, 20); // still pending when the old zone is unloaded
+    w.reset();
+    CHECK(w.kind() == WeatherKind::None);
+    CHECK(w.precipitation() == 0.0f);
+    CHECK_FALSE(w.raining());
+    CHECK_FALSE(w.windy());
+    CHECK_FALSE(w.lightning());
+    CHECK(w.thunder() == 0);
+    CHECK(w.message() == 0);
+    CHECK(w.particles().active().empty());
+    CHECK(w.particles().cached_count() == 0);
+    w.update(5.0, true, random);
+    CHECK(w.kind() == WeatherKind::None);
+
+    w.handle_message(1, 20);
+    for (int i = 0; i <= 65; ++i) w.update(6.0 + i * 0.02, true, random);
+    w.update_particles(frame(0.0f, 0.0f));
+    CHECK(w.kind() == WeatherKind::Snow);
+    CHECK(w.windy());
+    CHECK_FALSE(w.particles().active().empty());
+}

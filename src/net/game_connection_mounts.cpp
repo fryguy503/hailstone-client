@@ -19,10 +19,9 @@ constexpr std::int32_t kSpaMount = 113; // SPA 0x71: summon mount
 constexpr std::uint8_t kMountJumpAction = 0x14; // DoMainLoop @0x53eb73: the word 0xa14
 constexpr std::uint8_t kMountJumpSpeed = 0x0a;
 
-// Without the app's answers: the Luclin models count as loaded, every mount has its dag and there is no room test.
+// Without the app's answers, every mount has its dag and there is no room test.
 class DefaultMountQueries final : public game::MountQueries {
 public:
-    bool new_models_loaded() override { return true; }
     bool mount_point(const game::Spawn&, const game::Spawn&) override { return true; }
     bool can_i_fit_here() override { return false; }
     double room_above() override { return 0.0; }

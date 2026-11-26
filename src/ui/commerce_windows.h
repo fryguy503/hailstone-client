@@ -57,7 +57,7 @@ struct CommerceWindowsActions {
     std::optional<std::pair<std::uint32_t, std::uint32_t>> buy;  // merchant slot, quantity
     std::optional<std::pair<net::ItemSlot, std::uint32_t>> sell; // inventory slot, quantity
     bool close_merchant = false;
-    bool trade_drop = false;                                     // drop the cursor item into the trade
+    std::optional<std::int16_t> trade_drop_slot;                 // clicked slot in the offer
     bool trade_drop_coin = false;
     std::optional<std::pair<int, std::uint32_t>> trade_coin;     // coin type, amount
     bool trade_accept = false;

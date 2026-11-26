@@ -20,6 +20,10 @@ struct Pcm {
     std::size_t frames() const { return channels ? samples.size() / channels : 0; }
 };
 
+// A sine tone, mono at `rate`: `ms` long, its start and end faded over `fade_ms` (no click), peaking at `amplitude`.
+// MQ's /beep with no sound is Windows' Beep(0x500, 250): 1280 Hz for 250 ms (app: the Beep sound "Tone").
+Pcm make_tone(std::uint32_t rate, double hz, std::uint32_t ms, std::uint32_t fade_ms, float amplitude);
+
 // nullopt for a file that is not a WAV dr_wav can read, or has more than two channels.
 std::optional<Pcm> decode_wav(std::span<const std::byte> data);
 std::optional<Pcm> decode_mp3(std::span<const std::byte> data);

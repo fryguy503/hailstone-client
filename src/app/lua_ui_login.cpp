@@ -15,6 +15,7 @@
 
 #include "app/customization_actor.h"
 #include "app/lua_ui_windows.h"
+#include "app/ui_input.h"
 #include "game/char_create_look.h"
 #include "game/eq_names.h"
 #include "game/zone_names.h"
@@ -37,7 +38,7 @@ public:
     bool shown(UiHost& host) override {
         bool now = host.server_select != nullptr;
         if (now && !was_shown_) { // the full-screen 640 x 480 page, centred
-            ImVec2 ds = ImGui::GetIO().DisplaySize;
+            ImVec2 ds = ui_display_size();
             move_ = std::array<int, 2>{(static_cast<int>(ds.x) - 640) / 2, (static_cast<int>(ds.y) - 480) / 2};
         }
         was_shown_ = now;
@@ -360,7 +361,7 @@ private:
         if (!races_.empty()) set_race(races_.front());
         dress(host, Change::Race);
         if (race_) help(host, 8, race_, game::race_name(race_));
-        ImVec2 ds = ImGui::GetIO().DisplaySize; // the 800 x 600 page, centred
+        ImVec2 ds = ui_display_size(); // the 800 x 600 page, centred
         move_ = std::array<int, 2>{(static_cast<int>(ds.x) - 800) / 2, (static_cast<int>(ds.y) - 600) / 2};
     }
     // The model player takes the window's race, gender and class (CharSelect_SwitchPlayerModel), and its look

@@ -1,10 +1,14 @@
-// MacroQuest's commands that act for the player (GameConnection::removelev_command, removeaura_command and
-// memspell_command; the app registers them with /makemevisible and /click): against the mock server.
+// MacroQuest's commands that act for the player (GameConnection::removelev_command, removeaura_command,
+// removebuff_command and memspell_command; the app registers them with /makemevisible and /click): against the
+// mock server.
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cstddef>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "mock_server/harness.h"
@@ -56,6 +60,21 @@ void make_caster(net::GameConnection& c) {
     auto profile = *c.profile();
     profile.class_ = 2;
     c.set_profile_for_test(profile);
+}
+
+// The last OP_BuffRemoveRequest the server had: buff slot, entity.
+std::pair<std::uint32_t, std::uint32_t> last_buff_remove(const std::vector<net::AppPacket>& log) {
+    const auto it = std::find_if(log.rbegin(), log.rend(), [](const net::AppPacket& p) {
+        return p.opcode == net::to_wire(net::Op::BuffRemoveRequest);
+    });
+    REQUIRE(it != log.rend());
+    REQUIRE(it->data.size() >= 8);
+    auto u32 = [&](std::size_t at) {
+        std::uint32_t v = 0;
+        for (std::size_t i = 0; i < 4; ++i) v |= std::to_integer<std::uint32_t>(it->data[at + i]) << (8 * i);
+        return v;
+    };
+    return {u32(0), u32(4)};
 }
 
 } // namespace
@@ -152,4 +171,79 @@ TEST_CASE("player commands: /memspell's unquoted name is the rest of the line") 
     A::spells(c).book[5] = 3010;
     c.memspell_command("1 Test Armor");
     CHECK(c.memorizing_set());
+}
+
+TEST_CASE("player commands: /removebuff clicks off the player's first buff whose name matches") {
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    auto& c = rig.conn;
+    c.set_spell_table_for_test(test_spells());
+    auto& sp = A::spells(c);
+    sp.buffs[3].spell = 3010; // Test Armor
+    sp.buffs[3].tics = 10;
+    sp.buffs[45].spell = 3009; // Test Levitate, a song slot
+    sp.buffs[45].tics = 10;
+    auto& log = rig.server.zone_log;
+    const int before = MockEqServer::count(log, net::Op::BuffRemoveRequest);
+    // No match, an exact name that is only a part, nothing named: nothing sent.
+    c.removebuff_command("Spirit of Wolf");
+    c.removebuff_command("=Test");
+    c.removebuff_command("");
+    c.removebuff_command("-pet test"); // no pet
+    rig.run_for(std::chrono::milliseconds(50));
+    CHECK(MockEqServer::count(log, net::Op::BuffRemoveRequest) == before);
+    // Any part, any case: the first match only.
+    c.removebuff_command("test");
+    REQUIRE(rig.until([&] { return MockEqServer::count(log, net::Op::BuffRemoveRequest) == before + 1; }));
+    CHECK(last_buff_remove(log) == std::pair{3u, c.world().player_id});
+    rig.run_for(std::chrono::milliseconds(50));
+    CHECK(MockEqServer::count(log, net::Op::BuffRemoveRequest) == before + 1);
+    // A song, by its whole name; quoted.
+    c.removebuff_command("\"=test levitate\"");
+    REQUIRE(rig.until([&] { return MockEqServer::count(log, net::Op::BuffRemoveRequest) == before + 2; }));
+    CHECK(last_buff_remove(log) == std::pair{45u, c.world().player_id});
+}
+
+TEST_CASE("player commands: /removebuff -pet and -both click off the focused pet's buff") {
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    auto& c = rig.conn;
+    c.set_spell_table_for_test(test_spells());
+    auto pet = make_spawn("Test Pet", 104, 1, 36, -280.0f, -148.0f, 3.5f);
+    pet.is_pet = true;
+    pet.pet_owner_id = c.world().player_id;
+    rig.server.add_spawn(pet);
+    REQUIRE(rig.until([&] { return c.pets().focused == pet.spawn_id; }));
+    auto& pet_buffs = A::pet_buffs(c);
+    game::BuffSlot armor;
+    armor.spell = 3010;
+    armor.tics = 10;
+    game::BuffSlot lev = armor;
+    lev.spell = 3009;
+    pet_buffs = {{9, armor}, {4, lev}};
+    auto& sp = A::spells(c);
+    sp.buffs[0] = armor;
+    auto& log = rig.server.zone_log;
+    const int before = MockEqServer::count(log, net::Op::BuffRemoveRequest);
+    // The pet's only: its window's first match, by slot.
+    c.removebuff_command("-pet test");
+    REQUIRE(rig.until([&] { return MockEqServer::count(log, net::Op::BuffRemoveRequest) == before + 1; }));
+    CHECK(last_buff_remove(log) == std::pair{4u, pet.spawn_id});
+    rig.run_for(std::chrono::milliseconds(50));
+    CHECK(MockEqServer::count(log, net::Op::BuffRemoveRequest) == before + 1);
+    // Both: the pet's, then the player's.
+    c.removebuff_command("-both Test Armor");
+    REQUIRE(rig.until([&] { return MockEqServer::count(log, net::Op::BuffRemoveRequest) == before + 3; }));
+    CHECK(last_buff_remove(log) == std::pair{0u, c.world().player_id});
+    // /removepetbuff: the pet's first match only, never the player's (E3's HUD sends it).
+    c.removepetbuff_command("=test armor");
+    REQUIRE(rig.until([&] { return MockEqServer::count(log, net::Op::BuffRemoveRequest) == before + 4; }));
+    CHECK(last_buff_remove(log) == std::pair{9u, pet.spawn_id});
+    rig.run_for(std::chrono::milliseconds(50));
+    CHECK(MockEqServer::count(log, net::Op::BuffRemoveRequest) == before + 4);
+    // Nothing named, or no pet buff of that name: nothing sent.
+    c.removepetbuff_command("");
+    c.removepetbuff_command("Spirit of Wolf");
+    rig.run_for(std::chrono::milliseconds(50));
+    CHECK(MockEqServer::count(log, net::Op::BuffRemoveRequest) == before + 4);
 }

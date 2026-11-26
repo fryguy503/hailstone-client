@@ -10,13 +10,16 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include "core/ascii_case.h"
 #include "core/sha256.h"
 #include "core/version.h"
 
@@ -63,17 +66,51 @@ std::uint32_t command_caps(std::string_view line, const game::EqStrings* strings
 // thread a plugin started) caller_caps() is 0, caller_name() "another thread", and a CallerScope does nothing.
 std::uint32_t caller_caps();
 std::string_view caller_name(); // "" for the player
+
+// A server TLO grant can be used only from code loaded from a verified installed add-on file. Runtime owners
+// keep the proof alive. Deferrals hold a weak reference so unloading or invalidating the code revokes it.
+// A new policy (Policy::set, set_ceilings) leaves every proof without an identity until its owner re-verifies
+// its file and renews it: renewing keeps the same object, so the work it deferred (a /timed line, a queued
+// event) uses the grant the new policy gives, if any. An owner whose file no longer verifies revokes it instead.
+class VerifiedTloCaller {
+public:
+    std::string_view identity() const { return revoked_ || generation_.expired() ? std::string_view{} : source_; }
+    bool same_addon(const VerifiedTloCaller& other) const { return source_ == other.source_; }
+    void revoke() const { revoked_ = true; }
+    // Takes `current`'s generation: a proof Policy::verified_tlo_caller has just made for the same add-on. Only
+    // the Policy makes proofs, so this cannot lend an identity; a revoked proof stays revoked.
+    void renew(const VerifiedTloCaller& current) const {
+        if (same_addon(current)) generation_ = current.generation_;
+    }
+
+private:
+    friend class Policy;
+    VerifiedTloCaller(std::string_view source, const std::shared_ptr<const void>& generation)
+        : source_(source), generation_(generation) {}
+    std::string source_;
+    mutable std::weak_ptr<const void> generation_;
+    mutable bool revoked_ = false;
+};
+using TloCaller = std::shared_ptr<const VerifiedTloCaller>;
+using WeakTloCaller = std::weak_ptr<const VerifiedTloCaller>;
+// nullopt means no code is on the stack (player); an empty weak reference means code with no grant.
+std::optional<WeakTloCaller> caller_tlo_proof();
+bool may_inherit_tlo_proof(const TloCaller& proof);
+
 class CallerScope {
 public:
-    CallerScope(std::uint32_t caps, std::string_view name);
+    CallerScope(std::uint32_t caps, std::string_view name, WeakTloCaller tlo = {});
     ~CallerScope();
     CallerScope(const CallerScope&) = delete;
     CallerScope& operator=(const CallerScope&) = delete;
 
 private:
+    friend std::optional<WeakTloCaller> caller_tlo_proof();
     bool active_ = false;
     std::uint32_t prev_caps_ = 0;
     std::string prev_name_;
+    const CallerScope* prev_tlo_scope_ = nullptr;
+    WeakTloCaller tlo_;
 };
 // While it lives, the code runs as the client itself: every capability, no add-on's name ("" is the player's).
 // For a client pass that runs an add-on's retained callback while another add-on's code is what called in (the map
@@ -199,6 +236,23 @@ struct CommandRules {
     }
 };
 
+// Advisory client policy for named TLO lookups. The default preserves existing behavior.
+struct TloRules {
+    struct NameLess {
+        using is_transparent = void;
+        bool operator()(std::string_view a, std::string_view b) const { return icompare(a, b) < 0; }
+    };
+    bool default_allow = true;
+    std::set<std::string, NameLess> allow, block;
+    std::map<std::string, std::set<std::string, NameLess>, NameLess> addon_allow;
+
+    bool allowed(std::string_view name, std::string_view verified_addon = {}) const {
+        if (!block.contains(name) && (default_allow || allow.contains(name))) return true;
+        const auto grant = addon_allow.find(verified_addon);
+        return !verified_addon.empty() && grant != addon_allow.end() && grant->second.contains(name);
+    }
+};
+
 // The server's rules: its hailstone.cfg, or none.
 struct Rules {
     bool configured = false; // false: no hailstone.cfg, no rules
@@ -233,6 +287,7 @@ struct Rules {
     std::vector<std::string> suggest_addons;
     AddonRules addons;
     CommandRules commands;
+    TloRules tlos;
     std::vector<ServerFile> server_files; // the server's scripts and plugins
     // Custom and formerly custom sections for hailstone.server_rule. Case and inline comments follow the
     // existing script lookup behavior.
@@ -261,6 +316,7 @@ struct Ceiling {
     std::string addon_name{}, addon_source{};
     bool verified = true; // false: edited/extra bytes retain source identity only for opt-in blocking
     bool entry_point = true; // scripts: only init.lua; modules still carry identity/capability restrictions
+    std::filesystem::path installed_path{}; // exact managed package file, absent on legacy/unverified rows
 };
 
 class Policy {
@@ -269,6 +325,9 @@ public:
     // The add-ons' ceilings (they stay across set() and clear(): they are the player's, not the server's). Their
     // sources are kept in addon_identity's form.
     void set_ceilings(std::vector<Ceiling> ceilings);
+    std::string_view verified_tlo_identity(FileKind kind, const Sha256Digest& hash, const std::filesystem::path& file,
+                                           bool entry_point) const;
+    TloCaller verified_tlo_caller(FileKind kind, const Sha256Digest& hash, const std::filesystem::path& file) const;
     // The ceiling on a file with this hash, nullopt none (a file not an add-on's).
     std::optional<std::uint32_t> ceiling(FileKind kind, const Sha256Digest& hash) const;
     void clear(); // nothing runs (out of the world, or the server's files not checked yet)
@@ -298,6 +357,7 @@ private:
     bool addon_file_allowed(FileKind kind, const Sha256Digest& hash, std::string_view name) const;
     std::optional<Rules> rules_;
     std::vector<Ceiling> ceilings_;
+    std::shared_ptr<const void> tlo_generation_;
     std::uint32_t serial_ = 0;
 };
 

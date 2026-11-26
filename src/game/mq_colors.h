@@ -13,7 +13,8 @@
 // Two deliberate differences, both where MacroQuest's output closes tags that are not its own:
 //   - \ax with no colour open does nothing (MacroQuest's </c> would close the line's own colour);
 //   - colours still open at the end of the text are closed by `finish`.
-// Only the plugins' and scripts' lines keep the codes: the BEL of every other line is removed when it comes
+// Only the plugins' and scripts' lines, and the client's own replies written with them (GameConnection::client_message:
+// /popupecho's "Popup::"), keep the codes: the BEL of every other line is removed when it comes
 // (net::GameConnection::chat), so a server's or a player's text cannot colour anyone's chat.
 
 #include <cstdint>

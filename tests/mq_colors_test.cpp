@@ -133,6 +133,10 @@ TEST_CASE("MQ colours: a plugin's or script's line keeps its codes; anyone else'
         rig.conn.ui_message("\agHi\ax there");
     }
     CHECK(chat_texts(rig.conn) == V{"gHix there", "\agHi\ax there"});
+    // The client's own coded line (a MacroQuest command's reply, /popupecho's "Popup::") keeps its codes with no
+    // caller too.
+    rig.conn.client_message("\ayPopup\aw:: CANNOT CHARM");
+    CHECK(chat_texts(rig.conn) == V{"\ayPopup\aw:: CANNOT CHARM"});
 }
 
 TEST_CASE("MQ colours: hs.ChatText draws a line's codes as STML colours, across its item links") {

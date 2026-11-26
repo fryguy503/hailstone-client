@@ -54,6 +54,9 @@ struct AutomationEnv {
     std::function<std::string()> server_profile; // the saved server's id (servers/<id>/), "" for a test login
     std::function<std::string()> profile_name;   // the saved server's name as the player knows it ("" none)
     std::function<bool(std::string_view window)> window_open;  // a stock window shows (hs API)
+    // Window.Child's reads and MQ's window methods (mq::Context::window_child, window_act); null: none.
+    std::function<std::optional<mq::WindowChild>(std::string_view, std::string_view, bool)> window_child;
+    std::function<bool(std::string_view, std::string_view, std::string_view)> window_act;
     std::function<void(double degrees, bool fast)> face;       // MQ degrees, clockwise from north
     std::function<bool(std::string_view command, int mode)> keypress; // /keypress (0 tap, 1 hold, 2 release)
     std::function<nav::NavControl*()> nav; // /nav, /moveto and the Navigation TLO (app/navigator.h); null: none

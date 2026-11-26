@@ -124,6 +124,11 @@ TEST_CASE("versions: SemVer precedence") {
     CHECK(cmp("0.1.0+abc", "0.1.0") == 0);
     CHECK(cmp("0.1.0-rc.1+build.007.x-y", "0.1.0-rc.1") == 0);
     CHECK(cmp("0.10.0", "0.9.0") > 0);
+    // A nightly (HAILSTONE_NIGHTLY_LABEL, tools/nightly.sh) is past its own version's beta, so that beta is never
+    // offered to it, and before the next release, which is; a later night is past an earlier one.
+    CHECK(cmp("0.7.3-nightly.20261126", "0.7.3-beta") > 0);
+    CHECK(cmp("0.7.3-nightly.20261126", "0.7.4-beta") < 0);
+    CHECK(cmp("0.7.3-nightly.20261126", "0.7.3-nightly.20261127") < 0);
     CHECK(parse_version("0.1.0-alpha")->to_string() == "0.1.0-alpha");
     for (const char* bad : {"", "1", "1.2", "1.2.3.4", "01.2.3", "1.2.3-", "1.2.3-a..b", "1.2.3-01", "a.b.c",
                             "1.2.3-é", "1.2.3+", "99999999999.0.0", "1.2.3+a..b", "1.2.3+a.", "1.2.3+.a",

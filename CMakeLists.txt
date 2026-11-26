@@ -7,6 +7,13 @@ project(hailstone VERSION 0.7.3 LANGUAGES C CXX)
 # updater compares against a release's manifest (core/version.h, docs/updater.md), so change both with each release.
 set(HAILSTONE_VERSION_LABEL "beta")
 set(HAILSTONE_DISPLAY_VERSION "" CACHE STRING "Optional display version using this release's numeric prefix")
+# A nightly build's label in place of the release's ("nightly.20261126", tools/nightly.sh). SemVer ranks it above a
+# "beta" label of the same version, so the updater offers a nightly the next release, not this one. Release builds reset
+# it (tools/docker/release_options.sh).
+set(HAILSTONE_NIGHTLY_LABEL "" CACHE STRING "A nightly build's version label, in place of the release's")
+if(NOT HAILSTONE_NIGHTLY_LABEL STREQUAL "")
+  set(HAILSTONE_VERSION_LABEL "${HAILSTONE_NIGHTLY_LABEL}")
+endif()
 if(HAILSTONE_VERSION_LABEL STREQUAL "")
   set(HAILSTONE_RELEASE_VERSION ${PROJECT_VERSION})
 else()
@@ -613,6 +620,7 @@ add_library(hailstone_engine STATIC
   src/app/lua_ui_map.cpp
   src/app/lua_ui_map_overlay.cpp
   src/app/lua_ui_player.cpp
+  src/app/window_notify_run.cpp
   src/app/lua_ui_market.cpp
   src/app/lua_ui_mail.cpp
   src/app/lua_ui_merc.cpp
@@ -1275,6 +1283,9 @@ if(HAILSTONE_BUILD_TESTS)
     tests/merchant_usable_test.cpp
     tests/ascii_case_test.cpp
     tests/ui_pack_windows_test.cpp
+    tests/ui_pack_windows2_test.cpp
+    tests/ui_pack_windows3_test.cpp
+    tests/ui_pack_windows4_test.cpp
     tests/aa_columns_ui_test.cpp
     tests/ui_pack_stale_state_test.cpp
     tests/net_session_test.cpp
@@ -1452,6 +1463,15 @@ if(HAILSTONE_BUILD_TESTS)
     tests/exchange_test.cpp
     tests/player_commands_test.cpp
     tests/item_notify_test.cpp
+    tests/remove_buff_test.cpp
+    tests/window_notify_test.cpp
+    tests/window_child_test.cpp
+    tests/imgui_frame_test.cpp
+    tests/popup_test.cpp
+    tests/typed_escapes_test.cpp
+    tests/notify_state_test.cpp
+    tests/notify_quantity_test.cpp
+    tests/notify_confirm_guard_test.cpp
     tests/bank_test.cpp
     tests/bank_snapshot_test.cpp
     tests/real_estate_test.cpp

@@ -2,7 +2,8 @@
 
 Run the smallest relevant check while developing. Before you call a change
 done, run the whole `hailstone_tests` and report what it covered, as
-[AGENTS.md, Build and test](../../AGENTS.md#build-and-test) requires. Record which executable,
+[AGENTS.md, Build and test](../../AGENTS.md#build-and-test) requires. Before a merge,
+run `tools/premerge.sh` ([CI, Before a merge](../ci.md#before-a-merge)). Record which executable,
 fixtures and environment produced each result.
 
 ## Configure a development build

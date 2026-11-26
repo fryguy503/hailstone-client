@@ -20,6 +20,8 @@ public:
     MarketUi();
     // dev_windows: the duel state window (no stock window shows it).
     void draw(net::GameConnection& conn, bool dev_windows);
+    // The Lua pack claims its confirmation window before this fallback is drawn.
+    void draw_confirmation_fallback(net::GameConnection& conn);
 
 private:
     void draw_trader(net::GameConnection& conn);

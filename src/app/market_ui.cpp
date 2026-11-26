@@ -36,20 +36,6 @@ void MarketUi::draw(net::GameConnection& conn, bool dev_windows) {
         if (!open) conn.close_inspect();
     }
 
-    if (const auto& c = conn.confirmation(); c && !replaces("ConfirmationDialogBox")) {
-        if (ImGui::Begin("Confirm###market_confirm")) {
-            ImGui::TextWrapped("%s", c->text.c_str());
-            if (c->ok_only) {
-                if (ImGui::Button("OK")) conn.answer_confirmation(false);
-            } else {
-                if (ImGui::Button("Yes")) conn.answer_confirmation(true);
-                ImGui::SameLine();
-                if (ImGui::Button("No")) conn.answer_confirmation(false);
-            }
-        }
-        ImGui::End();
-    }
-
     if (const auto& b = conn.book(); b && !replaces(b->type == 0 ? "NoteWindow" : "BookWindow")) {
         bool open = true;
         ImGui::SetNextWindowSize(ImVec2(400, 400), ImGuiCond_FirstUseEver);
@@ -80,6 +66,23 @@ void MarketUi::draw(net::GameConnection& conn, bool dev_windows) {
     if (replaces("MailWindow")) return;
     if (!conn.mail().headers.empty() || conn.mail().window_open) mail_open_ = true;
     if (mail_open_) draw_mail(conn);
+}
+
+void MarketUi::draw_confirmation_fallback(net::GameConnection& conn) {
+    if (conn.state() != net::ConnectionState::InZone) return;
+    const auto& c = conn.confirmation();
+    if (!c || ui::lua::replaces("ConfirmationDialogBox")) return;
+    if (ImGui::Begin("Confirm###market_confirm")) {
+        ImGui::TextWrapped("%s", c->text.c_str());
+        if (c->ok_only) {
+            if (ImGui::Button("OK")) conn.answer_confirmation(false);
+        } else {
+            if (ImGui::Button("Yes")) conn.answer_confirmation(true);
+            ImGui::SameLine();
+            if (ImGui::Button("No")) conn.answer_confirmation(false);
+        }
+    }
+    ImGui::End();
 }
 
 void MarketUi::draw_trader(net::GameConnection& conn) {

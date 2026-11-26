@@ -280,6 +280,8 @@ min_client 0.2.0
 author Some One
 description Loots what you tell it to.
 caps read,events,actions,ui
+required_tlos Me,Target
+suggested_tlos Spawn
 notes https://github.com/owner/autoloot/releases/tag/v1.3.0
 package any 41233 <sha256> autoloot-1.3.0.zip
 key <Ed25519 public key, 64 hex digits>
@@ -294,12 +296,21 @@ signature <128 hex digits>
 | `version`, `min_client` | SemVer (`core/version.h`); `min_client` is optional |
 | `author`, `description` | optional, one line each of at most 200 bytes |
 | `caps` | what it needs (docs/plugins.md "Capabilities"); required, and the ceiling below; a tool's and an upscaler's are `none` |
+| `required_tlos` | TLO roots a script or native plugin needs for its main function, or `none` |
+| `suggested_tlos` | TLO roots for features the add-on can turn off or work without, or `none` |
 | `notes` | optional: its release notes |
 | `package <platform> <size> <sha256> <file>` | a script has one, for `any`; a plugin, a tool or an upscaler one per platform it is built for (`linux-x64`, `windows-x64`, `macos-arm64` ...); see the note below |
 | `key`, `signature` | optional, together: Ed25519 over every byte before the `signature` line, which ends the file |
 
 A `package` file is a name beside the manifest's address (the same release's asset, or the same branch's file) or an
 https address on GitHub. Unknown records are skipped; a known record that does not parse refuses the whole manifest.
+
+List the root name only. For `${Me.Name}` declare `Me`, and for `${Spawn[123].Name}` declare `Spawn`. Separate roots
+with commas. Names are case-insensitive, and a root in both lists counts as required. Each list can use up to 8,192
+bytes. Server Management displays these declarations when a GM reviews an add-on and when a declared root conflicts
+with server policy. A declaration alone grants no access. If you sign the manifest, the signature covers both lists.
+Older releases with omitted lists still install and show those dependencies as unknown. Use `none` to explicitly
+declare an empty list.
 
 **Where the client looks:**
 
@@ -315,8 +326,10 @@ repository answers 404 and is reported as not an add-on.
 
 ```sh
 tools/make_addon.py --name autoloot --kind script --version 1.3.0 --caps read,events,actions,ui \
+    --required-tlos Me,Target --suggested-tlos Spawn \
     --dir path/to/autoloot --author "Some One" --description "Loots what you tell it to." --out release/
 tools/make_addon.py --name MQ2Hud --kind plugin --version 2.0.0 --caps read,ui \
+    --required-tlos Me --suggested-tlos none \
     --platform linux-x64=build-linux/MQ2Hud --platform windows-x64=build-win/MQ2Hud --out release/
 build/hailstone_sign keygen <secret-key-file>                  # once; keep it off GitHub
 build/hailstone_sign sign <secret-key-file> release/hailstone-addon.txt
@@ -326,6 +339,9 @@ build/hailstone_sign sign <secret-key-file> release/hailstone-addon.txt
   - the names its zip reader takes (no `\`, `:` or control character, no part ending in `.` or a space, no Windows
     device name such as `aux.lua`);
   - the version as the client parses it (no leading zeros);
+  - the TLO roots given in `--required-tlos` and `--suggested-tlos`. Both are optional. One that is left out prints
+    a warning and writes no line, so Server Management shows that list as unknown; give `none` to declare an empty
+    list;
   - one `--platform` a platform (a second would overwrite the first's zip and leave two package lines).
 - It leaves out files and folders whose name starts with `.`, stores a link as what it points to only when that lies
   inside the package's folder, and refuses an `--out` inside a package's folder, where old zips would be packed.
@@ -602,7 +618,7 @@ cannot install another.
 
 Tests: `tests/addon_*_test.cpp` (manifest, install, manager against GitHub in memory, index and store, upscaler,
 tool, requirements, upscaler policy), plus `tests/plugin_policy_test.cpp`, `tests/lua_ui_pregame_test.cpp`,
-`tests/ui_pack_windows_test.cpp` and `tests/dev_ui_test.cpp`.
+`tests/ui_pack_windows*_test.cpp` and `tests/dev_ui_test.cpp`.
 
 Not checked yet:
 

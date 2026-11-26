@@ -75,7 +75,7 @@ bool usable(const Script& s) {
 bool call_script(Script& s, int nargs, int nres) {
     lua_State* L = s.L;
     ++s.busy;
-    plugin::CallerScope scope(s.caps, s.name);
+    plugin::CallerScope scope(s.caps, s.name, s.tlo_caller);
     const std::int64_t runaway = s.runaway_ms;
     const Clock::time_point start = s.slice_start;
     s.runaway_ms = kHookMs;
@@ -1698,7 +1698,7 @@ void register_hailstone(lua_State* L) {
                 Narrowed(Script& s,std::uint32_t caps):script(s),before(s.narrowed){s.narrowed=caps;}
                 ~Narrowed(){script.narrowed=before;}
             } narrowed(*sp,effective);
-            plugin::CallerScope scope(effective,sp->name);
+            plugin::CallerScope scope(effective,sp->name,sp->tlo_caller);
             return call_canvas_script(*sp,args,results);
         };
         return owner;

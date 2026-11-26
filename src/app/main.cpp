@@ -339,7 +339,7 @@ void usage() {
         "                     hf0..hf6 (one slot's hero's forge id);\n"
         "                     --luclin: Luclin player models (as eqclient.ini enables them);\n"
         "                     --ride: the models in pairs (mount,rider,...), each rider seated on its mount's\n"
-        "                     dag 0xe in P09; size=S in a model's look gives it its own spawn size;\n"
+        "                     dag 0xe; size=S in a model's look gives it its own spawn size;\n"
         "                     --spell-effect N [--spell-stage S]: replay spellsnew.eff effect N's stage S\n"
         "                     (0 cast, 2 impact) on every model every 3 s, on their spell points, at full\n"
         "                     density and opacity\n"

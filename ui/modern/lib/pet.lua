@@ -10,6 +10,7 @@
 local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local buffmenu = dofile("lib/buffmenu.lua")
+local vitals = dofile("lib/vitals.lua")
 local T = hud.T
 local C = T.color
 local M = {}
@@ -20,6 +21,8 @@ local BUTTONS, PER_ROW = 14, 4
 local MAX_BUFFS = 85
 local ICON = 22
 local FOLD_H = 22
+local HP_DISPLAY = "pet.hpDisplay"
+local READOUT_H = 16
 local DRAG = "Drag onto an action bar to make a hot button"
 local CHOOSE = "Right-click to choose its command"
 
@@ -36,6 +39,8 @@ end
 -- the first n of each list are this frame's.
 local buttons, buffs, others = {}, {}, {}
 local nButtons, nBuffs, nOthers = 0, 0, 0
+local main = { hpText = { font = T.font.tiny } }
+local othersHeight = 0
 
 local function entry(list, n)
   local e = list[n]
@@ -48,6 +53,13 @@ end
 
 local function gather()
   nButtons, nBuffs, nOthers = 0, 0, 0
+  othersHeight = 0
+  local mode = vitals.Mode(HP_DISPLAY, "percent")
+  local raw
+  main.frac, main.name, raw = API.character.Gauge(16)
+  main.present = raw ~= nil and raw ~= -1
+  main.hpText.text, main.hpText.right = nil, nil
+  if main.present then main.hpText.text, main.hpText.right = vitals.Read(mode, 16, main.frac) end
   for i = 1, BUTTONS do
     local id = BUTTON_IDS[i]
     local text = API.windows.Text(WINDOW, id)
@@ -67,13 +79,16 @@ local function gather()
       b.pet, b.slot = pet, slot
     end
   end
-  for _, id in ipairs(OTHER_IDS) do
+  for i, id in ipairs(OTHER_IDS) do
     if API.windows.ChildShown(WINDOW, id) == true then
       local frac, name = API.windows.ChildGauge(WINDOW, id)
       if frac then
         nOthers = nOthers + 1
         local o = entry(others, nOthers)
         o.id, o.frac, o.name = id, frac, name
+        o.hpText = o.hpText or { font = T.font.tiny }
+        o.hpText.text, o.hpText.right = vitals.Read(mode, 16, frac, i + 1)
+        othersHeight = othersHeight + 18 + (o.hpText.text and READOUT_H or 0)
       end
     end
   end
@@ -127,21 +142,26 @@ local function size()
   local extra = opts.extra
   local hb = open and rows * 28 or 0
   if opts.fold then hb = hb + FOLD_H end
-  return opts.width or 240, 70 + nOthers * 18 + hb + (extra and extra.height(1) or 0) + (buffRows > 0 and buffRows * (ICON + 3) + 6 or 0)
+  local mainExtra = main.hpText.text and READOUT_H - 10 or 0
+  return opts.width or 240, 70 + mainExtra + othersHeight + hb + (extra and extra.height(1) or 0)
+    + (buffRows > 0 and buffRows * (ICON + 3) + 6 or 0)
 end
 
 local function body(x, y, w, h, s)
   local extra = opts.extra
   local pad = 9 * s
-  local frac, name, raw = API.character.Gauge(16)
   local _, th = T.TextSize("Ag", T.font.small)
-  local has = raw ~= nil and raw ~= -1
-  T.Text(x + pad, y + pad - 2 * s, has and name or "No pet", has and C.text or C.muted, T.font.small)
-  if has then T.Text(x + w - pad, y + pad - 2 * s, math.floor((frac or 0) * 100 + 0.5) .. "%", C.muted, T.font.small, "right") end
+  local percent = not main.hpText.text and main.hpText.right
+  local pctWidth = percent and T.TextSize(percent, T.font.small) + 6 * s or 0
+  local name = T.Fit(main.present and main.name or "No pet", w - 2 * pad - pctWidth, T.font.small)
+  T.Text(x + pad, y + pad - 2 * s, name, main.present and C.text or C.muted, T.font.small)
+  if percent then T.Text(x + w - pad, y + pad - 2 * s, percent, C.muted, T.font.small, "right") end
   local by = y + pad + th + 2 * s
-  T.Bar("pet.hp", x + pad, by, x + w - pad, by + 10 * s, s, has and frac or nil, C.pet)
-  if T.Hit("##pethp", x + pad, by, x + w - pad, by + 10 * s) then API.windows.ClickChild(WINDOW, "PetHPGauge", "left") end
-  by = by + 14 * s
+  local hpHeight = (main.hpText.text and READOUT_H or 10) * s
+  T.Bar("pet.hp", x + pad, by, x + w - pad, by + hpHeight, s, main.present and main.frac or nil,
+    C.pet, main.hpText.text and main.hpText or nil)
+  if T.Hit("##pethp", x + pad, by, x + w - pad, by + hpHeight) then API.windows.ClickChild(WINDOW, "PetHPGauge", "left") end
+  by = by + hpHeight + 4 * s
   local tf, tname, traw = API.character.Gauge(41)
   local ttext = (traw ~= nil and traw ~= -1 and tname and tname ~= "") and tname or "No target"
   T.Text(x + pad, by, "\xC2\xBB " .. T.Fit(ttext, w * 0.55, T.font.tiny), C.muted, T.font.tiny)
@@ -150,11 +170,21 @@ local function body(x, y, w, h, s)
   -- the other pets
   for n = 1, nOthers do
     local o = others[n]
-    T.Text(x + pad, by, T.Fit(o.name, w * 0.45, T.font.tiny), C.muted, T.font.tiny)
-    T.Text(x + w * 0.5, by, math.floor(o.frac * 100 + 0.5) .. "%", C.muted, T.font.tiny)
-    T.Bar("pet." .. o.id, x + w * 0.6, by + 4 * s, x + w - pad, by + 9 * s, s, o.frac, C.pet)
-    if T.Hit(HIT[o.id], x + pad, by, x + w - pad, by + 14 * s) then API.windows.ClickChild(WINDOW, o.id, "left") end
-    by = by + 18 * s
+    local hasValue = o.hpText.text ~= nil
+    local nameWidth = hasValue and w - 2 * pad or w * 0.45
+    T.Text(x + pad, by, T.Fit(o.name, nameWidth, T.font.tiny), C.muted, T.font.tiny)
+    if hasValue then
+      local barY = by + 14 * s
+      T.Bar("pet." .. o.id, x + pad, barY, x + w - pad, barY + READOUT_H * s, s, o.frac, C.pet, o.hpText)
+    else
+      if o.hpText.right then T.Text(x + w * 0.6 - 3 * s, by, o.hpText.right, C.muted, T.font.tiny, "right") end
+      T.Bar("pet." .. o.id, x + w * 0.6, by + 4 * s, x + w - pad, by + 9 * s, s, o.frac, C.pet)
+    end
+    local addedHeight = hasValue and READOUT_H or 0
+    if T.Hit(HIT[o.id], x + pad, by, x + w - pad, by + (14 + addedHeight) * s) then
+      API.windows.ClickChild(WINDOW, o.id, "left")
+    end
+    by = by + (18 + addedHeight) * s
   end
   if extra then by = extra.draw(x, by, w, s) end
   -- the commands, under a header that folds them when asked
@@ -190,7 +220,13 @@ local function body(x, y, w, h, s)
   buffmenu.Draw(WINDOW)
 end
 
-local HUD_OPTS = { size = size }
+local HUD_OPTS = {
+  size = size,
+  menu = function()
+    vitals.Menu("Pet HP", HP_DISPLAY, "percent")
+    ui.TextDisabled("Exact values require server support.")
+  end,
+}
 
 function M.window(o)
   if not API.session.InGame() then return end

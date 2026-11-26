@@ -13,6 +13,7 @@
 #include "app/actions_ui.h"
 #include "app/lua_ui_values.h"
 #include "app/lua_ui_windows.h"
+#include "app/ui_input.h"
 #include "game/combat.h"
 #include "game/hotbuttons.h"
 #include "game/mechanics/abilities.h"
@@ -328,8 +329,8 @@ private:
         }
         // The mouse (CXWndManager +0x94 / +0x98); a click not from the mouse (a pad) opens it at the button.
         const auto& r = host.click_rect;
-        ImVec2 mp = ImGui::GetMousePos();
-        bool on_button = ImGui::IsMousePosValid(&mp) && r[2] >= 0 && mp.x >= r[0] && mp.x <= r[2] && mp.y >= r[1] && mp.y <= r[3];
+        ImVec2 mp = ui_mouse_pos();
+        bool on_button = ui_mouse_pos_valid(&mp) && r[2] >= 0 && mp.x >= r[0] && mp.x <= r[2] && mp.y >= r[1] && mp.y <= r[3];
         if (!on_button && r[2] >= 0) mp = {r[2], (r[1] + r[3]) / 2};
         host.open_menu(mp.x, mp.y, std::move(rows));
     }
@@ -699,7 +700,7 @@ public:
             if (left_page_ * 8 + m == c.spell_book_swap_slot()) {
                 // The slot picked up to move (SelectedBookIndex): SetBuffIcon with a static stepping -1, 0, 1 on
                 // every redraw (OnProcessFrame redraws each frame while one is picked): none, red, blue in turn.
-                const int step = ImGui::GetFrameCount() % 3;
+                const auto step = ui_frame() % 3;
                 out.background = step == 0 ? none() : anim(step == 1 ? "RedIconBackground" : "BlueIconBackground");
             }
             out.decal = host.textures ? image(host.textures->spell_icon(s->spell_icon)) : none();
@@ -722,7 +723,7 @@ public:
             int slot = left_page_ * 8 + m;
             // HandleSpellInfoDisplay: the slot's spell in a spell display, on XWM_RCLICKHOLD (24) or a left click
             // with Alt; XWM_RBUTTONUPAFTERHELD (26) closes the held one again (CWndDisplayManager_CloseNewest).
-            const bool alt = ImGui::GetIO().KeyAlt;
+            const bool alt = ui_keys().alt;
             if (button == "rightheld" || (button == "left" && alt)) {
                 if (const auto* s = spell(c, m)) host.show_spell(static_cast<std::int32_t>(s->id), button == "rightheld");
                 return true;
@@ -970,11 +971,10 @@ public:
 
     void child(UiHost& host, std::string_view id, Child& out) override {
         if (!host.conn || !host.conn->respawn_window()) return;
-        sync_selection(host);
         const auto& w = *host.conn->respawn_window();
         // TimeGauge is the XML's EQType 28 (app/lua_ui_values.cpp).
         if (id == "SelectButton") {
-            const auto* selected = option(w);
+            const auto* selected = option(*host.conn, w);
             out.enabled = host.conn->respawn_ready() && selected && host.conn->respawn_option_available(selected->id);
         } else if (id == "OptionsList") {
             out.enabled = !host.conn->respawn_chosen();
@@ -982,7 +982,6 @@ public:
     }
     const ListData* list(UiHost& host, std::string_view id) override {
         if (!host.conn || !host.conn->respawn_window() || id != "OptionsList") return nullptr;
-        sync_selection(host);
         const auto& w = *host.conn->respawn_window();
         // Handle_OP_RespawnWindow @0x74ec70 (the window's AddOption) fills a line per option: a marker cell ("*"
         // @0x9c4678 for the default option, "r" @0x9cf320 for one whose final byte is set, else empty), the option's
@@ -996,9 +995,9 @@ public:
         list_.columns = 3;
         list_.labels = {"", "Name", "Zone"};
         list_.widths = {10, 100, 100};
-        if (!chosen_) chosen_ = w.selected;
+        const std::uint32_t chosen = host.conn->respawn_selected_option();
         for (const auto& o : w.options) {
-            if (o.id == *chosen_) list_.selected = static_cast<int>(list_.rows.size());
+            if (o.id == chosen) list_.selected = static_cast<int>(list_.rows.size());
             ListRow row;
             const bool available = host.conn->respawn_option_available(o.id);
             row.texts = {o.id == w.selected ? "*" : !o.available() ? "r" : "", o.name, game::zone_long_name(o.zone_id)};
@@ -1017,55 +1016,27 @@ public:
     }
     bool list_click(UiHost& host, std::string_view id, int row, bool, int) override {
         if (!host.conn || !host.conn->respawn_window() || id != "OptionsList") return false;
-        sync_selection(host);
         const auto& opts = host.conn->respawn_window()->options;
-        if (!host.conn->respawn_chosen() && row >= 0 && row < static_cast<int>(opts.size())) {
-            chosen_ = opts[static_cast<std::size_t>(row)].id;
-            manual_choice_ = true;
-        }
+        if (row >= 0 && row < static_cast<int>(opts.size())) host.conn->set_respawn_choice(opts[static_cast<std::size_t>(row)].id);
         return true;
     }
     bool click(UiHost& host, std::string_view id, std::string_view button, bool) override {
         if (id != "SelectButton") return false;
-        sync_selection(host);
-        if (button == "left" && host.conn && host.conn->respawn_window())
-            if (const auto* o = option(*host.conn->respawn_window()); o && host.conn->respawn_option_available(o->id))
-                host.conn->choose_respawn(o->id);
+        if (button == "left" && host.conn) host.conn->choose_selected_respawn();
         return true;
-    }
-    void frame(UiHost& host) override {
-        if (!host.conn || !host.conn->respawn_window()) {
-            chosen_.reset();
-            manual_choice_ = false;
-        }
     }
 
 private:
-    void sync_selection(UiHost& host) {
-        if (!host.conn) return;
-        if (connection_ != host.conn || session_ != host.conn->respawn_session()) {
-            connection_ = host.conn;
-            session_ = host.conn->respawn_session();
-            chosen_.reset();
-            manual_choice_ = false;
-        }
-        // Until a row is clicked the server's selection is shown; accepting a resurrection does not move it
-        // (0x74e9e0 only enables and recolours lines).
-        if (!manual_choice_ && !host.conn->respawn_chosen() && host.conn->respawn_window())
-            chosen_ = host.conn->respawn_window()->selected;
-    }
-    const net::RespawnOption* option(const net::RespawnWindow& w) const {
-        std::uint32_t want = chosen_.value_or(w.selected);
+    // The selected row: the player's pick, else the server's default (GameConnection::respawn_selected_option, kept
+    // there so /notify RespawnWnd SelectButton chooses the same with no UI).
+    static const net::RespawnOption* option(const net::GameConnection& c, const net::RespawnWindow& w) {
+        const std::uint32_t want = c.respawn_selected_option();
         for (const auto& o : w.options)
             if (o.id == want) return &o;
         return nullptr;
     }
 
     ListData list_;
-    std::optional<std::uint32_t> chosen_;
-    bool manual_choice_ = false;
-    const net::GameConnection* connection_ = nullptr;
-    std::uint32_t session_ = 0;
 };
 
 } // namespace

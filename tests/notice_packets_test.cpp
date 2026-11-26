@@ -97,12 +97,14 @@ TEST_CASE("offers: translocate, resurrection and shared task answers") {
 
     AppPacket z = bytes(Op::RezzRequest, 236);
     put16(z, 4, 9);
+    puts(z, 24, "Me");
     puts(z, 92, "Healer");
     put32(z, 156, 2050);
     puts(z, 160, "Me's corpse");
     auto dz = decode_rezz_request(z);
     REQUIRE(dz);
     CHECK(dz->zone == 9);
+    CHECK(dz->your_name == "Me");
     CHECK(dz->rezzer == "Healer");
     CHECK(dz->spell == 2050);
     CHECK(dz->corpse == "Me's corpse");

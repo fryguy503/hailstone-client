@@ -12,6 +12,7 @@
 
 #include "app/lua_ui.h"
 #include "app/lua_ui_windows.h"
+#include "app/ui_input.h"
 #include "core/log.h"
 #include "game/bank.h"
 #include "game/hot_button_menu.h"
@@ -38,8 +39,9 @@ int index_after(std::string_view id, std::string_view prefix) {
     return ec == std::errc() && p == rest.data() + rest.size() ? v : -1;
 }
 
-bool shift() { return ImGui::GetIO().KeyShift; }
-bool ctrl() { return ImGui::GetIO().KeyCtrl; }
+// The keys held (none without ImGui: app/ui_input.h).
+bool shift() { return ui_keys().shift; }
+bool ctrl() { return ui_keys().ctrl; }
 
 // The money buttons count platinum first: Money0 platinum .. Money3 copper; wire coin types count copper first.
 int coin_type(int button) { return 3 - button; }
@@ -72,7 +74,7 @@ public:
     // The merchant window shows, on its mail (Parcels) page (CMerchantWnd_GetCurrentPageHandler == 2).
     virtual bool parcels_shown(UiHost& host) = 0;
     // 0x6f2120: the merchant window's own selected item and its list's selection are cleared.
-    virtual void drop_selection() = 0;
+    virtual void drop_selection(UiHost& host) = 0;
 };
 
 std::function<bool()> merchant_quantity_owner(UiHost& host) {
@@ -104,7 +106,7 @@ void inventory_money_click(UiHost& host, int coin, ParcelPage* page) {
     const bool parcels = page && page->parcels_shown(host);
     if (parcels) {
         host.conn->parcel_coin_button(coin, q.max);
-        if (q.max > 0) page->drop_selection();
+        if (q.max > 0) page->drop_selection(host);
     }
     std::function<bool()> owner = parcels ? merchant_quantity_owner(host) : std::function<bool()>{};
     open_quantity(host, q, [&host, coin, parcels](std::int32_t n) {
@@ -123,6 +125,51 @@ const ChildArt kNone{ChildArt::None, {}, {}};
 // inventory as /autoinventory puts it (cmd_autoinventory, which says so when there is no room). Enabled while the
 // cursor holds an item.
 constexpr std::string_view kAutoInventoryChild = "Hailstone_AutoInventory";
+
+} // namespace
+
+bool inventory_money_button(UiHost& host, int coin) {
+    if (!host.conn || coin < 0 || coin > 3) return false;
+    inventory_money_click(host, coin, nullptr); // the Parcels page's coin pick is its window's (a UI page)
+    return true;
+}
+
+bool alt_currency_select_row(UiHost& host, int row) {
+    if (!host.conn) return false;
+    const auto ids = host.conn->alt_currency_list();
+    if (row < 0 || row >= static_cast<int>(ids.size())) return false;
+    host.conn->select_alt_currency(ids[static_cast<std::size_t>(row)]);
+    return true;
+}
+
+bool alt_currency_reclaim_button(UiHost& host) {
+    // Reclaim: the cursor's item of the picked currency back into it (OP_AltCurrencyReclaim).
+    const auto* a = host.conn ? host.conn->selected_alt_currency() : nullptr;
+    if (!a) return false;
+    host.conn->alt_currency_reclaim(a->entry.id, 0, true);
+    return true;
+}
+
+bool alt_currency_create_button(UiHost& host) {
+    // Create Item: some of the picked currency out onto the cursor, at most a stack (the quantity dialog for more
+    // than one).
+    const auto* a = host.conn ? host.conn->selected_alt_currency() : nullptr;
+    if (!a || a->amount == 0) return false;
+    const std::uint32_t cid = a->entry.id;
+    const std::uint32_t max = std::min(a->amount, std::max<std::uint32_t>(1, a->entry.stack_size));
+    if (max == 1) {
+        host.conn->alt_currency_reclaim(cid, 1, false);
+        return true;
+    }
+    game::QuantityOpen q;
+    q.max = q.start = static_cast<std::int32_t>(max);
+    open_quantity(host, q, [&host, cid](std::int32_t v) {
+        if (host.conn && v > 0) host.conn->alt_currency_reclaim(cid, static_cast<std::uint32_t>(v), false);
+    });
+    return true;
+}
+
+namespace {
 
 // ---------------------------------------------------------------- InventoryWindow (CInventoryWnd)
 
@@ -149,15 +196,15 @@ public:
         } else if (id == "IW_GoodPoints" || id == "IW_EvilPoints") {
             out.text = "0"; // CInventoryWnd_UpdateCrystalCounts: radiant / ebon crystals (not kept by this client)
         } else if (id == "AltCurr_MaxStackLabel") {
-            const auto* a = selected_currency(c);
+            const auto* a = c.selected_alt_currency();
             out.text = a ? std::format("Max stack: {}", a->entry.stack_size) : std::string();
         } else if (id == "AltCurr_CreateItemButton") {
-            const auto* a = selected_currency(c);
+            const auto* a = c.selected_alt_currency();
             out.enabled = a && a->amount > 0 && !c.inventory().cursor();
         } else if (id == "AltCurr_ReclaimButton") {
-            out.enabled = selected_currency(c) && c.inventory().cursor();
+            out.enabled = c.selected_alt_currency() && c.inventory().cursor();
         } else if (id == "AltCurr_DisplayMissingButton") {
-            out.checked = show_missing_;
+            out.checked = c.alt_currency_show_missing();
         } else if (id == kAutoInventoryChild) {
             out.enabled = c.inventory().cursor() != nullptr;
         }
@@ -173,14 +220,15 @@ public:
         currencies_.columns = 3;
         currencies_.labels = {"", "Currency", "Amount"};
         currencies_.widths = {24, 200, 60};
-        for (std::uint32_t cid : listed(*host.conn)) {
+        const std::uint32_t picked = host.conn->alt_currency_selected();
+        for (std::uint32_t cid : host.conn->alt_currency_list()) {
             const auto& a = host.conn->alt_currencies().at(cid);
             ListRow r;
             std::string name = host.conn->strings().db_string(cid, 0x12);
             if (name.empty()) name = std::format("Currency {}", cid);
             r.texts = {"", std::move(name), std::to_string(a.amount)};
             if (host.textures) r.icon = host.textures->item_icon(a.entry.icon);
-            if (cid == selected_) currencies_.selected = static_cast<int>(currencies_.rows.size());
+            if (cid == picked) currencies_.selected = static_cast<int>(currencies_.rows.size());
             currencies_.rows.push_back(std::move(r));
         }
         return &currencies_;
@@ -188,9 +236,7 @@ public:
     // The rows are worked out again here: a UI pack that draws the page itself never asks for list().
     bool list_click(UiHost& host, std::string_view id, int row, bool, int) override {
         if (id != "AltCurr_PointList") return false;
-        if (!host.conn) return true;
-        auto ids = listed(*host.conn);
-        if (row >= 0 && row < static_cast<int>(ids.size())) selected_ = ids[static_cast<std::size_t>(row)];
+        if (host.conn) alt_currency_select_row(host, row);
         return true;
     }
 
@@ -212,24 +258,9 @@ public:
             if (c.shroud_progress_available() && host.show_window) host.show_window("ShroudProgressWnd");
         }
         else if (id == "DoneButton" || id == "IW_DoneButton") open_ = false;
-        else if (id == "AltCurr_DisplayMissingButton") show_missing_ = !show_missing_;
-        else if (id == "AltCurr_ReclaimButton") {
-            if (const auto* a = selected_currency(c)) c.alt_currency_reclaim(a->entry.id, 0, true);
-        } else if (id == "AltCurr_CreateItemButton") {
-            const auto* a = selected_currency(c);
-            if (!a || a->amount == 0) return true;
-            std::uint32_t cid = a->entry.id;
-            std::uint32_t max = std::min(a->amount, std::max<std::uint32_t>(1, a->entry.stack_size));
-            if (max == 1) {
-                c.alt_currency_reclaim(cid, 1, false);
-                return true;
-            }
-            game::QuantityOpen q;
-            q.max = q.start = static_cast<std::int32_t>(max);
-            open_quantity(host, q, [&host, cid](std::int32_t v) {
-                if (host.conn && v > 0) host.conn->alt_currency_reclaim(cid, static_cast<std::uint32_t>(v), false);
-            });
-        }
+        else if (id == "AltCurr_DisplayMissingButton") c.set_alt_currency_show_missing(!c.alt_currency_show_missing());
+        else if (id == "AltCurr_ReclaimButton") alt_currency_reclaim_button(host);
+        else if (id == "AltCurr_CreateItemButton") alt_currency_create_button(host);
         else if (int m = index_after(id, "IW_Money"); m >= 0 && m < 4)
             inventory_money_click(host, m, merchant_);
         else if (id == "IW_CharacterView") c.drop_on_doll(); // CInventoryWnd::HandleLButtonUp
@@ -248,25 +279,18 @@ public:
 
 private:
     // The currencies the list shows, in its order (hs.AltCurrencies lists them alike).
-    std::vector<std::uint32_t> listed(const net::GameConnection& c) const {
-        std::vector<std::uint32_t> v;
-        for (const auto& [cid, a] : c.alt_currencies())
-            if (show_missing_ || (a.amount > 0 && a.entry.shown)) v.push_back(cid);
-        return v;
-    }
-    const net::GameConnection::AltCurrency* selected_currency(const net::GameConnection& c) const {
-        auto it = c.alt_currencies().find(selected_);
-        return it == c.alt_currencies().end() ? nullptr : &it->second;
-    }
-
     ParcelPage* merchant_;
     int page_ = 0;
-    bool show_missing_ = false;
-    std::uint32_t selected_ = 0;
     ListData currencies_;
 };
 
 // ---------------------------------------------------------------- bag windows (CContainerMgr / CContainerWnd)
+
+// Hailstone: a bag in a personal or shared bank slot opens and closes with the bank-bag volume (audio.open_bank).
+// Conservative fallback: only those two slot types count. A slot of any other type, or one this classifier does not
+// know, uses the ordinary bag volume (audio.open_bag), so a bag never goes quiet on a volume it was not meant for. The
+// bank window opening itself has no known sound to put on a volume (docs/todo.md, docs/unknowns.md).
+bool in_bank_slot(const net::ItemSlot& s) { return s.type == net::kInvBank || s.type == net::kInvSharedBank; }
 
 // The open containers, in the order they opened ("Bag1" is the first). A container closes when its bag leaves
 // its slot.
@@ -306,7 +330,7 @@ struct Containers {
         // close wave plays as well), and 0x697e40 sets both all-closed flags.
         const auto serial = c.bank() ? c.bank()->serial : 0;
         if (bank_serial != 0 && serial != bank_serial) {
-            for (const OpenBag& o : open) c.container_sound(o.type, false);
+            for (const OpenBag& o : open) c.container_sound(o.type, false, in_bank_slot(o.slot));
             open.clear();
             all_closed = bank_all_closed = true;
         }
@@ -315,12 +339,12 @@ struct Containers {
         // original closes it through CloseContainer, which always plays (a picked-up bag, CInvSlot::HandleLButtonUp
         // @0x695670; the server's removal, Handle_OP_MoveItem_Apply @0x4c1ba0).
         std::erase_if(open, [&](const OpenBag& o) {
-            bool gone = (o.slot.type == net::kInvBank || o.slot.type == net::kInvSharedBank) && !c.bank();
+            bool gone = in_bank_slot(o.slot) && !c.bank();
             if (!gone) {
                 const net::Item* bag = c.inventory().at(o.slot);
                 gone = !bag || !bag->is_bag();
             }
-            if (gone) c.container_sound(o.type, false);
+            if (gone) c.container_sound(o.type, false, in_bank_slot(o.slot));
             return gone;
         });
     }
@@ -330,12 +354,6 @@ Containers& containers() {
     static Containers c;
     return c;
 }
-
-// Hailstone: a bag in a personal or shared bank slot opens with the bank-bag volume (audio.open_bank). Conservative
-// fallback: only those two slot types count. A slot of any other type, or one this classifier does not know, opens
-// with the ordinary bag volume (audio.open_bag), so a bag never goes quiet on a volume it was not meant for. The
-// bank window opening itself has no known sound to put on a volume (docs/todo.md, docs/unknowns.md).
-bool in_bank_slot(const net::ItemSlot& s) { return s.type == net::kInvBank || s.type == net::kInvSharedBank; }
 
 // Opens or closes a bag's window (CInvSlot::HandleRButtonUp: an open container closes, else
 // CContainerMgr::OpenContainer @0x65cae0). A tradeskill bag opens in the tradeskill window instead of its own when
@@ -349,7 +367,7 @@ void toggle_container(UiHost& host, const net::ItemSlot& s) {
     // the bag opened with, so a slot that has lost or replaced it still sounds as that bag.
     if (cs.find(s)) {
         const std::optional<std::uint32_t> type = cs.close(s);
-        if (host.conn && type) host.conn->container_sound(*type, false);
+        if (host.conn && type) host.conn->container_sound(*type, false, in_bank_slot(s));
         if (!host.conn) return;
         const auto& t = host.conn->tradeskill();
         if (t.open && !t.world && t.container_slot.same(s)) host.conn->close_tradeskill();
@@ -621,11 +639,114 @@ std::string coin_column(std::int64_t copper, int type) {
     return std::to_string(v);
 }
 
+// UpdateList's ScrollKnown: the scroll's spell is known, or, for a spell of a group with a rank, one of a higher
+// rank is: from the group's top rank down while above the scroll's. The original's SpellBookInfo::IsSpellKnown
+// (@0x449cd0) reads only the spell book, so a learned discipline tome still shows. Deliberate change from RoF2:
+// the profile's discipline list counts as well, so a tome already learned is left out too.
+bool merchant_scroll_known(UiHost& host, const net::Item& item) {
+    const auto& book = host.conn->spell_state().book;
+    auto known = [&](std::uint32_t id) {
+        return std::find(book.begin(), book.end(), id) != book.end() || host.conn->knows_discipline(id);
+    };
+    const std::int32_t id = item.effects[net::kEffectScroll].effect;
+    if (id <= 0) return false;
+    if (known(static_cast<std::uint32_t>(id))) return true;
+    const auto& table = host.conn->spell_table();
+    const game::SpellData* sp = table.get(static_cast<std::uint32_t>(id));
+    if (!sp || sp->spell_group <= 0 || sp->spell_rank < 0) return false;
+    for (const game::SpellData* s = table.by_group_and_rank(sp->spell_group, sp->spell_subgroup, -1, false);
+         s && s->spell_rank > sp->spell_rank;
+         s = table.by_group_and_rank(s->spell_group, s->spell_subgroup, s->spell_rank - 1, true))
+        if (known(s->id)) return true;
+    return false;
+}
+
+
+// UpdateList: a row is left out while the list shows only what the player can use (merchant_show_all off).
+bool merchant_row_hidden(UiHost& host, const net::Item& item) {
+    const auto& prof = host.conn->profile();
+    return !host.conn->merchant_show_all() && prof &&
+           game::merchant_usable_hides(
+               item, prof->class_, prof->race, [&] { return merchant_scroll_known(host, item); },
+               host.conn->server_class_mask());
+}
+
+// HandleBuy / HandleSell open the dialog at the Buy button's client rectangle's top left.
+void at_merchant_button(UiHost& host, game::QuantityOpen& q) {
+    if (host.click_rect[0] >= 0) {
+        q.x = static_cast<std::int32_t>(host.click_rect[0]);
+        q.y = static_cast<std::int32_t>(host.click_rect[1]);
+    }
+}
+
+const net::MerchantSession* open_merchant(UiHost& host) {
+    return host.conn && host.conn->merchant() && host.conn->merchant()->open ? &*host.conn->merchant() : nullptr;
+}
+
+} // namespace
+
+std::vector<std::uint32_t> merchant_list_slots(UiHost& host) {
+    std::vector<std::uint32_t> out;
+    if (const auto* m = open_merchant(host))
+        for (const auto& [mslot, item] : m->items)
+            if (!merchant_row_hidden(host, item)) out.push_back(mslot);
+    return out;
+}
+
+bool merchant_select_row(UiHost& host, int row) {
+    const auto slots = merchant_list_slots(host);
+    if (row < 0 || row >= static_cast<int>(slots.size())) return false;
+    host.conn->merchant_consider(slots[static_cast<std::size_t>(row)]); // the item is considered now: Buy, its price
+    return true;
+}
+
+bool merchant_buy_button(UiHost& host) {
+    // CMerchantWnd::HandleBuy: the quantity dialog at the Buy button (game::merchant_buy_limits: the merchant's
+    // count capped at the stack, start 1 for a scroll with a spell); RequestGetItem with the answer.
+    const auto* m = open_merchant(host);
+    if (!m || !m->considered || !m->items.count(*m->considered)) return false;
+    const auto& it = m->items.at(*m->considered);
+    game::QuantityOpen q;
+    if (it.stackable()) {
+        auto lim = game::merchant_buy_limits(static_cast<std::int32_t>(it.merchant_slot), static_cast<std::int32_t>(it.max_stack),
+                                             it.item_type == 20 && it.effects[net::kEffectScroll].effect > 0);
+        q.max = lim.max, q.start = lim.start;
+    } else {
+        q.max = q.start = 1;
+    }
+    at_merchant_button(host, q);
+    const std::uint32_t slot = *m->considered;
+    open_quantity(host, q, [&host, slot](std::int32_t n) {
+        if (host.conn && n > 0) host.conn->merchant_buy(slot, static_cast<std::uint32_t>(n));
+    }, merchant_quantity_owner(host));
+    return true;
+}
+
+bool merchant_sell_button(UiHost& host) {
+    // HandleSell: max = start = the stack count (1 unstackable).
+    const auto* m = open_merchant(host);
+    const net::Item* it = m && m->selected ? host.conn->inventory().at(*m->selected) : nullptr;
+    if (!it) return false;
+    auto lim = game::merchant_sell_limits(it->stackable() ? static_cast<std::int32_t>(it->stack_count) : 1);
+    game::QuantityOpen q;
+    q.max = lim.max, q.start = lim.start;
+    at_merchant_button(host, q);
+    const net::ItemSlot where = *m->selected;
+    open_quantity(host, q, [&host, where](std::int32_t n) {
+        if (host.conn && n > 0) host.conn->merchant_sell(where, static_cast<std::uint32_t>(n));
+    }, merchant_quantity_owner(host));
+    return true;
+}
+
+namespace {
+
 class MerchantWindow : public StockWindow, public ParcelPage {
 public:
     MerchantWindow() : StockWindow("MerchantWnd", false) {}
     bool parcels_shown(UiHost& host) override { return page_ == 2 && session(host) != nullptr; }
-    void drop_selection() override { selected_.reset(); }
+    void drop_selection(UiHost& host) override {
+        if (host.conn) host.conn->merchant_drop_considered();
+    }
     bool shown(UiHost& host) override { return session(host) != nullptr; }
     void set_shown(UiHost& host, bool show) override {
         if (!show && host.conn) host.conn->close_merchant();
@@ -676,7 +797,7 @@ public:
         } else if (id == "MW_Inspect_Button" || id == "MW_Preview_Button") {
             out.enabled = item != nullptr;
         } else if (id == "MW_UsableButton") {
-            out.checked = !show_all_;
+            out.checked = !(host.conn && host.conn->merchant_show_all());
         }
     }
 
@@ -691,14 +812,9 @@ public:
         slots_.clear();
         // While an inventory item is being considered no merchant row is.
         bool selling = m->selected && host.conn->inventory().at(*m->selected);
-        const auto& prof = host.conn->profile();
-        const auto server_classes = host.conn->server_class_mask();
         int row = 0;
         for (const auto& [mslot, item] : m->items) {
-            if (!show_all_ && prof &&
-                game::merchant_usable_hides(
-                    item, prof->class_, prof->race, [&] { return scroll_known(host, item); }, server_classes))
-                continue;
+            if (merchant_row_hidden(host, item)) continue;
             ListRow r;
             std::int64_t price = item.price;
             // PurchasePageHandler::UpdateList: the merchant quantity and the level, "--" when there is none.
@@ -717,7 +833,7 @@ public:
             // A server's client may fill the Lvl column (the NMS patch: a spell scroll's level over the class mask).
             if (auto lvl = host.conn->server_ext().merchant_level(*host.conn, item)) r.texts[7] = *lvl;
             if (host.textures) r.icon = host.textures->item_icon(item.icon);
-            if (selected_ && *selected_ == mslot && !selling) data_.selected = row;
+            if (m->considered && *m->considered == mslot && !selling) data_.selected = row;
             slots_.push_back(mslot);
             data_.rows.push_back(std::move(r));
             ++row;
@@ -748,8 +864,7 @@ public:
 
     bool list_click(UiHost& host, std::string_view id, int row, bool right, int) override {
         if (id != "ItemList" || row < 0 || row >= static_cast<int>(slots_.size())) return false;
-        selected_ = slots_[static_cast<std::size_t>(row)];
-        if (host.conn) host.conn->merchant_unselect(); // the merchant's item is considered now: Buy, its price
+        if (!merchant_select_row(host, row)) return false;
         if (right) inspect_selected(host);
         return true;
     }
@@ -759,40 +874,9 @@ public:
         if (!m || button != "left") return false;
         auto& c = *host.conn;
         if (id == "MW_Buy_Button") {
-            // CMerchantWnd::HandleBuy: the quantity dialog at the Buy button (game::merchant_buy_limits: the merchant's
-            // count capped at the stack, start 1 for a scroll with a spell); RequestGetItem with the answer.
-            if (auto s = buy_slot(*m)) {
-                const auto& it = m->items.at(*s);
-                game::QuantityOpen q;
-                if (it.stackable()) {
-                    auto lim = game::merchant_buy_limits(static_cast<std::int32_t>(it.merchant_slot),
-                                                         static_cast<std::int32_t>(it.max_stack),
-                                                         it.item_type == 20 && it.effects[net::kEffectScroll].effect > 0);
-                    q.max = lim.max, q.start = lim.start;
-                } else {
-                    q.max = q.start = 1;
-                }
-                at_button(host, q);
-                std::uint32_t slot = *s;
-                open_quantity(host, q, [&host, slot](std::int32_t n) {
-                    if (host.conn && n > 0) host.conn->merchant_buy(slot, static_cast<std::uint32_t>(n));
-                }, merchant_quantity_owner(host));
-            }
+            merchant_buy_button(host);
         } else if (id == "MW_Sell_Button") {
-            // HandleSell: max = start = the stack count (1 unstackable).
-            if (m->selected) {
-                const net::Item* it = c.inventory().at(*m->selected);
-                if (it) {
-                    auto lim = game::merchant_sell_limits(it->stackable() ? static_cast<std::int32_t>(it->stack_count) : 1);
-                    game::QuantityOpen q;
-                    q.max = lim.max, q.start = lim.start;
-                    at_button(host, q);
-                    net::ItemSlot where = *m->selected;
-                    open_quantity(host, q, [&host, where](std::int32_t n) {
-                        if (host.conn && n > 0) host.conn->merchant_sell(where, static_cast<std::uint32_t>(n));
-                    }, merchant_quantity_owner(host));
-                }
-            }
+            merchant_sell_button(host);
         } else if (id == "MW_Send_Button") {
             // The mail page's RequestPutItem: a stack asks how many (the whole stack to start), then the parcel.
             if (m->selected) {
@@ -805,7 +889,7 @@ public:
                     if (it->stackable() && it->stack_count > 1) {
                         game::QuantityOpen q;
                         q.max = q.start = static_cast<std::int32_t>(it->stack_count);
-                        at_button(host, q);
+                        at_merchant_button(host, q);
                         open_quantity(host, q, send, merchant_quantity_owner(host));
                     } else {
                         send(1);
@@ -813,7 +897,7 @@ public:
                 }
             }
         } else if (id == "MW_UsableButton") {
-            show_all_ = !show_all_; // WndNotification: +0x60 = !Checked, the list rebuilt
+            c.set_merchant_show_all(!c.merchant_show_all()); // WndNotification: +0x60 = !Checked, the list rebuilt
         } else if (id == "MW_Done_Button") {
             c.close_merchant();
         } else if (id == "MW_Inspect_Button") {
@@ -850,22 +934,11 @@ private:
         a.cell = *c;
         return a;
     }
-    // HandleBuy / HandleSell open the dialog at the Buy button's client rectangle's top left.
-    static void at_button(UiHost& host, game::QuantityOpen& q) {
-        if (host.click_rect[0] >= 0) {
-            q.x = static_cast<std::int32_t>(host.click_rect[0]);
-            q.y = static_cast<std::int32_t>(host.click_rect[1]);
-        }
-    }
     const net::MerchantSession* session(UiHost& host) {
-        if (!host.conn || !host.conn->merchant() || !host.conn->merchant()->open) {
-            selected_.reset();
-            return nullptr;
-        }
-        return &*host.conn->merchant();
+        return open_merchant(host);
     }
     std::optional<std::uint32_t> buy_slot(const net::MerchantSession& m) const {
-        if (selected_ && m.items.count(*selected_)) return selected_;
+        if (m.considered && m.items.count(*m.considered)) return m.considered;
         return std::nullopt;
     }
     // The item being considered: the one picked from the inventory to sell, else the merchant's selected one.
@@ -887,34 +960,7 @@ private:
     void inspect_selected(UiHost& host) {
         if (const net::Item* it = considered(host); it && host.inspect_item) host.inspect_item(*it);
     }
-    // UpdateList's ScrollKnown: the scroll's spell is known, or, for a spell of a group with a rank, one of a higher
-    // rank is: from the group's top rank down while above the scroll's. The original's SpellBookInfo::IsSpellKnown
-    // (@0x449cd0) reads only the spell book, so a learned discipline tome still shows. Deliberate change from RoF2:
-    // the profile's discipline list counts as well, so a tome already learned is left out too.
-    static bool scroll_known(UiHost& host, const net::Item& item) {
-        const auto& book = host.conn->spell_state().book;
-        auto known = [&](std::uint32_t id) {
-            return std::find(book.begin(), book.end(), id) != book.end() || host.conn->knows_discipline(id);
-        };
-        const std::int32_t id = item.effects[net::kEffectScroll].effect;
-        if (id <= 0) return false;
-        if (known(static_cast<std::uint32_t>(id))) return true;
-        const auto& table = host.conn->spell_table();
-        const game::SpellData* sp = table.get(static_cast<std::uint32_t>(id));
-        if (!sp || sp->spell_group <= 0 || sp->spell_rank < 0) return false;
-        for (const game::SpellData* s = table.by_group_and_rank(sp->spell_group, sp->spell_subgroup, -1, false);
-             s && s->spell_rank > sp->spell_rank;
-             s = table.by_group_and_rank(s->spell_group, s->spell_subgroup, s->spell_rank - 1, true))
-            if (known(s->id)) return true;
-        return false;
-    }
-
-    std::optional<std::uint32_t> selected_;
     int page_ = 0;
-    // PurchasePageHandler +0x60, "show every item": the window builds MW_UsableButton checked (CMerchantWnd's
-    // constructor, SetCheck(1)), so the list starts filtered; a click sets it to !Checked. Kept for the session, as
-    // the original's window is.
-    bool show_all_ = false;
     std::vector<std::uint32_t> slots_;
     ListData data_;
     std::string send_to_, note_; // the Parcels page's To and Note boxes
@@ -1014,7 +1060,7 @@ public:
         if (!shown(host) || id != "ItemList" || row < 0 || static_cast<std::size_t>(row) >= keys_.size() ||
             revision_ != host.conn->shroud_bank()->revision) return false;
         selected_ = keys_[static_cast<std::size_t>(row)];
-        if (right) host.conn->inspect_shroud_bank(revision_, *selected_, ImGui::GetIO().KeyAlt);
+        if (right) host.conn->inspect_shroud_bank(revision_, *selected_, ui_keys().alt);
         return true;
     }
     void child(UiHost& host, std::string_view id, Child& out) override {
@@ -1127,8 +1173,8 @@ void open_container(UiHost& host, const net::ItemSlot& s) {
 // closes its container, a book is read, a common item is used (OP_ItemVerifyRequest: clickies, food and drink,
 // scrolls and tomes on servers that scribe them). The item display is the held button's (inspect_held).
 void item_right_click(UiHost& host, const net::ItemSlot& slot) {
-    const ImGuiIO& io = ImGui::GetIO();
-    item_right_click(host, slot, {io.KeyShift, io.KeyCtrl, io.KeyAlt});
+    const UiKeys keys = ui_keys();
+    item_right_click(host, slot, {keys.shift, keys.ctrl, keys.alt});
 }
 
 void item_right_click(UiHost& host, const net::ItemSlot& slot, net::SlotClickKeys keys) {
@@ -1145,8 +1191,8 @@ bool item_left_held(UiHost& host, const net::ItemSlot& slot) {
     const auto& inv = host.conn->inventory();
     const auto& coins = host.conn->cursor_coins();
     if (inv.cursor() || std::any_of(coins.begin(), coins.end(), [](std::uint32_t c) { return c != 0; })) return false;
-    const ImGuiIO& io = ImGui::GetIO();
-    auto b = game::inventory_hot_button(slot, inv.at(slot), io.KeyShift || io.KeyCtrl);
+    const UiKeys keys = ui_keys();
+    auto b = game::inventory_hot_button(slot, inv.at(slot), keys.shift || keys.ctrl);
     if (!b) return false;
     host.cursor_button = std::move(*b);
     ++host.cursor_serial;

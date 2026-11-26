@@ -19,6 +19,7 @@
 #include <lua.hpp>
 
 #include "app/lua_ui_windows.h"
+#include "app/ui_input.h"
 #include "core/ascii_case.h"
 #include "core/web_url.h"
 #include "game/eq_names.h"
@@ -1280,11 +1281,11 @@ private:
         };
         rows.push_back(std::move(moves));
         add("Ungroup", MemberAction::Ungroup);
-        ImVec2 pos = ImGui::GetMousePos();
-        if (!ImGui::IsMouseClicked(ImGuiMouseButton_Right) || !ImGui::IsMousePosValid(&pos)) {
+        ImVec2 pos = ui_mouse_pos();
+        if (!ui_mouse_pos_valid(&pos) || !ImGui::IsMouseClicked(ImGuiMouseButton_Right)) { // (no ImGui: no mouse)
             const auto& rect = host.click_rect;
             if (rect[2] >= 0) pos = ImVec2(rect[2], (rect[1] + rect[3]) / 2);
-            else if (!ImGui::IsMousePosValid(&pos)) pos = ImGui::GetMainViewport()->GetCenter();
+            else if (!ui_mouse_pos_valid(&pos)) pos = ImVec2(ui_display_size().x / 2, ui_display_size().y / 2);
         }
         host.open_menu(pos.x, pos.y, std::move(rows));
         return true;
@@ -1726,7 +1727,7 @@ public:
         // WndNotification 1 (a click): CGuildBankWnd_SelectItem, and with Alt (keyboard flags & 0xc) the item's view;
         // 3 (a right click): the selection, then the view, or with Alt the 3D preview (sub_0067cb80).
         select(host, keys[static_cast<std::size_t>(row)]);
-        bool alt = ImGui::GetIO().KeyAlt;
+        bool alt = ui_keys().alt;
         if (!right) {
             if (alt) view(host);
         } else if (!alt) {
@@ -1834,7 +1835,7 @@ private:
     void view(UiHost& host) {
         // Send_OP_GuildBank_0067cc00: 1 unless Shift is held.
         if (host.conn->guild_bank_item(host.conn->guild_bank().selected))
-            host.conn->guild_bank_send(net::GuildBankAction::View, ImGui::GetIO().KeyShift ? 0 : 1);
+            host.conn->guild_bank_send(net::GuildBankAction::View, ui_keys().shift ? 0 : 1);
     }
     void ask_quantity(UiHost& host, std::int32_t max, std::function<void(std::int32_t)> done) {
         // CQuantityWnd::Open(window, max, start 1, the button's centre, keys, min 0).

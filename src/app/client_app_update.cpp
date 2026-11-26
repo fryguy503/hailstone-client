@@ -18,9 +18,9 @@ void ClientApp::start_updater() {
     ui::UpdateNotice& n = login_view_.update;
     n.current = release_version();
     const std::filesystem::path install = platform::install_dir();
-    // What's new: this release's part of the CHANGELOG.md shipped with it.
+    // What's new: this release's part of the CHANGELOG.md shipped with it (a nightly's: the unreleased part).
     if (auto text = read_text_file(install / std::string(kChangelogName)))
-        login_view_.release_notes = changelog_section(*text, release_version());
+        login_view_.release_notes = changelog_section(*text, changelog_heading(release_version()));
     login_view_.project_page = default_project_page();
     n.check = "off";
     if (!opts_.updates) {

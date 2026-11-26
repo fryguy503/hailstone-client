@@ -14,6 +14,7 @@
 
 #include "app/actions_ui.h"
 #include "app/lua_ui_windows.h"
+#include "app/ui_input.h"
 #include "game/hot_button_sets.h"
 #include "game/icon_selection.h"
 #include "game/keymap.h"
@@ -107,7 +108,7 @@ public:
         if (!sel_.open(b.icon_type, b.icon_slot)) return;
         combo_type_ = sel_.type(); // CComboWnd::SetChoice(type)
         // placed at x, y kept on the screen (CXWndManager +0x10c / +0x110), centred without a point
-        ImVec2 ds = ImGui::GetIO().DisplaySize;
+        ImVec2 ds = ui_display_size();
         auto r = host.textures ? host.textures->screen_rect(screen_) : std::nullopt;
         int w = r ? r->w : 450, h = r ? r->h : 300;
         int px = static_cast<int>(x), py = static_cast<int>(y);
@@ -287,8 +288,8 @@ int HotBarMenu(lua_State* L) {
     auto* host = static_cast<UiHost*>(lua_touserdata(L, lua_upvalueindex(1)));
     int bar = held_index(luaL_checkinteger(L, 1));
     if (!host || !valid_bar(bar)) return 0;
-    ImVec2 mp = ImGui::GetMousePos();
-    if (!ImGui::IsMousePosValid(&mp)) mp = ImVec2(ImGui::GetIO().DisplaySize.x / 2, ImGui::GetIO().DisplaySize.y / 2);
+    ImVec2 mp = ui_mouse_pos();
+    if (!ui_mouse_pos_valid(&mp)) mp = ImVec2(ui_display_size().x / 2, ui_display_size().y / 2);
     // (held to a screen's range: a double past float's would make the cast undefined)
     float x = lua_isnumber(L, 2) ? static_cast<float>(std::clamp(lua_tonumber(L, 2), -1e6, 1e6)) : mp.x;
     float y = lua_isnumber(L, 3) ? static_cast<float>(std::clamp(lua_tonumber(L, 3), -1e6, 1e6)) : mp.y;
@@ -410,8 +411,8 @@ void open_hot_bar_menu(UiHost& host, int bar, float x, float y, bool layout_lock
     rows.push_back(separator());
     // 0x1964 Button Size: CQuantityWnd at the mouse
     UiHost::MenuRow size = row(text(host, game::kStrHbButtonSize), [&host, bar] {
-        ImVec2 mp = ImGui::GetMousePos();
-        if (!ImGui::IsMousePosValid(&mp)) mp = ImVec2(-1, -1);
+        ImVec2 mp = ui_mouse_pos();
+        if (!ui_mouse_pos_valid(&mp)) mp = ImVec2(-1, -1);
         open_hot_bar_size(host, bar, mp.x, mp.y);
     });
     rows.push_back(locked ? disabled(std::move(size)) : std::move(size));

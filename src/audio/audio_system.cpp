@@ -9,6 +9,7 @@
 #include "assets/xmi.h"
 #include "audio/sound_library.h"
 #include "audio/xmi_player.h"
+#include "core/ascii_case.h"
 #include "core/config.h"
 #include "core/game_dir.h"
 #include "core/log.h"
@@ -271,6 +272,12 @@ std::shared_ptr<SoundFont> AudioSystem::font() {
 void AudioSystem::set_zone(const std::string& short_name) {
     zone_.clear(*this);
     zone_ = ZoneEmitters();
+    // Rain and wind use global assets, but their playback belongs to the departing zone. CEverQuest_ClearZoneWorldState
+    // @0x4939b0 calls Weather_StopEffect, EmitterSetRaining(0) and EmitterSetWind(0), so the original's emitters fade
+    // out over their release time (3000 ms). Hailstone cuts both loops at once, during the load screen: a deliberate
+    // presentation choice (docs/formats/audio.md).
+    set_weather(false, false);
+    weather_.clear(*this);
     std::erase_if(xmi_, [&](const auto& kv) { return kv.first == zone_xmi_; });
     zone_xmi_.clear();
     // SetCurrentZone: the room presets back to their defaults, then the zone's row of the table.
@@ -492,6 +499,71 @@ void AudioSystem::play_named_2d(const std::string& name) {
     c.echo *= static_cast<float>(settings_.realism) / 100.0f;
     std::uint32_t v = play_wave(it->second, c);
     log::debug("audio: {} {}{}", name, it->second, v ? "" : " (not started)");
+}
+
+bool AudioSystem::play_named_group_2d(std::string_view name, SoundGroup group) {
+    const std::string* file = nullptr;
+    for (const auto& [n, f] : named_waves_) {
+        if (iequals(n, name) || iequals(f, name)) {
+            file = &f;
+            break;
+        }
+    }
+    if (!file) {
+        for (const auto& [id, f] : global_waves_) {
+            if (iequals(f, name) && !iequals(f, "Unknown")) {
+                file = &f;
+                break;
+            }
+        }
+    }
+    if (!file) return false;
+    SoundControl c;
+    c.echo *= static_cast<float>(settings_.realism) / 100.0f;
+    const int percent = settings_.individual[group];
+    if (percent <= kSilentPercent) return true;
+    if (percent < kFullVolumePercent) c.volume *= option_volume_factor(percent, c.positional());
+    play_wave(*file, c);
+    return true;
+}
+
+std::vector<std::string> AudioSystem::named_sounds() const {
+    std::vector<std::string> out;
+    out.reserve(named_waves_.size());
+    for (const auto& [n, f] : named_waves_) out.push_back(n);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+std::vector<std::string> AudioSystem::sound_files() const {
+    std::vector<std::string> out;
+    out.reserve(global_waves_.size() + named_waves_.size());
+    auto add = [&](const std::string& f) {
+        if (!f.empty() && !iequals(f, "Unknown")) out.push_back(f);
+    };
+    for (const auto& [id, f] : global_waves_) add(f);
+    for (const auto& [n, f] : named_waves_) add(f);
+    std::sort(out.begin(), out.end(), [](const std::string& a, const std::string& b) {
+        const int c = icompare(a, b);
+        return c != 0 ? c < 0 : a < b; // one order for spellings that differ only in case
+    });
+    out.erase(std::unique(out.begin(), out.end(), [](const std::string& a, const std::string& b) { return iequals(a, b); }),
+              out.end());
+    return out;
+}
+
+void AudioSystem::play_tone_2d(double hz, std::uint32_t ms, SoundGroup group) {
+    // About half of full scale: Windows' Beep is a fixed system tone, here it sits among the game's sounds.
+    constexpr float kToneAmplitude = 0.5f;
+    constexpr std::uint32_t kToneFadeMs = 5;
+    const int percent = settings_.individual[group];
+    if (percent <= kSilentPercent) return;
+    if (!tone_.pcm || tone_.hz != hz || tone_.ms != ms)
+        tone_ = {hz, ms, std::make_shared<const Pcm>(make_tone(mixer_->rate(), hz, ms, kToneFadeMs, kToneAmplitude))};
+    float volume = 1.0f;
+    if (percent < kFullVolumePercent) volume *= option_volume_factor(percent, false);
+    constexpr std::int32_t kPlayOnce = 1; // (the mixer's 0 loops forever)
+    mixer_->play(tone_.pcm, volume, 0, kPlayOnce, Bus::Effects, nullptr);
 }
 
 bool AudioSystem::wave_playing(std::int32_t id) {

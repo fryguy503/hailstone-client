@@ -2884,10 +2884,8 @@ namespace hailstone::game {
 		// leave some, is drawn on the floor. Only where it is drawn changes (display_position, so picking and the NPC
 		// walls too); its position, which range and the other rules use, stays the server's.
 		bool ground_npcs = false;
-		// Hailstone (option illusion_mounts, a deliberate difference; docs/mechanics.md "Riding while illusioned"): the
-		// rider's own model does not keep it off its mount. The original's PlayerClient_AttachRiderToMount refuses a rider
-		// whose model has no tunic point (0x58dde0) or is a mount race drawn as the human fallback, which in practice
-		// means one under an illusion: the summon then fails with 5524. The mount's own dag is still needed to seat it.
+		// Hailstone (docs/mechanics.md "Riding with classic models and illusions"): playable forms ride in either
+		// model generation. The option also lets other forms bypass the stock rider checks. All still need a seat.
 		bool illusion_mounts = false;
 		// The floor smooth is given changed (a zone's collision loaded, a door came or moved): every spawn is measured for
 		// ground_npcs again.

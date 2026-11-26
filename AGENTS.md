@@ -62,7 +62,8 @@ Read before you change anything, in this order:
 - OS calls live only in `src/platform/`: no Win32 or POSIX calls elsewhere.
 - Vulkan is the graphics API, not an OS call. It lives in `src/render/` (device, swapchain, renderers) and in the UI's texture glue (`src/ui/imgui_vk_textures.cpp`, `ui_textures.cpp`, `web_textures.cpp`). The window's surface comes from `src/platform/`. `game/`, `net/` and `assets/` never include Vulkan headers.
 - No assumptions about the size of `long` or `wchar_t`, path separators, byte order, or the order of function-argument evaluation.
-- Layers depend downward only: `app` -> `game` / `ui` / `render` / `audio` -> `assets` / `net` / `web` -> `core` / `platform`.
+- Layers depend downward only: `app` -> `nav` / `plugin` / `mq` -> `game` / `ui` / `render` / `audio` -> `assets` / `net` / `web` -> `core` / `platform`. A folder includes its own row and the rows below. `tools/check_layers.py` enforces it; the old exceptions in `tools/data/layer_exceptions.txt` are only ever removed, never added.
+- New code turns a path into text with `core/path_utf8.h`, not `path::string()`. `tools/check_path_strings.py` holds each file's old count and lets it only go down.
 - Known compiler traps:
   - MSVC needs `NOMINMAX` before `<windows.h>` and has no `__builtin_*`.
   - MSVC's optimiser folds a wrapped 32-bit product divided by a constant as if nothing wrapped. Write `core::wrapped_div(a * b, k)` (`core/wrap_math.h`), not `static_cast<std::int32_t>(a * b) / k`.
@@ -81,7 +82,8 @@ build/hailstone/hailstone          # the client; the dev tree is build/hailstone
 ```
 
 - Run the whole `hailstone_tests` before you call something done. Run one case with `build/hailstone_tests -tc="<name>"`.
-- **GitHub CI builds nothing; it runs checks only** (docs/ci.md). The one exception is the macOS workflow, which builds only when started by hand or pushed to a `macos/**` branch. A merge is only as tested as your own run.
+- **Before a merge to `main`, run `tools/premerge.sh`** in the branch's worktree, with its changes committed. It runs every CI check (`tools/checks.sh`), the build and all of `hailstone_tests`, and prints the commit it passed on. Quote that line when you report or merge.
+- **GitHub CI builds nothing; it runs checks only** (docs/ci.md). The exceptions are the macOS workflow, which builds only when started by hand or pushed to a `macos/**` branch, and the self-hosted build (docs/ci.md "Self-hosted build"), which runs only when a maintainer's runner is switched on. A merge is only as tested as your own run.
 - For a change to `src/platform/`, the build files, the Lua bridge (`app/lua_ui*`) or anything a compiler may treat differently, also build with MSVC under Wine and run its tests (docs/ci.md "MSVC under Wine").
 - Releases are built locally (docs/updater.md "Making a release").
 - A sanitizer build is `-DHAILSTONE_SANITIZE=ON` (docs/hardening.md). Use it for anything that parses bytes.

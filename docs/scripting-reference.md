@@ -103,8 +103,11 @@ manifest's `caps` (docs/addons.md).
 | `Spell` | id or exact name | `spell` | a spell from the spell file |
 | `Cursor` | | `item` | the item on the cursor |
 | `InvSlot` | MQ's slot number or name | `invslot` | a slot: 0..33 the player's (`pack1`..`pack10`, `cursor` and the worn slots' names), 262.. the slots in the packs (ten a pack), 2000.. the bank (`bank1`..), 2032.. the slots in its bags, 2500.. the shared bank (`sharedbank1`..), 2532.. the slots in its bags; an unknown name is 0 |
-| `FindItem` | name, or `=exact name` | `item` | the first carried item whose name contains the text (worn, general slots, bags, cursor) |
-| `FindItemCount` | name, or `=exact name` | int | how many such items are carried, stacks counted |
+| `FindItem` | name, `=exact name`, or item id | `item` | the first carried item whose name contains the text, or with that id (worn, general slots, bags, cursor) |
+| `FindItemCount` | name, `=exact name`, or item id | int | how many such items are carried, stacks counted |
+| `FindItemBank` | name, `=exact name`, or item id | `item` | the first such item in the bank, then the shared bank, bags included (known with no banker open) |
+| `FindItemBankCount` | name, `=exact name`, or item id | int | how many such items are banked there, stacks counted |
+| `AltAbility` | name, or ability (group) id | `altability` | any AA the AA table holds, owned or not (`Me.AltAbility`: only the player's). By name, the player's own rank when they have one, else its first rank; by id, its first rank |
 | `Window` | window name | `window` | a window, to ask whether it is open |
 | `Plugin` | plugin name | `plugin` | a compiled plugin, to ask whether it is loaded |
 | `EverQuest` | | `everquest` | the game state and server name |
@@ -325,6 +328,8 @@ The value of `Spell[...]`, `Me.Gem[n]`, `Me.Casting` and the like. Its plain val
 | `ResistType` | string | `Magic`, `Fire`, `Cold`, `Poison`, `Disease`, `Chromatic`, `Prismatic`, `Physical`, `Corruption` or `Unresistable` |
 | `ResistAdj`, `Skill`, `SpellIcon`, `GemIcon`, `Category` | int | raw spell file values |
 
+The stacking and stats reads (`WillLand`, `StacksWith`, `StacksTarget`, `WillLandPet`, `Duration`, `MyRange`, and `Me.SpellShieldBonus` / `SpellDamageBonus`) work out the player's character once and share it until the client's state may have changed: the next frame, a packet the client sends, or a buff it drops itself. A script that asks them over each of a target's buffs in one frame pays for one build.
+
 ### item
 
 An item in a slot. Its plain value is the item's name.
@@ -504,8 +509,47 @@ pet's buffs come from the pet window's list, which carries no counters left, so 
 starting counters. `Silenced` is TRUE while any of the buffs has SPA 96 (as `Me.Silenced`, which gives the buff).
 Only these members are here; MQ2Debuffs' others are missing.
 
-`Window[name]` asks the UI whether a window of that name is open. The names are the game's own window names, which
-the UI packs use too (`InventoryWindow`, `LootWnd`, `BankWnd`, `GroupWindow`, ...).
+`Window[name]` says whether a window of that name is open. The names are the game's own window names, which
+the UI packs use too (`InventoryWindow`, `LootWnd`, `BankWnd`, `GroupWindow`, ...). Where the window only shows what
+the client already knows, the answer comes from the client's state, so it holds with no UI loaded (a headless
+client):
+
+- `CastingWindow` (casting), `SpellBookWnd`, `LootWnd`, `MerchantWnd`;
+- `BigBankWnd` (a 24-slot bank) or `BankWnd` (16), `GuildBankWnd`;
+- `TradeWnd` (with a player), `GiveWnd` (with an NPC);
+- `ConfirmationDialogBox`, `LargeDialogWindow`, `TaskSelectWnd`, `RespawnWnd`, `ProgressionSelectionWnd`,
+  `TaskTemplateSelectWnd`;
+- `pack1`..`pack10`: TRUE while that slot holds a bag. A Hailstone bag's slots can be clicked with its window closed,
+  which is what a script opens it for.
+
+Any other name asks the client's stock windows (their own open state, kept whether or not anything is drawn), and
+is FALSE for a window the client does not have.
+
+`Window[name].Child[child]` is one of the window's children, by its ScreenID (MQ's item names that E3 sends are taken
+too: `MW_ItemList`, `cd_textoutput`, and `TRDW_OtherName`, a later client's name for `TRDW_HisName`). Its members
+come from the window's own state, the same answers it draws with, so they hold with no UI drawn:
+
+| Member | Type | |
+|---|---|---|
+| `Text` | string | the child's text; `""` when the window gives it none (whether the XML has such a child is not checked) |
+| `Enabled` | bool | TRUE unless the window disables it (a child the window leaves alone reads as enabled) |
+| `Value` | float | a gauge's value, 0..1000; NULL for anything else |
+| `List[row(,column)]` | string | that cell's text; NULL past the rows or columns |
+| `List[text(,column)]` | int | the first row (from 1) whose cell holds the text, any case; `=text` the whole text. NULL for none |
+| `Open` | bool | its window is open and the window does not hide it |
+| `Name` | string | the child's name |
+
+The column is from 1, 1 by default. A list's rows are the window's own, in its order: the merchant's as `/notify ...
+listselect` counts them (the merchant's order, hidden rows left out).
+
+MacroQuest's window methods act as they are read, as MQ's do; `/invoke ${...}` reads its line and does nothing else:
+
+- `DoOpen`, `DoClose`: the window opens or closes (its open state above: a closed merchant or trade window ends it);
+- `LeftMouseUp`, `RightMouseUp` on a child: the click `/notify` sends (`${Window[BigBankWnd].Child[BIGB_AutoButton].LeftMouseUp}`).
+
+They need the server's `actions` permission, as `/notify` does, and give TRUE when something took them. A click on
+ConfirmationDialogBox's `Yes_Button` while it asks a destroy's or a guild disband's question gives FALSE and does
+nothing: only the player answers that.
 
 ### Pure types
 
@@ -961,7 +1005,7 @@ rectangle (`u0, v0, u1, v1`).
 | CaptureKeyboard | () → — | Keyboard goes to the UI next frame |
 | GetIO | () → {width, height, fps, ctrl, shift, alt, wheel, mouseDX, mouseDY, uiScale, nav_active, nav_visible, typing} | One shared table, its values the frame's. Read-only: a write raises an error |
 | GetTime | () → seconds | |
-| GetFrameCount | () → int | |
+| GetFrameCount | () → int | the frame number: ImGui's count widened to 64 bits, so it only grows and never wraps |
 
 #### Drag and drop (string payloads)
 
@@ -1055,7 +1099,7 @@ plus `cooldown` (0..1 of the recast left) on the slot readers while a recast run
 | Option | (name) → int\|nil | Client option value (ui/<pack>/options.lua) | — |
 | SetOption | (name, int) → — | Change, apply and save a client option | commands |
 | OptionChoices | (name) → {string} | Choices the client lists for an option (e.g. "resolution") | — |
-| PlaySoundTest | (name) → bool | Plays one of the Individual Sounds options (`own_footsteps`, `pet_footsteps`, `other_footsteps`, `open_bag`, `open_bank`, `money`, `thunder`, `equip`, `creature_ambient`) once at its volume; false for another name | — |
+| PlaySoundTest | (name) → bool | Plays one of the Individual Sounds options (`own_footsteps`, `pet_footsteps`, `other_footsteps`, `open_bag`, `open_bank`, `money`, `thunder`, `equip`, `creature_ambient`, `beep`: the chosen Beep sound) once at its volume; false for another name | — |
 | UiIni | (section, key) → string\|nil | Character UI ini value (over defaults.ini) | — |
 | SetUiIni | (section, key, value) → — | Write a UI ini value (saved with the window places, and on a quit or camp) | commands |
 | CoolDownColor | () → r, g, b, a | Colour of cool-down rectangles (user colour 0x15f, alpha 0x40) | — |

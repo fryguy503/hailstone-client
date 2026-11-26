@@ -602,6 +602,8 @@ TEST_CASE("addon_install: installed.txt reads back, a damaged record is taken fr
     a.author = "Some One";
     a.description = "Draws a hud.";
     a.notes = "https://github.com/owner/repo/releases/tag/v2";
+    a.required_tlos = std::vector<std::string>{"Me", "Target"};
+    a.suggested_tlos = std::vector<std::string>{};
     a.files = {{"MQ2Hud.so", 10, sha256(std::string_view("a"))}, {"ui/modern/my hud.lua", 3, sha256(std::string_view("b"))}};
     InstalledAddon b;
     b.name = "autoloot";
@@ -621,15 +623,32 @@ TEST_CASE("addon_install: installed.txt reads back, a damaged record is taken fr
     CHECK(back[0].author == a.author);
     CHECK(back[0].description == a.description);
     CHECK(back[0].notes == a.notes);
+    CHECK(back[0].required_tlos == a.required_tlos);
+    CHECK(back[0].suggested_tlos == a.suggested_tlos);
     REQUIRE(back[0].files.size() == 2);
     CHECK(back[0].files[1].path == "ui/modern/my hud.lua");
     CHECK(back[0].files[1].sha256 == a.files[1].sha256);
     CHECK_FALSE(back[1].auto_update); // off unless the player switched it on
+    CHECK_FALSE(back[1].required_tlos);
+    CHECK_FALSE(back[1].suggested_tlos);
     CHECK(find_addon(back, "mq2hud") == &back[0]);
 
     // Written with its backup, which stands in for a damaged record.
     const fs::path reg = addons_dir(dir.path()) / "installed.txt", bak = addons_dir(dir.path()) / "installed.bak.txt";
     CHECK(read_file(bak) == read_file(reg));
+    {
+        std::string invalid = read_file(reg);
+        const std::string roots = "required_tlos Me,Target\n";
+        REQUIRE(invalid.find(roots) != std::string::npos);
+        invalid.replace(invalid.find(roots), roots.size(), "required_tlos Me.Name\n");
+        put_file(reg, invalid);
+        const auto loaded = read_addon_registry(dir.path());
+        REQUIRE(loaded.addons.size() == 2);
+        CHECK(loaded.writable());
+        CHECK_FALSE(loaded.addons[0].required_tlos);
+        CHECK(loaded.addons[0].suggested_tlos == a.suggested_tlos);
+        REQUIRE(write_installed_addons(dir.path(), {a, b}));
+    }
     {
         // An older client's "auto 1" was written for every install without asking the player: it reads as off.
         std::string old = read_file(reg);

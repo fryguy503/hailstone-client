@@ -157,6 +157,27 @@ struct MobPercent {
 AppPacket encode_mob_percent(Op op, const MobPercent& v); // server direction, for tests
 std::optional<MobPercent> decode_mob_percent(const AppPacket& p);
 
+// Optional Hailstone server snapshot of current/max points for the local group and its pets. The request is
+// {u32 magic, u16 version}; the reply adds a u16 count, then one {u32 spawn id, 3 x (i64 current, i64 max)} per spawn.
+inline constexpr std::uint16_t kOpHsGroupVitalsRequest = 0x143c;
+inline constexpr std::uint16_t kOpHsGroupVitals = 0x143d;
+inline constexpr std::size_t kMaxGroupVitals = 12;
+
+struct VitalPoints {
+    std::int64_t current = 0;
+    std::int64_t maximum = 0; // zero for an unavailable or unused resource
+};
+
+struct GroupVital {
+    std::uint32_t spawn_id = 0;
+    VitalPoints hp, mana, endurance;
+};
+using GroupVitals = std::vector<GroupVital>;
+
+AppPacket encode_group_vitals_request();
+AppPacket encode_group_vitals(const GroupVitals& v); // server direction, for tests
+std::optional<GroupVitals> decode_group_vitals(const AppPacket& p);
+
 // ---------------------------------------------------------------- leadership (EQEmu's layouts)
 
 // OP_LeadershipExpToggle (1 byte: 1 earn leadership experience, 0 not); the server answers in chat.

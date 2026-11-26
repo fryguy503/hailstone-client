@@ -3,6 +3,7 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
@@ -11,6 +12,7 @@
 #include "game/spells.h"
 #include "game/tasks.h"
 #include "core/byte_io.h"
+#include "manual_clock.h"
 #include "mock_server/harness.h"
 #include "net/augment_packets.h"
 #include "net/group_packets.h"
@@ -65,6 +67,60 @@ TEST_CASE("server keyed state: group mana and endurance are kept only for a know
     CHECK(rig.conn.group().mana_percent.at(kKnown) == 40);
     CHECK(rig.conn.group().endurance_percent.size() == 1);
     CHECK(rig.conn.group().endurance_percent.at(kKnown) == 30);
+}
+
+TEST_CASE("group vitals: snapshots require capability and polling, expire and follow spawns") {
+    using namespace std::chrono_literals;
+    ManualClock clock;
+    auto options = quick_options();
+    options.session.clock = clock.source();
+    Rig rig(MockConfig::standard(), options);
+    REQUIRE(rig.to_zone());
+    REQUIRE(add_known(rig));
+    clock.hold();
+
+    const auto request_count = [&] {
+        return std::ranges::count(rig.server.zone_log, kOpHsGroupVitalsRequest, &AppPacket::opcode);
+    };
+    const auto send_reply = [&] {
+        rig.conn.receive_zone_packet_for_test(encode_group_vitals({
+            {kKnown, {100, 120}, {50, 60}, {99, 100}}, {kUnknown, {100, 120}, {}, {}}}));
+    };
+    rig.conn.request_group_vitals();
+    send_reply();
+    CHECK_FALSE(rig.conn.group_vital(kKnown));
+
+    rig.conn.receive_zone_packet_for_test(encode(HailstoneSettings{kServerGroupVitals}));
+    rig.conn.request_group_vitals();
+    rig.conn.request_group_vitals();
+    REQUIRE(rig.until([&] { return request_count() == 1; }));
+    send_reply();
+    const auto* exact = rig.conn.group_vital(kKnown);
+    REQUIRE(exact);
+    CHECK(exact->hp.current == 100);
+    CHECK_FALSE(rig.conn.group_vital(kUnknown));
+
+    clock.advance(999ms);
+    rig.conn.request_group_vitals();
+    rig.conn.receive_zone_packet_for_test(encode_group_vitals({}));
+    CHECK(rig.conn.group_vital(kKnown)); // unsolicited between polls
+    clock.advance(1ms);
+    rig.conn.request_group_vitals();
+    REQUIRE(rig.until([&] { return request_count() == 2; }));
+    clock.advance(1999ms);
+    CHECK(rig.conn.group_vital(kKnown));
+    clock.advance(1ms);
+    CHECK_FALSE(rig.conn.group_vital(kKnown));
+    send_reply();
+    REQUIRE(rig.conn.group_vital(kKnown));
+
+    rig.conn.receive_zone_packet_for_test(encode(GroupUpdateB{1, "Gennro", {}}));
+    CHECK_FALSE(rig.conn.group_vital(kKnown));
+    rig.conn.request_group_vitals();
+    send_reply();
+    REQUIRE(rig.conn.group_vital(kKnown));
+    rig.conn.receive_zone_packet_for_test(encode_delete_spawn(kKnown));
+    CHECK_FALSE(rig.conn.group_vital(kKnown));
 }
 
 TEST_CASE("server keyed state: another caster's cast is kept only for a known spawn and goes with it") {

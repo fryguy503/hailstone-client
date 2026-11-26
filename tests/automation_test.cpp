@@ -96,6 +96,39 @@ TEST_CASE("Automation: a server's map rule locks vanilla mode without changing t
     CHECK(filters.vanilla_enabled()); // no server rule leaves the player's own choice alone
 }
 
+TEST_CASE("Automation: managed TLO grants use installed registry file identity") {
+    AutomationHost h;
+    const fs::path data = h.world.dir / "data";
+    const std::string code = R"lua(
+local mq = require('mq')
+print('managed grant: ' .. (mq.TLO.Me.Name() or 'denied'))
+mq.delay(10000)
+)lua";
+    app::InstalledAddon installed;
+    installed.name = "MixedCase";
+    installed.source = "owner/mixedcase";
+    installed.version = "1.0.0";
+    installed.caps = plugin::kCapRead;
+    installed.autoload = installed.enabled = true;
+    installed.files = {{"init.lua", code.size(), sha256(code)}};
+    h.write("MixedCase/init.lua", code);
+    h.write("copy/init.lua", code);
+    fs::create_directories(app::addons_dir(data));
+    REQUIRE(app::write_installed_addons(data, {installed}));
+    h.automation->set_addon_ceilings(app::addon_ceilings(data));
+    h.automation->refresh_managed_addons();
+    net::GameConnectionTestAccess::set_server_rules(
+        *h.world.conn, plugin::parse_server_cfg("[scripts]\nplayer = on\n[tlos]\nblock = Me\n"
+                                              "addon_allow = owner/mixedcase:Me\n"));
+    h.automation->frame();
+    REQUIRE(h.automation->scripts().running("mixedcase"));
+    REQUIRE(h.automation->scripts().run("copy", {}));
+    h.automation->frame();
+    const auto chat = h.chat();
+    CHECK(std::find(chat.begin(), chat.end(), "managed grant: Tester") != chat.end());
+    CHECK(std::find(chat.begin(), chat.end(), "managed grant: denied") != chat.end());
+}
+
 TEST_CASE("Automation: a server that blocks /mapfilter suspends the saved filters and TargetPath") {
     AutomationHost h;
     auto& filters = h.automation->map_filters();

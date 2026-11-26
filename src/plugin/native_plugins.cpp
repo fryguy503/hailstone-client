@@ -345,6 +345,7 @@ struct Loaded {
     fs::path file, copy;
     Sha256Digest hash{};
     std::uint32_t caps = 0;
+    TloCaller tlo_caller;
     void* lib = nullptr; // platform::load_library's
     PluginHostApi table{};
 #if defined(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256) || defined(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256) || \
@@ -472,7 +473,7 @@ void end_lending(Loaded& l) {
 
 // Inside a plugin's code: its capabilities, and it stays loaded until this ends.
 struct Busy {
-    explicit Busy(Loaded& l) : l_(l), scope_(l.caps, l.name) { ++l_.busy; }
+    explicit Busy(Loaded& l) : l_(l), scope_(l.caps, l.name, l.tlo_caller) { ++l_.busy; }
     ~Busy() {
         // While a plugin lends, a lent thread's host call may run this plugin's callbacks (their Busy) under
         // g_lend_mutex at the same time: the counts change under it too. (A callback's return here may come while a
@@ -864,7 +865,7 @@ void h_write_chat(void* h, const char* text, std::uint32_t color) {
 void h_do_command(void* h, const char* line) {
     Loaded& l = Loaded::of(h);
     if (!line || !l.host->env.run) return;
-    CallerScope scope(l.caps, l.name);
+    CallerScope scope(l.caps, l.name, l.tlo_caller);
     l.host->env.run(line);
 }
 
@@ -905,6 +906,7 @@ int h_parse(void* h, const char* text, char* out, std::size_t out_size) {
         return -1;
     }
     if (!text || !l.host->env.context) return -1;
+    CallerScope scope(l.caps, l.name, l.tlo_caller);
     return copy_out(mq::parse_macro_data(l.host->env.context(), text), out, out_size);
 }
 
@@ -933,9 +935,9 @@ int h_add_tlo(void* h, const char* name, HailstoneTloFn fn, void* user) {
         return from_c(out);
     };
     const mq::Type* tp = &t;
-    reg.add_tlo(name, [tp](const mq::Context&, std::string_view index) {
-        return mq::Value::object(tp, 0, 0, std::string(index));
-    });
+    reg.add_tlo(
+        name, [tp](const mq::Context&, std::string_view index) { return mq::Value::object(tp, 0, 0, std::string(index)); },
+        {}, mq::TloOrigin::Addon);
     l.tlos.emplace_back(name);
     return 1;
 }
@@ -3385,7 +3387,7 @@ void show_queued_chat(Loaded& l) {
     }
     // As the plugin's own line, as it would be from one of its callbacks: GameConnection::chat keeps MacroQuest's
     // colour codes only in a plugin's or script's line, and this runs from the client's pulse, outside any.
-    CallerScope scope(l.caps, l.name);
+    CallerScope scope(l.caps, l.name, l.tlo_caller);
     for (const auto& c : lines) {
         if (c.chat_color) h_write_chat_color(&l, c.text.c_str(), c.color);
         else h_write_chat(&l, c.text.c_str(), c.color);
@@ -3655,6 +3657,7 @@ void discard(NativePlugins::Impl& m, std::unique_ptr<Loaded> l, bool shutdown) {
     m.world_placement.retire(l->owner);
     std::erase(m.world_owners, l->owner);
     if (shutdown && l->shutdown) guarded(*l, "ShutdownPlugin", [&] { l->shutdown(); });
+    if (l->tlo_caller) l->tlo_caller->revoke();
     m.env.hooks->remove(l->owner);
     if (m.env.web) m.env.web->close_owner(web_owner(*l));
     if (m.env.ui) m.env.ui->remove(l->name);
@@ -3733,6 +3736,8 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     p.copy = copy;
     p.hash = hash;
     p.caps = caps;
+    p.tlo_caller = m.env.policy->verified_tlo_caller(FileKind::Plugin, hash, p.file);
+    if (!may_inherit_tlo_proof(p.tlo_caller)) p.tlo_caller.reset();
     std::string load_error;
     p.lib = platform::load_library(copy, &load_error);
     if (!p.lib) return refuse(std::format("{} did not load: {}", name, load_error));
@@ -4095,11 +4100,13 @@ void NativePlugins::policy_changed(const std::vector<std::string>& autoload, boo
     for (auto& l : m.loaded) {
         std::uint32_t caps = m.env.policy ? m.env.policy->caps(FileKind::Plugin, l->hash, l->name) : 0;
         if (caps == 0) {
+            if (l->tlo_caller) l->tlo_caller->revoke();
             drop.push_back(l->name);
             continue;
         }
         // The player took back the permission for the server's plugin.
         if (m.asks(l->file, l->hash) && m.consent_for(l->hash) != Consent::Allowed) {
+            if (l->tlo_caller) l->tlo_caller->revoke();
             revoked.push_back(l->name);
             continue;
         }
@@ -4108,6 +4115,16 @@ void NativePlugins::policy_changed(const std::vector<std::string>& autoload, boo
             l->lifecycle_generation = core::next_process_identity();
         }
         l->caps = caps;
+        if (l->tlo_caller && l->tlo_caller->identity().empty()) {
+            auto current = m.env.policy->verified_tlo_caller(FileKind::Plugin, l->hash, l->file);
+            // The same proof, renewed: the /timed lines the plugin queued under the old policy hold it.
+            if (current && l->tlo_caller->same_addon(*current)) {
+                l->tlo_caller->renew(*current);
+            } else {
+                l->tlo_caller->revoke();
+                l->tlo_caller.reset();
+            }
+        }
         if (!l->can(kNameplateCaps)) remove_nameplates(*l);
         if (!l->can(kCapUi | kCapExtend)) {
             l->world_ready = false; m.world_geometry.retire(l->owner); std::erase(m.world_owners, l->owner);

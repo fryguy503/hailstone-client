@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -127,6 +128,18 @@ public:
     // A named sound of soundassets.txt ("YouveGotMail"), 2D: 0x4ab700's id, then WavePlay(id, 0). Nothing
     // when the name is not there.
     void play_named_2d(const std::string& name);
+    // Hailstone: the same at an individual sound's volume: a named sound in any case, or any wave file
+    // soundassets.txt lists (a named or a numbered entry's: "mail1.wav", "LevelUp.WAV"); false when the game folder
+    // has no such sound (nothing played).
+    bool play_named_group_2d(std::string_view name, SoundGroup group);
+    // soundassets.txt's sound names, sorted.
+    std::vector<std::string> named_sounds() const;
+    // Every wave file soundassets.txt lists, once each in any case, sorted in any case; its "Unknown" entries left
+    // out (the Beep sound's search).
+    std::vector<std::string> sound_files() const;
+    // Hailstone: a sine tone at an individual sound's volume, on the effects bus (make_tone; MQ's /beep with no
+    // sound). The last tone's samples are kept for the next of the same kind.
+    void play_tone_2d(double hz, std::uint32_t ms, SoundGroup group);
     bool wave_playing(std::int32_t id);
 
     // A spawn's sound ids (PlayerClient::SetSounds), cached by race and gender.
@@ -171,6 +184,11 @@ private:
 
     std::unordered_map<std::int32_t, std::string> global_waves_;
     std::unordered_map<std::string, std::string> named_waves_; // soundassets.txt's "name^file" lines
+    struct Tone {
+        double hz = 0;
+        std::uint32_t ms = 0;
+        std::shared_ptr<const Pcm> pcm;
+    } tone_; // play_tone_2d's last
     std::vector<std::string> mp3index_;
     std::unordered_map<std::int32_t, assets::RaceSoundIds> race_ids_;
     std::unordered_map<std::uint32_t, game::SpawnSounds> spawn_sounds_;

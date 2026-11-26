@@ -291,6 +291,10 @@ Each entry names the window and what is particular to it; the `hs.*` calls behin
 - **TargetWindow**: con colour, health, target's target, the aggro meter (AggroMeterWnd's gauge 149 and labels 302..307; `aggro.lua` keeps the game's window hidden, and the EQ menu has no Aggro Meter row), and buffs with Spell Info on a right click.
 
 - **GroupWindow** has member cards and the invite, disband, accept and decline buttons. A left click on `Gauge<n>` selects the member. A left click on `PetGauge<n>`, used by the Modern card's green pet bar, selects their pet. Solo the window shows only with an invitation or a player to invite.
+  The Modern frame's right-click menu and Gamepad's **Options > Interface** let you choose **None**, **Percentage**, **Value** (current / maximum), or **Both** separately for member HP, mana, endurance (stamina), and group pet HP. Member HP defaults to Percentage. The other group readouts default to None.
+
+- **PetInfoWindow** has a separate HP readout with the same four modes, defaulting to Percentage. Right-click the Modern Pet frame or use **Options > Interface** in Gamepad. That Gamepad setting also controls the pet HUD readout.
+  Exact values appear when the server [supplies them](../server/README.md#group-and-pet-vitals). A percentage-only server still shows percentages in Percentage and Both. An unavailable value leaves its text blank. Choices are saved separately in each UI pack's settings.
 
 - **BuffWindow** and **ShortDurationBuffWindow**: the defaults are the compact horizontal icon trays with remaining time under each icon, a transparent background, and no title bar or drag resizing. Icons fill from right to left and pulse near expiry.
   - Right-click an effect for Spell Info, Add to Blocked Buffs, Remove, and **Window options**. Right-click the title bar or an empty spot to open the options directly, or Alt-right-click anywhere in the tray.
@@ -529,7 +533,7 @@ Its search field filters the open tab:
 - A setting stays when every query word is in its label, tooltip or section title (on the Plugins tab, the plugin's name).
 - Words may be loose (`lib/fuzzy.lua`): initials of consecutive words ("fov" for Field of View), a word's letters in order from its first (four letters or more), or one letter off (five or more).
 - Key bindings, chat filters and colours match by name; the key list reads only rows in view without a search.
-- Empty sections are left out whole, and section buttons hide while searching. Tests: `tests/lua_scripts_test.cpp`, `tests/ui_pack_windows_test.cpp`.
+- Empty sections are left out whole, and section buttons hide while searching. Tests: `tests/lua_scripts_test.cpp`, `tests/ui_pack_windows4_test.cpp`.
 
 #### System windows
 
@@ -672,6 +676,9 @@ Lua socials for `ui/modern/luasocial.lua` and `ui/gamepad/luasocial.lua` (`hs.Lu
 - **RespawnWnd**: server destination names; the marker cell as Handle_OP_RespawnWindow fills it ("*" default, "r" for a row whose final byte is set); unavailable rows `texts.disabled`; accepted hover resurrection enables the reserved final row locally; resurrection text red/green; Select needs an available destination and the packet delay; timer gauge EQType 28.
 
 The original Respawn window stays drawn beside confirmation dialogs; the packs put a resurrection offer in front once, as it appears. ConfirmationDialogBox's `ResurrectionOffer` child (not in the XML) shows while the question is that offer.
+The offer's text is the original's (docs/protocol/rof2-packets.md, "Combat: resurrection while hovering"), which
+names the spell and its percentage. The native confirmation draws only after the active pack has had a chance to
+claim the dialog for that frame.
 
 #### `lua_ui_tint.cpp`
 
@@ -817,7 +824,7 @@ Hailstone's own login, server select, character select and creation screens, dra
 - **Revisions**: the first three views carry `view.revision`. Passing it back gives `true` while nothing changed, so a window keeps its table; a script that writes into its held view must read the whole view next frame.
 - **Actions** (`hs.LoginSet`, `hs.LoginDo`, `hs.ServerSelectDo`, `hs.CharacterSelectDo`, `hs.CharacterCreateDo`; lists 1-based; the file's comments list them) do what the ImGui screens do. The login view has `view.version` (`build_version()`, shown at the foot) and the updater's `view.update` with `"updateDownload"`, `"updateRestart"`, `"updateSkip"` and `"updateNotes"` (docs/updater.md).
 - **Deleting a character** is the client's call to confirm. The shipped packs (Modern, Gamepad) ask first in their own look, naming the character, and their own code's `hs.CharacterSelectDo("delete")` then deletes. From any other caller that call asks the client's question ("Delete <name> permanently? This cannot be undone.") and deletes only on Yes, and only while the same character is still picked. The client draws that question in an ImGui window of its own (`UiHost::client_confirm`, `draw_client_confirm`), under any pack, which no Lua code sees or answers: it appears even when an interface Hailstone does not ship draws no ConfirmationDialogBox, and a script cannot press its Yes as it could the box's. The Advanced Inventory's bulk destroy asks the same way (docs/mechanics.md).
-- **A destroy's question in ConfirmationDialogBox** (an item's destroy, a guild's disband) is answered Yes only by the pack's own code, which passes on the player's click: `hs.ClickChild`, `hs.WindowButton` and `hs.ClickChildAt` on its `Yes_Button` from a script, a plugin window or another Lua state return false and log a warning (`destructive_confirmation_up`). Its No, and every other question (a rez, a trade's), stay open to scripts.
+- **A destroy's question in ConfirmationDialogBox** (an item's destroy, a guild's disband) is answered Yes only by the pack's own code, which passes on the player's click: `hs.ClickChild`, `hs.WindowButton` and `hs.ClickChildAt` on its `Yes_Button` from a script, a plugin window or another Lua state return false and log a warning (`destructive_confirmation_up`, `refuse_code_destroy_yes`), as do a script's or plugin's `/notify ConfirmationDialogBox Yes_Button leftmouseup` and `${Window[ConfirmationDialogBox].Child[Yes_Button].LeftMouseUp}` (FALSE). The player's own typed `/notify` still answers. Its No, and every other question (a rez, a trade's), stay open to scripts.
 - Worlds are sorted favourites first, then by name ignoring case (`ui::server_list_order`), a Hailstone difference (the original keeps the login server's order). `"favorite", i` toggles one, kept as hailstone.ini `login.favorite_worlds.<profile>`, names joined by `|`.
 - Creation's rules are shared with the ImGui screen (`ui::create_normalize`, `create_set_deity`, `create_stat_up` and the rest in `src/ui/dev_screens.h`). `hs.CharacterCreateDo("randomName")` asks OP_RandomNameGenerator. `hs.CharacterCreateHelp(kind, id)` gives dbstr_us.txt's description (types 8, 9, 14, 15 and 10) and name.
 - Reading a view in a frame replaces the client's screen (`UiApi::replaces("LoginScreen" | "serverselect" | "CharacterListWnd" | "CharacterCreateScreen")`); actions return next frame via `UiHost::login_action`, `server_select_action`, `char_select_action` and `char_create_action`.

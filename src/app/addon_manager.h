@@ -14,6 +14,7 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -24,6 +25,7 @@
 #include <vector>
 
 #include "app/addon_install.h"
+#include "app/server_management_view.h"
 #include "core/addon_index.h"
 #include "core/addon_manifest.h"
 #include "platform/http_get.h"
@@ -140,6 +142,8 @@ public:
     // Fetches the manifest a link names: the offer, or a message why not. `expect`: a suggested add-on's, from the
     // add-on index.
     void inspect(std::string link, std::optional<AddonExpect> expect = std::nullopt);
+    // Reads cached dependency declarations. An explicit request queues a manifest-only check.
+    std::optional<ServerManagementAddonTlos> addon_tlos(std::string_view source, bool request);
     void cancel_offer();
     // The player said yes to the offer: download, check and stage it (installed by install_ready()). An offer older
     // than the installed version (AddonOffer::older) needs `older_ok`, the player's second yes; without it the offer
@@ -229,6 +233,7 @@ private:
     bool stop_ = false;
     std::atomic<bool> cancel_{false}; // stop_, readable without the lock (the transfers ask it)
     AddonsStatus status_;
+    std::map<std::string, ServerManagementAddonTlos, std::less<>> tlo_reviews_;
     std::atomic<std::uint32_t> changes_{0};
     std::vector<Staged> staged_;
     // Lower-case names of the add-ons removed this run: a check that read installed.txt before the removal does not

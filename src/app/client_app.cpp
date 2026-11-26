@@ -242,8 +242,11 @@ int ClientApp::run() {
         loading_under_question_ = automation_ && automation_->plugin_consent().has_value();
         if (ui_.visible()) draw_ui(fps);
         lap.mark("draw_ui");
+        // UiHost's state (its connection, the session) every frame, whether or not a Lua UI draws: the stock
+        // windows' state, /notify's actions and the scripts' Window reads use it with no UI (a pack that failed to
+        // load or is being reloaded; a client that draws nothing).
+        update_ui_host();
         if (lua_ui_) {
-            update_ui_host();
             sync_plugin_windows();
             lap.mark("hs host update");
             ui_api_->begin_frame();
@@ -255,6 +258,7 @@ int ClientApp::run() {
             lap.mark(kLuaFrame);
             core::frame_sections::add_bytes(kLuaFrame, lua_ui_->allocated_bytes() - lua_bytes);
         }
+        if (ui_.visible() && screen_ == Screen::InGame && conn_) market_ui_.draw_confirmation_fallback(*conn_);
         window_.set_text_input(std::exchange(web_text_input_, false) && ui_.visible()); // a page that has the keys (app/lua_ui_web.cpp)
         settle_frame_.ui = true; // UI maintenance ran; loading/settling presentations are always visible
         if (screen_ == Screen::InGame && zone_settling() && !loading_under_question_) ui::loading_overlay(loading_view_);
@@ -324,6 +328,24 @@ int ClientApp::run() {
                 conn_->show_chat("The moon turns the color of blood.");
             blood_moon_ = blood;
         }
+        // Run weather before the mixer even when no frame will be drawn. The destination can send its initial
+        // weather before scenery loads, so wait until the game is ready to consume it.
+        const bool outdoor = time_type_ == 1 || time_type_ == 2 || time_type_ == 5;
+        if (in_world && conn_) {
+            for (const auto& w : conn_->take_weather()) weather_.handle_message(w.kind, w.intensity);
+            auto random = [this] { return std::uniform_int_distribution<std::int32_t>(0, 0x7fff)(weather_random_); };
+            const std::uint16_t zone_id = conn_->zone_id();
+            auto weather_step = [&](double at) {
+                weather_.update(at, outdoor, random, zone_id);
+                if (std::int32_t sound = weather_.thunder(); sound && audio_)
+                    audio_->play_group_2d(sound, audio::SoundGroup::Thunder);
+                if (std::uint32_t message = weather_.message()) conn_->show_eqstr(message);
+            };
+            if (step_clock_.fixed())
+                for (const auto& st : frame_steps_) weather_step(static_cast<double>(st.ms) / 1000.0);
+            else
+                weather_step(t);
+        }
         if (audio_) {
             auto now_ms = static_cast<std::uint32_t>(t * 1000.0) + 1;
             if (in_world && conn_) {
@@ -366,8 +388,6 @@ int ClientApp::run() {
         // What the renderers draw with: the original's view, or in the modern mode the longer one with its haze
         // (mouse picking keeps the original's yon).
         const bool modern = lighting_mode_ == render::LightingMode::Modern;
-        // The weather (OP_Weather; game/weather.h), in the open: zone time types 1, 2 and 5.
-        const bool outdoor = time_type_ == 1 || time_type_ == 2 || time_type_ == 5;
         render::ModernView modern_view{view_, 0.0f};
         // The modern haze, eased between places and weathers (render/atmosphere.h): its reach, length and colour.
         render::HazeTarget haze;
@@ -399,6 +419,7 @@ int ClientApp::run() {
         if (!f) {
             if (automation_) automation_->world_unavailable();
             ui_.end_frame_without_render();
+            weather_.discard_particle_steps(); // the next rendered frame only spawns its own drops
             // Age effects and consume cues even without a new render pose.
             update_scene_particles(dt, in_world, pre_game, camera_.position);
             continue;
@@ -413,23 +434,8 @@ int ClientApp::run() {
         if (in_game && conn_)
             camera_.position = conn_->camera_shake().offset(
                 camera_.position, static_cast<std::uint32_t>(net::GameConnection::now_ms()));
-        if (conn_)
-            for (const auto& w : conn_->take_weather()) weather_.handle_message(w.kind, w.intensity);
         if (in_game) {
-            auto random = [this] { return std::uniform_int_distribution<std::int32_t>(0, 0x7fff)(weather_random_); };
             const std::uint16_t zone_id = conn_ ? conn_->zone_id() : std::uint16_t{0};
-            // LightningStrike plays the thunder with the flash, WavePlay(id, 0); ApplyWeatherState shows the start.
-            auto weather_step = [&](double at) {
-                weather_.update(at, outdoor, random, zone_id);
-                if (std::int32_t sound = weather_.thunder(); sound && audio_)
-                    audio_->play_group_2d(sound, audio::SoundGroup::Thunder); // Hailstone: the Thunder volume
-                if (std::uint32_t message = weather_.message(); message && conn_) conn_->show_eqstr(message);
-            };
-            // Once per step of the game clock (core/step_clock.h): the fog band's fade is a fixed step an update.
-            if (step_clock_.fixed())
-                for (const auto& st : frame_steps_) weather_step(static_cast<double>(st.ms) / 1000.0);
-            else
-                weather_step(t);
             weather_look_.update(weather_, dt, zone_id);
             update_precipitation(dt, sky_hour);
         }

@@ -229,7 +229,6 @@ void ClientApp::load_zone(const std::string& short_name) {
         load_precipitation();
         sky_state_.set_sky(z->zone_short_name2.empty() ? z->zone_short_name : z->zone_short_name2);
         player_light_.reset();
-        haze_blend_.reset();
         emitter_view_proj_.reset(); // the last zone's view: every actor counts as in view until a frame is drawn
         camera_region_ = 0;
         // The classic sky (sky.s3d). The time-of-day light follows the
@@ -352,6 +351,12 @@ void ClientApp::unload_zone() {
     pre_game_world_.reset();
     missiles_.clear(); // CEverQuest_ClearZoneWorldState -> EQMissile_UpdateAll
     missile_particle_cues_.clear();
+    weather_.reset();
+    weather_look_ = {};
+    haze_blend_.reset();
+    // CEverQuest_ClearZoneWorldState @0x4939b0: Weather_StopEffect, EmitterSetRaining(0), EmitterSetWind(0). The
+    // original's emitters fade out over their release time; set_zone("") cuts the loops at once during the load
+    // screen (a deliberate presentation choice, audio/audio_system.cpp).
     if (audio_) audio_->set_zone("");
     if (zone_renderer_ || world_geometry_renderer_) vk_.wait_idle();
     world_geometry_renderer_.reset();
@@ -382,7 +387,6 @@ void ClientApp::unload_zone() {
     animated_objects_.reset();
     zone_ladders_.clear();
     zone_line_.set_buried({});
-    weather_.clear_particles(); // they land on the old zone's ground
     if (world_objects_) world_objects_->set_zone(nullptr, nullptr); // its models read the zone's archives
     zone_.reset();
 }

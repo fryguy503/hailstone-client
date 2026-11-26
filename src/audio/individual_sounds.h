@@ -27,6 +27,7 @@ enum class SoundGroup : std::uint8_t {
     Thunder,        // the thunder of a storm
     Equip,          // an item put on or taken off
     CreatureAmbient, // the sounds some creatures make all the time (spectres, undead): their ambient and idle loops
+    Beep,           // MQ's /beep (a script's alert): the sound chosen as audio.beep_sound, or the tone
     Count,          // not a group: the number of them
 };
 inline constexpr std::size_t kSoundGroupCount = static_cast<std::size_t>(SoundGroup::Count);

@@ -14,6 +14,7 @@
 #include "core/sha256.h"
 #include "mock_server/harness.h"
 #include "mq/commands.h"
+#include "mq/parse.h"
 #include "net/server_files.h"
 #include "net/server_files_packets.h"
 #include "net/zone_packets.h"
@@ -359,6 +360,34 @@ TEST_CASE("server files: command policy also applies to a transient login") {
     CHECK(files.pieces == 1);
     rig.conn.send_command("/WH");
     CHECK(test::has_line(rig.chat(), "Ask the admin."));
+}
+
+TEST_CASE("server files: TLO policy applies to both saved profiles and transient logins") {
+    for (const bool persistent : {false, true}) {
+        CAPTURE(persistent);
+        test::ScratchDir cache("server_tlo_policy");
+        auto options = test::quick_options();
+        if (persistent) options.server_files_dir = cache.path();
+        else options.server_access_dir = cache.path();
+        FakeServer files;
+        files.files["hailstone.cfg"] = "[tlos]\ndefault = deny\nallow = Me, Math\nblock = NearestSpawn\n";
+        files.files["graphics.txt"] = "unrelated server asset";
+        test::Rig rig(test::MockConfig::standard(), options);
+        serve_files(rig, files);
+        REQUIRE(rig.to_zone());
+        REQUIRE(rig.conn.server_rules());
+        CHECK(rig.conn.server_rules()->configured == persistent);
+        CHECK(files.pieces == (persistent ? 2 : 1));
+
+        mq::Registry registry;
+        mq::register_game_tlos(registry);
+        mq::Context ctx{};
+        ctx.conn = &rig.conn;
+        ctx.registry = &registry;
+        CHECK(mq::parse_macro_data(ctx, "${mAtH.Calc[2+3]} ${SpawnCount[npc]} ${NEARESTSPAWN[npc].ID}") ==
+              "5.00 NULL NULL");
+        CHECK_FALSE(registry.tlo(ctx, "Me").is_nil());
+    }
 }
 
 TEST_CASE("server files: GM command policy needs current EQEmu account status") {

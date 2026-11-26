@@ -14,14 +14,15 @@ constexpr IndividualSound kSounds[] = {
      "The steps of pets (an NPC that has an owner)."},
     {SoundGroup::OtherFootsteps, "other_footsteps", "Other footsteps",
      "The steps of other NPCs and other players."},
-    {SoundGroup::OpenBag, "open_bag", "Opening a bag", "The sound of a bag opening."},
-    {SoundGroup::OpenBank, "open_bank", "Opening a bank bag",
-     "The sound of a bag opening when it sits in a bank slot."},
+    {SoundGroup::OpenBag, "open_bag", "Bags", "The sounds of opening and closing a carried bag."},
+    {SoundGroup::OpenBank, "open_bank", "Bank bags",
+     "The sounds of opening and closing a bag in a bank or shared bank slot."},
     {SoundGroup::Money, "money", "Money", "The coin sound of buying, selling, looting and moving coin."},
     {SoundGroup::Thunder, "thunder", "Thunder", "The thunder of a storm."},
     {SoundGroup::Equip, "equip", "Equipping items", "The sound of putting on or taking off an item."},
     {SoundGroup::CreatureAmbient, "creature_ambient", "Creature ambient sounds",
      "The sounds some creatures make all the time, such as a spectre's hum."},
+    {SoundGroup::Beep, "beep", "Beep", "The /beep command's sound, a script's alert (its sound: Beep sound)."},
 };
 
 } // namespace

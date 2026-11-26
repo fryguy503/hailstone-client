@@ -107,8 +107,7 @@ public:
     void update(const glm::vec3& listener, std::uint32_t now_ms, float effects_volume, float music_volume,
                 EmitterSink& sink);
 
-    // Stops everything (zone change): kept voices are released at once and the zone's music entries leave the
-    // MusicManager.
+    // Stops current and fading loops at once and removes the zone's music entries from the MusicManager.
     void clear(EmitterSink& sink);
 
     // The MusicManager the zone's music entries live in (the client's global one); without one the zone keeps its
@@ -137,6 +136,7 @@ private:
 
     ZoneSoundSet set_;
     std::vector<State> state_;
+    std::vector<std::uint32_t> fading_loops_;
     MusicManager own_music_;
     MusicManager* music_ = nullptr;
     CrtRand rand_;

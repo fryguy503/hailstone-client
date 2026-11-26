@@ -5,10 +5,16 @@
 local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local roles = dofile("lib/role_icons.lua")
+local vitals = dofile("lib/vitals.lua")
 local T = hud.T
 local C = T.color
 local WINDOW = "GroupWindow"
 local ROLE_COLORS = { C.mana, C.accent, C.endurance }
+local HP_DISPLAY = "group.hpDisplay"
+local MANA_DISPLAY = "group.manaDisplay"
+local ENDURANCE_DISPLAY = "group.enduranceDisplay"
+local PET_DISPLAY = "group.petHpDisplay"
+local READOUT_H, READOUT_STEP = 16, 19
 
 -- Each slot's ids and its member record (filled in again every frame), made once.
 local SLOTS = {}
@@ -16,8 +22,17 @@ for i = 1, 5 do
   SLOTS[i] = {
     gauge = "Gauge" .. i, hit = "##Gauge" .. i, hp = "group.hp" .. i, mana = "group.mana" .. i,
     endurance = "group.end" .. i, pet = "group.pet" .. i, petGauge = "PetGauge" .. i,
-    m = { i = i }, tint = { 0, 0, 0, 1 }, color = { 0, 0, 0, 1 },
+    m = { i = i, hpText = { font = T.font.tiny }, manaText = { font = T.font.tiny },
+      enduranceText = { font = T.font.tiny }, petText = { font = T.font.tiny } },
+    tint = { 0, 0, 0, 1 }, color = { 0, 0, 0, 1 },
   }
+end
+
+local function readout(opts, mode, gauge, fraction)
+  opts.text, opts.right = nil, nil
+  if fraction == nil then return false end
+  opts.text, opts.right = vitals.Read(mode, gauge, fraction)
+  return opts.text ~= nil or opts.right ~= nil
 end
 
 local function member(i)
@@ -25,7 +40,7 @@ local function member(i)
   if raw == -1 or not name or name == "" then return nil end
   local slot = SLOTS[i]
   local m = slot.m
-  m.hp, m.name, m.dead, m.away = frac, name:match("^[^\n]*"), raw == -3, raw == -2
+  m.hp, m.name, m.dead, m.away, m.hpKnown = frac, name:match("^[^\n]*"), raw == -3, raw == -2, raw >= 0
   m.tint, m.mana, m.endurance, m.pet, m.petName, m.color = nil, nil, nil, nil, nil, nil
   -- a special value's tint (-2: not in the zone, full in the game's dark red)
   if tr then
@@ -35,8 +50,10 @@ local function member(i)
   end
   local mf, _, mraw = API.character.Gauge(30 + i)
   if mraw ~= -1 then m.mana = mf end
+  m.manaKnown = mraw >= 0
   local ef, _, eraw = API.character.Gauge(35 + i)
   if eraw ~= -1 then m.endurance = ef end
+  m.enduranceKnown = eraw >= 0
   local pf, pname, praw = API.character.Gauge(16 + i)
   if praw ~= -1 and pname and pname ~= "" then m.pet, m.petName = pf, pname end
   local r, g, b = API.windows.ChildColor(WINDOW, slot.gauge) -- a leader's name in green
@@ -51,20 +68,47 @@ end
 
 local CARD_W = 210
 local HEAD, PAD = 24, 6
-local PERCENT = {} -- "n%" by n
 local COUNT = {} -- "n / 6" by n
 
-local function cardH(m) return 47 + (m.pet and 9 or 0) end
+local function cardH(m)
+  return 47 + (m.hpText.text and READOUT_H - 10 or 0) + (m.manaReadout and READOUT_STEP or 0)
+    + (m.enduranceReadout and READOUT_STEP or 0) + (m.pet and (m.petReadout and READOUT_H + 4 or 9) or 0)
+end
 
 -- What the options and body read, set each frame before hud.Window (they are made once, not every frame).
 local members = {}
-local frame = { invited = false, canInvite = false, grouped = false, total = 0 }
+local frame = { invited = false, canInvite = false, grouped = false }
 local INVITED_BUTTONS = { { "FollowButton", "Accept", true, "##FollowButton" }, { "DeclineButton", "Decline", nil, "##DeclineButton" } }
 local GROUP_BUTTONS = { { "InviteButton", "Invite", nil, "##InviteButton" }, { "DisbandButton", "Disband", nil, "##DisbandButton" } }
 local BUTTON_OPTS = {}
 
+-- Exact values are requested only while hud.Window draws the group frame.
+local function size()
+  local hp = vitals.Mode(HP_DISPLAY, "percent")
+  local mana = vitals.Mode(MANA_DISPLAY, "none")
+  local endurance = vitals.Mode(ENDURANCE_DISPLAY, "none")
+  local pet = vitals.Mode(PET_DISPLAY, "none")
+  local total = HEAD + PAD
+  for _, m in ipairs(members) do
+    readout(m.hpText, hp, 10 + m.i, m.hpKnown and m.hp or nil)
+    m.manaReadout = readout(m.manaText, mana, 30 + m.i, m.manaKnown and m.mana or nil)
+    m.enduranceReadout = readout(m.enduranceText, endurance, 35 + m.i, m.enduranceKnown and m.endurance or nil)
+    m.petReadout = readout(m.petText, pet, 16 + m.i, m.pet)
+    total = total + cardH(m) + 4
+  end
+  if #members == 0 then total = total + 22 end
+  return CARD_W, total + 28
+end
+
 local OPTS = {
-  size = function() return CARD_W, frame.total end,
+  size = size,
+  menu = function()
+    vitals.Menu("Member HP", HP_DISPLAY, "percent")
+    vitals.Menu("Member Mana", MANA_DISPLAY, "none")
+    vitals.Menu("Member Endurance", ENDURANCE_DISPLAY, "none")
+    vitals.Menu("Pet HP", PET_DISPLAY, "none")
+    ui.TextDisabled("Exact values require server support.")
+  end,
   panelOpts = { opaque = true },
   -- solo: shown only with an invitation to answer or a player to invite
   hideWhen = function() return #members == 0 and not frame.invited and not frame.canInvite and not frame.grouped end,
@@ -111,35 +155,38 @@ local function body(x0, y, w0, h, s)
     T.Text(x + pad, cy + 5 * s, name, m.color or C.text, T.font.small)
     local roleHovered = roles.Draw(m.roles, x + pad + nameW + 4 * s, cy + 5 * s + (nh - iconSize) / 2,
       iconSize, iconGap, ROLE_COLORS)
-    local pct
-    if m.dead then pct = "Dead" elseif m.away then pct = "Away" else
-      local n = math.floor((m.hp or 0) * 100 + 0.5)
-      pct = PERCENT[n]
-      if not pct then
-        pct = n .. "%"
-        PERCENT[n] = pct
-      end
-    end
-    T.Text(x + w - pad, cy + 5 * s, pct, m.dead and C.danger or C.muted, T.font.small, "right")
+    local status = (m.dead and "Dead") or (m.away and "Away") or (not m.hpText.text and m.hpText.right)
+    if status then T.Text(x + w - pad, cy + 5 * s, status, m.dead and C.danger or C.muted, T.font.small, "right") end
     local by = cy + 5 * s + nh + 3 * s
-    T.Bar(slot.hp, x + pad, by, x + w - pad, by + 10 * s, s, m.dead and 0 or m.hp,
-      m.tint or ((m.hp or 1) < 0.25 and C.hpLow or C.hp))
-    by = by + 12 * s
+    local hpHeight = (m.hpText.text and READOUT_H or 10) * s
+    T.Bar(slot.hp, x + pad, by, x + w - pad, by + hpHeight, s, m.dead and 0 or m.hp,
+      m.tint or ((m.hp or 1) < 0.25 and C.hpLow or C.hp), m.hpText.text and m.hpText or nil)
+    by = by + hpHeight + 2 * s
     local half = (w - 2 * pad - 4 * s) / 2
-    if m.mana then T.Bar(slot.mana, x + pad, by, x + pad + half, by + 4 * s, s, m.mana, C.mana) end
-    if m.endurance then
+    if m.mana and not m.manaReadout then
+      T.Bar(slot.mana, x + pad, by, x + pad + half, by + 4 * s, s, m.mana, C.mana)
+    end
+    if m.endurance and not m.enduranceReadout then
       T.Bar(slot.endurance, x + pad + half + 4 * s, by, x + w - pad, by + 4 * s, s, m.endurance, C.endurance)
+    end
+    by = by + 7 * s
+    if m.manaReadout then
+      T.Bar(slot.mana, x + pad, by, x + w - pad, by + READOUT_H * s, s, m.mana, C.mana, m.manaText)
+      by = by + READOUT_STEP * s
+    end
+    if m.enduranceReadout then
+      T.Bar(slot.endurance, x + pad, by, x + w - pad, by + READOUT_H * s, s, m.endurance, C.endurance, m.enduranceText)
+      by = by + READOUT_STEP * s
     end
     local child = slot.gauge
     if m.pet then
-      by = by + 7 * s
-      local px0, px1, py1 = x + pad + 10 * s, x + w - pad, by + 5 * s
-      T.Bar(slot.pet, px0, by, px1, py1, s, m.pet, C.pet)
+      local px0, px1, py1 = x + pad + 10 * s, x + w - pad, by + (m.petReadout and READOUT_H or 5) * s
+      T.Bar(slot.pet, px0, by, px1, py1, s, m.pet, C.pet, m.petText)
       if clicked and ui.IsMouseHoveringRect(px0, by, px1, py1) then child = slot.petGauge end
     end
     if hovered and not roleHovered then
       ui.SetTooltip(m.name .. (m.roles ~= 0 and ("\n" .. roles.Labels[m.roles]) or "")
-        .. (m.pet and ("\nPet: " .. m.petName) or "") .. "\nRight-click for group roles")
+        .. (m.pet and ("\nPet: " .. m.petName) or "") .. "\nRight-click for group roles\nAlt+right-click for readout options")
     end
     if clicked then API.windows.ClickChild(WINDOW, child, "left") end
     cy = cy + ch + 4 * s
@@ -170,9 +217,5 @@ ui.window("Group", function()
   frame.invited = API.windows.ChildShown(WINDOW, "FollowButton") == true
   frame.canInvite = API.windows.ChildState(WINDOW, "InviteButton") == true
   frame.grouped = API.windows.ChildState(WINDOW, "DisbandButton") == true
-  local total = HEAD + PAD
-  for _, m in ipairs(members) do total = total + cardH(m) + 4 end
-  if #members == 0 then total = total + 22 end
-  frame.total = total + 28
   hud.Window(WINDOW, "Group", OPTS, body)
 end)

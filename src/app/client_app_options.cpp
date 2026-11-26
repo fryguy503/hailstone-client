@@ -2,10 +2,12 @@
 // frame settings (window mode, resolution, vertical sync, frame caps, field of view, UI scale).
 
 #include "app/client_app_internal.h"
+#include <algorithm>
 #include "app/frame_pace.h"
 #include "audio/individual_sounds.h"
 #include "core/ascii_case.h"
 #include "game/appearance.h"
+#include "mq/calc.h"
 
 namespace hailstone::app {
 
@@ -378,6 +380,13 @@ std::vector<std::string> ClientApp::option_choices(std::string_view name) const 
         out.push_back("Default");
         for (auto& f : ui::font_families(font_faces())) out.push_back(f);
     }
+    // The Beep sound (/beep's, audio.beep_sound): the tone, then the short list (beep_sound_featured), then every
+    // other sound file of the game folder (the packs' search).
+    if (name == "beep_sound") return beep_choices();
+    if (name == "beep_sound_featured") {
+        const auto& all = beep_choices();
+        return std::vector<std::string>(all.begin() + 1, all.begin() + 1 + static_cast<std::ptrdiff_t>(beep_featured_));
+    }
     // The name plates' font list: "Same as UI", then every family.
     if (name == "plate_font_face") {
         out.push_back("Same as UI");
@@ -424,6 +433,15 @@ std::optional<int> ClientApp::option_value(std::string_view o) const {
     // Hailstone: the right-click menu on other players (game::opens_player_menu), on by default.
     if (o == "player_menu") return player_menu_ ? 1 : 0;
     if (o == "right_click_consider") return right_click_consider_ ? 1 : 0;
+    if (o == "beep_sound") {
+        // Its place in option_choices("beep_sound"): 0 the tone, -1 a sound this game folder does not have.
+        const std::string sound = config_.get_string("audio.beep_sound", "");
+        if (sound.empty()) return 0;
+        const auto& choices = beep_choices();
+        for (std::size_t i = 1; i < choices.size(); ++i)
+            if (game::same_no_case(choices[i], sound)) return static_cast<int>(i);
+        return -1;
+    }
     if (o == "font_face") {
         // The face's place in option_choices("font_face"): 0 the default, -1 one not in the list.
         std::string face = config_.get_string("ui.font_face", "");
@@ -535,6 +553,13 @@ void ClientApp::set_option_value(std::string_view o, int v) {
         return;
     }
     if (set_display_option(o, v) || set_video_option(o, v) || set_iso_option(o, v)) return;
+    if (o == "beep_sound") { // kept by name, so another game folder's list does not move it
+        const auto& choices = beep_choices();
+        if (v < 0 || v >= static_cast<int>(choices.size())) return;
+        config_.set("audio.beep_sound", v == 0 ? std::string() : choices[static_cast<std::size_t>(v)]);
+        config_.save(config_path_);
+        return;
+    }
     if (o == "font_face") {
         // GeneralPageWndNotification's font button: the face set and saved (Fonts / Font.<set>.0).
         auto choices = option_choices("font_face");
@@ -892,9 +917,58 @@ void ClientApp::use_character_settings(const std::filesystem::path& character_di
 bool ClientApp::play_sound_test(std::string_view option) {
     const audio::IndividualSound* sound = audio::find_individual_sound(option);
     if (!sound) return false;
+    if (sound->group == audio::SoundGroup::Beep) { // the chosen Beep sound, as /beep plays it
+        beep_command({});
+        return true;
+    }
     static std::uint32_t pick = 0; // a footstep test goes through the walk sounds in turn
     if (audio_) audio_->play_group_2d(test_wave(sound->group, pick++), sound->group);
     return true;
+}
+
+// The Beep sound's choices, worked out once per sound system (its game folder's soundassets.txt does not change while
+// it runs): the tone; the short list (beep_featured_ of them): the folder's named sounds, then those of kBeepFeatured
+// it has, in its spelling; then every other wave file it lists. kBeepFeatured is Hailstone's pick of game sounds that
+// work as an alert, not a list of the game's.
+const std::vector<std::string>& ClientApp::beep_choices() const {
+    static constexpr std::string_view kBeepFeatured[] = {
+        "LevelUp.WAV",  "EndQuest.WAV", "Achievement.wav", "BuyItem.WAV", "Button_1.WAV", "Teleport.WAV",
+        "BoatBell.WAV", "Chest_Op.WAV", "Spell_1.wav",     "Spell_2.wav", "Spell_3.wav",  "Spell_4.wav",
+        "Spell_5.wav",  "thunder1.wav"};
+    if (beep_choices_for_ == audio_.get() && !beep_choices_.empty()) return beep_choices_;
+    beep_choices_for_ = audio_.get();
+    beep_choices_.assign(1, std::string(kBeepTone));
+    beep_featured_ = 0;
+    if (!audio_) return beep_choices_;
+    const std::vector<std::string> files = audio_->sound_files();
+    for (auto& n : audio_->named_sounds()) beep_choices_.push_back(std::move(n));
+    for (std::string_view want : kBeepFeatured)
+        for (const std::string& f : files)
+            if (game::same_no_case(f, want)) {
+                beep_choices_.push_back(f);
+                break;
+            }
+    beep_featured_ = beep_choices_.size() - 1;
+    for (const std::string& f : files) {
+        const bool listed = std::any_of(beep_choices_.begin() + 1, beep_choices_.end(),
+                                        [&](const std::string& c) { return game::same_no_case(c, f); });
+        if (!listed) beep_choices_.push_back(f);
+    }
+    return beep_choices_;
+}
+
+// /beep [sound] (MQ's MacroBeep: Beep(0x500, 250) with nothing given, else PlaySound(file)). With nothing, the Beep
+// sound chosen in the options (audio.beep_sound); with a word, the game folder's named sound of that name, or any wave
+// file its soundassets.txt lists (a path is cut to its file name: MQ plays any file, Hailstone only the game's own
+// sounds). A sound the game folder
+// does not have, or the Tone, is MQ's 1280 Hz for 250 ms. All at the Beep volume (audio.beep).
+void ClientApp::beep_command(std::string_view args) {
+    if (!audio_) return;
+    std::string sound = mq::get_arg(args, 1);
+    if (const auto cut = sound.find_last_of("/\\"); cut != std::string::npos) sound.erase(0, cut + 1);
+    if (sound.empty()) sound = config_.get_string("audio.beep_sound", "");
+    if (!sound.empty() && audio_->play_named_group_2d(sound, audio::SoundGroup::Beep)) return;
+    audio_->play_tone_2d(kBeepToneHz, kBeepToneMs, audio::SoundGroup::Beep);
 }
 
 } // namespace client_internal

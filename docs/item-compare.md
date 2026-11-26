@@ -11,7 +11,7 @@ Code:
   child;
 - the slots, tooltips and item displays of both packs.
 
-Tests: `tests/item_compare_test.cpp`, `tests/item_display_test.cpp`, `tests/ui_pack_windows_test.cpp`.
+Tests: `tests/item_compare_test.cpp`, `tests/item_display_test.cpp`, `tests/ui_pack_windows3_test.cpp`.
 
 A Hailstone addition (the original has none), for players who cannot yet tell at a glance whether an item beats what
 they wear. It only reads: no rule, packet or game number changes.

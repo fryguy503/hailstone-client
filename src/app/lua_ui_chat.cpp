@@ -28,6 +28,7 @@
 #include "app/chat_tabs.h"
 #include "app/lua_ui.h"
 #include "app/lua_ui_record.h"
+#include "app/ui_input.h"
 #include "core/character_files.h"
 #include "core/game_dir.h"
 #include "core/ini_file.h"
@@ -1929,7 +1930,7 @@ int ChatMenu(lua_State* L) {
     UiHost& h = host(L);
     int w = up_window(L, 1);
     if (w < 0) return 0;
-    ImVec2 mp = ImGui::GetMousePos();
+    ImVec2 mp = ui_mouse_pos();
     h.open_menu(mp.x, mp.y, chat_context_rows(w + 1));
     return 0;
 }

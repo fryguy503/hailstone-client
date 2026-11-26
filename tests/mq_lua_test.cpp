@@ -128,6 +128,47 @@ struct Host {
 
 } // namespace
 
+TEST_CASE("MQ Lua: TLO policy also gates retained named references when rules change") {
+    Host h;
+    h.write("tlo_policy.lua", R"lua(
+local mq = require('mq')
+local root = mq.TLO.Me
+local member = root.Name
+local indexed = mq.TLO.Float('25')
+local child = indexed.Int
+assert(member() == 'Tester')
+assert(indexed() == 25 and child() == 25)
+print('references made')
+mq.delay(10)
+assert(root() == nil and member() == nil)
+assert(indexed() == nil and child() == nil)
+assert(mq.TLO.mE.Name() == nil and mq.TLO.Float('25').Int() == nil)
+assert(mq.parse('${mE.Name} ${Float[25]}') == 'NULL NULL')
+local spawns = mq.getAllSpawns()
+assert(#spawns > 0 and spawns[1].ID() ~= nil)
+print('references denied')
+mq.delay(10)
+assert(root.Name() == 'Tester' and member() == 'Tester')
+assert(indexed() == 25 and child() == 25)
+print('references restored')
+)lua");
+    std::vector<std::string> told;
+    h.reg.set_denial_notice([&](const std::string& text) { told.push_back(text); });
+    REQUIRE(h.scripts->run("tlo_policy", {}));
+    h.pulses(1);
+    REQUIRE(h.printed_line("references made"));
+    net::GameConnectionTestAccess::set_server_rules(
+        *h.world.conn, plugin::parse_server_cfg("[tlos]\nblock = Me, Float\n"));
+    h.pulses(1, 10);
+    REQUIRE(h.printed_line("references denied"));
+    // Each blocked root is told once for the script, however many of its lookups were refused.
+    CHECK(told == std::vector<std::string>{"[MQ] tlo_policy: the server blocks TLO Me",
+                                           "[MQ] tlo_policy: the server blocks TLO Float"});
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, std::nullopt);
+    h.pulses(1, 10);
+    CHECK(h.printed_line("references restored"));
+}
+
 TEST_CASE("MQ Lua: spell data exposes raw display fields") {
     Host h;
     h.write("spell_fields.lua", R"(
@@ -203,6 +244,131 @@ print('spell duration needs read')
     denied.pulses(1);
     CHECK(denied.printed_line("spell duration needs read"));
     CHECK(denied.sent.empty());
+}
+
+TEST_CASE("MQ Lua: TLO grants follow the verified managed entry and its verified modules") {
+    Host h;
+    const std::string entry = R"lua(
+local mq = require('mq')
+if ... == 'copy' then
+    assert(mq.TLO.Me.Name() == nil)
+    print('copy denied')
+    return
+end
+local member = mq.TLO.Me.Name
+assert(member() == 'Tester')
+assert(require('same_addon') == 'Tester')
+assert(mq.parse('${mE.Name} ${Float[25]}') == 'Tester NULL')
+local spawns = mq.getAllSpawns()
+assert(#spawns > 0 and spawns[1].ID() ~= nil)
+mq.cmd('/timed 1 /echo grant ${Me.Name}')
+mq.cmd('/timed 2 /echo revoked ${Me.Name}')
+mq.delay(110)
+assert(require('foreign'))
+assert(member() == nil and mq.parse('${Me.Name}') == 'NULL')
+print('retained reference denied')
+mq.delay(200)
+)lua";
+    const std::string module = "return require('mq').TLO.Me.Name()";
+    h.write("verified/init.lua", entry);
+    h.write("verified/same_addon.lua", module);
+    h.write("copied/init.lua", entry);
+    h.write("foreign.lua", R"lua(
+assert(require('mq').TLO.Me.Name() == nil)
+return true
+)lua");
+    h.policy.set_ceilings({
+        {plugin::FileKind::Script, sha256(entry), plugin::kCapAll, "Verified", "OWNER/Verified", true, true,
+         h.lua_dir / "verified/init.lua"},
+        {plugin::FileKind::Script, sha256(module), plugin::kCapAll, "Verified", "owner/verified", true, false,
+         h.lua_dir / "verified/same_addon.lua"},
+    });
+    net::GameConnectionTestAccess::set_server_rules(
+        *h.world.conn, plugin::parse_server_cfg("[tlos]\nblock = Me, Float\naddon_allow = owner/verified:Me\n"));
+    REQUIRE(h.scripts->run("verified", {}));
+    REQUIRE(h.scripts->run("copied", {"copy"}));
+    h.pulses(1);
+    REQUIRE(h.printed_line("copy denied"));
+    CHECK(h.reg.tlo(h.ctx, "Me", {}).kind == mq::Value::Kind::Nil);
+    h.clock = 100;
+    h.hooks.pulse();
+    CHECK(h.printed_line("grant Tester"));
+    h.pulses(1, 10);
+    REQUIRE(h.printed_line("retained reference denied"));
+    h.clock = 200;
+    h.hooks.pulse();
+    CHECK(h.printed_line("revoked NULL"));
+}
+
+TEST_CASE("MQ Lua: a managed TLO grant carries over to deferred work across a policy refresh, and a revoked one does not") {
+    Host h;
+    const std::string entry = R"lua(
+local mq = require('mq')
+mq.cmd('/timed 1 /echo kept ${Me.Name}')
+mq.cmd('/timed 2 /echo dropped ${Me.Name}')
+mq.delay(1000)
+)lua";
+    h.write("verified/init.lua", entry);
+    const plugin::Ceiling verified{plugin::FileKind::Script, sha256(entry), plugin::kCapAll, "Verified", "owner/verified",
+                                   true, true, h.lua_dir / "verified/init.lua"};
+    h.policy.set_ceilings({verified});
+    net::GameConnectionTestAccess::set_server_rules(
+        *h.world.conn, plugin::parse_server_cfg("[tlos]\nblock = Me\naddon_allow = owner/verified:Me\n"));
+    REQUIRE(h.scripts->run("verified", {}));
+    h.pulses(1);
+    // A re-sync (a zone-in) makes a new policy generation; the grant is still there.
+    h.policy.set(*h.policy.current());
+    h.scripts->policy_changed({});
+    h.clock = 100;
+    h.hooks.pulse();
+    CHECK(h.printed_line("kept Tester"));
+    // The add-on's record is gone (it no longer verifies): its queued line fails closed.
+    h.policy.set_ceilings({});
+    h.scripts->policy_changed({});
+    h.clock = 200;
+    h.hooks.pulse();
+    CHECK(h.printed_line("dropped NULL"));
+}
+
+TEST_CASE("MQ Lua: external bind and synthetic chat cannot borrow a managed TLO grant after yielding") {
+    Host h;
+    const std::string entry = R"lua(
+local mq = require('mq')
+local function check(source)
+    print(source .. ' before ' .. (mq.TLO.Me.Name() or 'denied'))
+    mq.delay(1)
+    print(source .. ' after ' .. (mq.TLO.Me.Name() or 'denied'))
+end
+mq.bind('/tlofixture', check)
+mq.event('fixture', 'fixture!', function() check('chat') end)
+while true do
+    mq.doevents()
+    mq.delay(1)
+end
+)lua";
+    h.write("verified/init.lua", entry);
+    h.policy.set_ceilings({
+        {plugin::FileKind::Script, sha256(entry), plugin::kCapAll, "Verified", "owner/verified", true, true,
+         h.lua_dir / "verified/init.lua"},
+    });
+    net::GameConnectionTestAccess::set_server_rules(
+        *h.world.conn, plugin::parse_server_cfg("[tlos]\nblock = Me\naddon_allow = owner/verified:Me\n"));
+    REQUIRE(h.scripts->run("verified", {}));
+    h.pulses(1);
+    h.run("/tlofixture player");
+    {
+        plugin::CallerScope unverified(plugin::kCapAll, "Verified");
+        h.run("/tlofixture foreign");
+        plugin::ChatLine line{"fixture!", 0, 0, true, plugin::kCapAll};
+        h.hooks.chat(line);
+    }
+    h.pulses(4, 10);
+    CHECK(h.printed_line("player before Tester"));
+    CHECK(h.printed_line("player after Tester"));
+    CHECK(h.printed_line("foreign before denied"));
+    CHECK(h.printed_line("foreign after denied"));
+    CHECK(h.printed_line("chat before denied"));
+    CHECK(h.printed_line("chat after denied"));
 }
 
 TEST_CASE("MQ Lua: hailstone.raid is a columnar roster") {
@@ -2217,7 +2383,9 @@ print('more', pcall(mq.event, 'z', 'q', fn))
 print('again', pcall(mq.event, 'e1', 'the same name', fn))
 )");
     REQUIRE(h.scripts->run("ev", {}));
-    h.pulses(1);
+    // The scripts pause after kSliceMs of real time, and 255 events can take longer in a sanitizer build: pulse until
+    // the script's last line, not once.
+    for (int i = 0; i < 500 && !printed_with(h, "again ", ""); ++i) h.pulses(1);
     CHECK(printed_with(h, "long false", "a pattern is at most 1024 bytes"));
     CHECK(printed_with(h, "name false", "a name is at most 256 bytes"));
     CHECK(h.printed_line("max true"));
@@ -2232,7 +2400,7 @@ print('total', pcall(mq.event, 'b33', 'x', function() end))
 print('smaller', pcall(mq.event, 'b1', 'x', function() end))
 )");
     REQUIRE(t.scripts->run("ev", {}));
-    t.pulses(1);
+    for (int i = 0; i < 500 && !printed_with(t, "smaller ", ""); ++i) t.pulses(1);
     CHECK(printed_with(t, "total false", "a script's patterns hold at most 32768 bytes"));
     CHECK(t.printed_line("smaller true"));
 }

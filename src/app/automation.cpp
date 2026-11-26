@@ -180,7 +180,10 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     m.env = std::move(env);
     if (m.env.config) m.map_filters.load(*m.env.config);
     mq::register_game_tlos(m.registry);
+    m.registry.set_denial_notice([&m](const std::string& t) { m.print(t); });
     m.ctx.window_open = [&m](std::string_view w) { return m.env.window_open && m.env.window_open(w); };
+    m.ctx.window_child = m.env.window_child;
+    m.ctx.window_act = m.env.window_act;
     m.ctx.plugin_loaded = [&m](std::string_view p) { return m.plugins && m.plugins->loaded(p); };
     m.ctx.ability = m.env.ability;
     m.ctx.foreground = m.env.foreground;
@@ -194,6 +197,10 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     ce.map_filters = &m.map_filters;
     ce.context = [&m]() -> const mq::Context& { return m.context(); };
     ce.echo = [&m](const std::string& t) { m.print(t); };
+    ce.echo_coded = [&m](const std::string& t) {
+        if (net::GameConnection* c = m.conn()) c->client_message(t);
+        else log::info("{}", game::strip_mq_colors(t));
+    };
     ce.run = [&m](const std::string& l) { m.run(l); };
     ce.set_target = [&m](std::uint32_t id) {
         if (net::GameConnection* c = m.conn()) c->set_target(id);

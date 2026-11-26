@@ -26,6 +26,12 @@ struct GaugeValue {
 };
 GaugeValue ui_gauge(const UiHost& host, int type, bool mark_invisibility = false);
 
+struct GaugeVitals {
+    std::optional<std::int64_t> current, maximum;
+    std::optional<int> percent;
+};
+GaugeVitals ui_group_gauge_vitals(const UiHost& host, int type, int pet_index, bool request_exact);
+
 // Gauge 26 at a supplied frame time: the active discipline's remaining duration, with seconds in its text.
 GaugeValue ui_discipline_gauge(const UiHost& host, std::int64_t now_ms);
 

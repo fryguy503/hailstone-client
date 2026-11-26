@@ -61,7 +61,7 @@ local offerShown = false
 ui.window("Respawn", function()
   if not API.session.InGame() then return end
   if not API.windows.Shown(WINDOW) then offerShown = false; return end
-  local offer = API.windows.Shown("ConfirmationDialogBox") and API.windows.ChildShown("ConfirmationDialogBox", "ResurrectionOffer") == true
+  local offer = API.windows.ChildShown("ConfirmationDialogBox", "ResurrectionOffer") == true
   local takeFocus, returnFocus = offer and not offerShown, offerShown and not offer
   offerShown = offer
   hud.Dialog(WINDOW, "Respawn", WINDOW_OPTS, drawWindow)

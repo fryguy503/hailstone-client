@@ -10,10 +10,12 @@
 #include <filesystem>
 #include <format>
 #include <iterator>
+#include <optional>
 #include <limits>
 #include <cfloat>
 #include <cmath>
 #include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <map>
 #include <set>
@@ -49,6 +51,7 @@
 #include "game/eq_names.h"
 #include "game/hot_button_state.h"
 #include "game/item_sort.h"
+#include "game/window_notify.h"
 #include "game/merchant.h"
 #include "game/option_commands.h"
 #include "game/mechanics/character.h"
@@ -99,8 +102,8 @@ struct UiApi::Impl {
     // whenever the vector has grown since (the views point into each window's own name, which never changes).
     std::unordered_map<std::string_view, StockWindow*> windows_by_name;
     std::size_t windows_indexed = 0;
-    std::map<std::string, int, std::less<>> replaced_at; // screen -> frame of its last hs.ReplaceWindow
-    int frame = 0;
+    std::map<std::string, std::uint64_t, std::less<>> replaced_at; // screen -> frame of its last hs.ReplaceWindow
+    std::uint64_t frame = 0; // begin_frame's count (64-bit: it never wraps); replaced_at's entries are never after it
     // hs.ReplaceWindow and hs.WindowShown take any name a script gives (the packs' own windows are not all stock
     // ones): the names kept per window are bounded. Only the last few frames' replacements count (replaces()), so
     // past kMaxNamed names the older ones are dropped; a name past it while all are recent is not kept.
@@ -120,7 +123,8 @@ struct UiApi::Impl {
     // The cursor's hotbutton: a left press made while it was held, and the frame such a press came up (a click
     // that put it nowhere: it is dropped the next frame, as a click on the world drops CCursorAttachment's button).
     bool pressed_holding = false;
-    int stray_release = -10, stray_serial = 0;
+    std::optional<std::uint64_t> stray_release; // the frame a left release put the cursor's hot button nowhere
+    int stray_serial = 0;
     bool cursor_spell_memorizing = false; // a memorize was under way last frame while a book spell was on the cursor
     std::map<std::string, bool, std::less<>> unknown_logged;
     // Window places (ui/ui_ini.h): the layout generation and screen serial each window was placed under, its place
@@ -564,9 +568,9 @@ struct UiApi::Impl {
         const ListData* data;
     };
     std::vector<ListMemo> lists;
-    int lists_frame = -1;
+    std::optional<std::uint64_t> lists_frame;
     const ListData* list(StockWindow& w, std::string_view id) {
-        if (lists_frame != frame) {
+        if (lists_frame != frame) { // (none yet: not this frame)
             lists.clear();
             lists_frame = frame;
         }
@@ -782,6 +786,21 @@ int Gauge(lua_State* L) {
     Rgb c = argb_to_rgb(*f.tint);
     for (float v : c) lua_pushnumber(L, v);
     return 6;
+}
+
+// current, maximum, percent = hs.GaugeValues(eqType [, petIndex [, requestExact]])
+// Group HP (11–15), pet HP (16–21), group mana (31–35) and endurance (36–40). Missing readings return nil.
+// For type 16, petIndex 1 (the default) selects the focused pet and 2/3 select the extra Pet window rows.
+// Percent is 0–100. Pass false for requestExact to read available readings without polling for exact points.
+int GaugeValues(lua_State* L) {
+    const int type = held_int(luaL_checkinteger(L, 1));
+    const int pet_index = held_int(luaL_optinteger(L, 2, 1));
+    const bool request_exact = lua_isnoneornil(L, 3) || lua_toboolean(L, 3);
+    const auto values = ui_group_gauge_vitals(Impl::of(L).host, type, pet_index, request_exact);
+    if (values.current) lua_pushinteger(L, *values.current); else lua_pushnil(L);
+    if (values.maximum) lua_pushinteger(L, *values.maximum); else lua_pushnil(L);
+    if (values.percent) lua_pushinteger(L, *values.percent); else lua_pushnil(L);
+    return 3;
 }
 
 // ok = hs.ClickSlot(slot, bagSlot|nil, "left"|"leftheld"|"right"|right-button phase [, outside])
@@ -1082,11 +1101,7 @@ int WindowPlaced(lua_State* L) {
 // disband a guild without the player's word. Any other question, and No, stay open to scripts (an accepted rez, a
 // trade's question). A Hailstone guard of its own.
 bool script_destroy_yes(lua_State* L, const UiHost& host, std::string_view window, std::string_view child) {
-    if (window != "ConfirmationDialogBox" || child != "Yes_Button" || ui::lua::pack_code(L) ||
-        !destructive_confirmation_up(host))
-        return false;
-    log::warn("A script pressed Yes on the destroy question (ConfirmationDialogBox); refused: only the player answers it");
-    return true;
+    return window == "ConfirmationDialogBox" && child == "Yes_Button" && refuse_code_destroy_yes(host, !ui::lua::pack_code(L));
 }
 
 // hs.ShowWindow(name, show)   -- shows or hides the game window (and with it the replacement)
@@ -3204,7 +3219,7 @@ void UiApi::begin_frame() {
     if (!m.host.in_game) m.host.cursor_button.reset();
     if (m.host.cursor_button) {
         // Gone with a right click or Escape, or a left click that put it nowhere (last frame's release).
-        if ((m.stray_release == m.frame - 1 && m.stray_serial == m.host.cursor_serial) || ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+        if ((m.stray_release && *m.stray_release + 1 == m.frame && m.stray_serial == m.host.cursor_serial) || ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape, false))
             m.host.cursor_button.reset();
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) m.pressed_holding = true;
@@ -3361,6 +3376,43 @@ std::optional<bool> UiApi::child_checked(std::string_view screen, std::string_vi
     Child c;
     w->child(impl_->host, child, c);
     return c.checked;
+}
+
+std::optional<mq::WindowChild> UiApi::window_child(std::string_view window, std::string_view child, bool rows) {
+    StockWindow* w = impl_->window(game::canonical_window(window));
+    if (!w) return std::nullopt;
+    auto read = [&](std::string_view id) {
+        mq::WindowChild out;
+        Child c;
+        w->child(impl_->host, id, c);
+        out.text = c.text;
+        out.enabled = c.enabled;
+        out.shown = c.shown;
+        if (c.has_gauge || c.gauge >= 0) out.gauge = std::max(c.gauge, 0); // -1: the gauge hidden
+        if (rows) {
+            if (const ListData* d = w->list(impl_->host, id)) {
+                out.is_list = true;
+                out.columns = d->columns;
+                for (const auto& r : d->rows) out.rows.push_back(r.texts);
+            }
+        }
+        return out;
+    };
+    const std::string canonical = game::canonical_child(child);
+    mq::WindowChild out = read(canonical);
+    // A window that keys the child by the name as sent (the bank's BIGB_ buttons, which /notify's table shortens).
+    const bool nothing = !out.text && !out.enabled && !out.shown && !out.gauge && !out.is_list;
+    if (nothing && canonical != child) out = read(child);
+    return out;
+}
+
+bool UiApi::window_shown(std::string_view window) const { return shown(game::canonical_window(window)); }
+
+bool UiApi::show_window(std::string_view window, bool show) {
+    const std::string screen = game::canonical_window(window);
+    if (!impl_->window(screen)) return false;
+    this->show(screen, show);
+    return true;
 }
 
 std::optional<bool> UiApi::child_state(std::string_view screen, std::string_view child) {
@@ -3631,6 +3683,7 @@ void UiApi::register_functions(lua_State* L) {
         {"InGame", InGame}, {"UiReady", UiReady}, {"GameState", GameState}, {"Name", Name}, {"SlotName", SlotName},
         {"ClassName", ClassName}, {"ClassNamesRevision", ClassNamesRevision},
         {"Item", Item}, {"ItemIcon", ItemIcon}, {"Money", Money}, {"Label", Label}, {"Gauge", Gauge},
+        {"GaugeValues", GaugeValues},
         {"ClickSlot", ClickSlot}, {"HasSlot", HasSlot}, {"AltCurrencies", AltCurrencies}, {"UiTexture", UiTexture}, {"UiImage", UiImage}, {"UiInterfaceImage", UiInterfaceImage}, {"UiAnimation", UiAnimation},
         {"ReplaceWindow", ReplaceWindow}, {"WindowPlaced", WindowPlaced}, {"ShowWindow", ShowWindow}, {"WindowButton", WindowButton},
         {"WindowText", WindowText}, {"ChildShown", ChildShown}, {"WindowList", WindowList}, {"ChildArt", ChildArtFn},
@@ -3668,7 +3721,7 @@ void UiApi::register_functions(lua_State* L) {
     // The functions that only read: the rest may change what a window's lists hold, so each drops the lists read
     // this frame (Impl::list) before it runs. A function missing here costs only a list built again.
     static constexpr std::string_view kReads[] = {
-        "InGame", "UiReady", "GameState", "Name", "SlotName", "Item", "ItemIcon", "Money", "Label", "Gauge", "HasSlot",
+        "InGame", "UiReady", "GameState", "Name", "SlotName", "Item", "ItemIcon", "Money", "Label", "Gauge", "GaugeValues", "HasSlot",
         "AltCurrencies", "UiTexture", "UiImage", "UiInterfaceImage", "UiAnimation", "ReplaceWindow", "WindowShown", "WindowPlaced", "WindowText", "ChildShown",
         "WindowList", "ChildArt", "GemTint", "GemOverlay", "ButtonCoolDown", "CoolDownColor", "ItemPreviewImage",
         "BuffSlot", "BuffOverlay", "HotButton", "HotButtonFace", "HotButtonChecked", "HotButtonState", "HotButtonInfo",

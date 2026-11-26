@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <ctime>
+#include <memory>
 #include <optional>
 
 #include "core/capped_map.h"
@@ -22,6 +23,7 @@
 #include "game/mechanics/character.h"
 #include "game/mechanics/sheet_builder.h"
 #include "game/mechanics/spell_gems.h"
+#include "net/remove_buff.h"
 #include "game/spa_ids.h"
 
 #include "game/distance.h"
@@ -31,6 +33,17 @@
 #include "game/race_models.h"
 
 namespace hailstone::net {
+
+// GameConnection::with_cached_character's state: the MQ TLOs' shared sheet and Characters. Here rather than in a
+// header, so net's headers need not include game/mechanics/character.h.
+struct GameConnection::CharacterCache {
+    game::mechanics::CharacterSheet sheet;
+    std::shared_ptr<const game::SpellTable> spells; // the table the Characters look spells up in, kept alive
+    std::optional<game::mechanics::Character> effects, stats;
+    std::uint64_t serial = 0; // character_serial_ when built
+};
+
+void GameConnection::CharacterCacheDelete::operator()(CharacterCache* c) const { delete c; }
 
 namespace {
 
@@ -217,9 +230,7 @@ void GameConnection::update_spells_at(std::int64_t now) {
     }
 }
 
-void GameConnection::with_character(const std::function<void(game::mechanics::Character&)>& fn) const {
-    if (!profile_) return;
-    static const game::mechanics::GameTables no_tables; // the effect totals read no tables
+void GameConnection::build_character_sheet(game::mechanics::CharacterSheet& sheet) const {
     game::mechanics::LiveState live;
     live.leadership = leadership_bonuses();
     live.drunkenness = drunkenness_;
@@ -230,6 +241,21 @@ void GameConnection::with_character(const std::function<void(game::mechanics::Ch
     live.now_ms = now_ms();
     live.vitals = server_ext().character_vitals(*this);
     live.focus_classes = focus_class_mask();
+    game::mechanics::build_sheet_into(
+        sheet, *profile_, inventory_, spells_, live,
+        [this](std::vector<game::mechanics::SheetAbility>& out) { alt_adv_.sheet_abilities_into(out); }, nullptr,
+        &world_);
+}
+
+namespace {
+const game::mechanics::GameTables& no_tables() {
+    static const game::mechanics::GameTables none; // the effect totals read no tables
+    return none;
+}
+} // namespace
+
+void GameConnection::with_character(const std::function<void(game::mechanics::Character&)>& fn) const {
+    if (!profile_) return;
     // Built every frame (update_usable_gems), so into the last call's sheet; a call from inside `fn` uses its own.
     std::optional<game::mechanics::CharacterSheet> nested;
     game::mechanics::CharacterSheet* sheet = nullptr;
@@ -245,12 +271,50 @@ void GameConnection::with_character(const std::function<void(game::mechanics::Ch
         ~Busy() { flag = was; }
     } busy{character_sheet_busy_, character_sheet_busy_};
     character_sheet_busy_ = true;
-    game::mechanics::build_sheet_into(
-        *sheet, *profile_, inventory_, spells_, live,
-        [this](std::vector<game::mechanics::SheetAbility>& out) { alt_adv_.sheet_abilities_into(out); }, nullptr,
-        &world_);
-    game::mechanics::Character ch(*sheet, no_tables, game::mechanics::spell_lookup(*spell_table_));
+    build_character_sheet(*sheet);
+    game::mechanics::Character ch(*sheet, no_tables(), game::mechanics::spell_lookup(*spell_table_));
     fn(ch);
+}
+
+void GameConnection::with_cached_character(bool stats,
+                                           const std::function<void(game::mechanics::Character&)>& fn) const {
+    if (!profile_ || !spell_table_) return;
+    if (in_update_ || character_sheet_busy_) {
+        // update() changes the state as it goes (its packets, DoPassageOfTime), and a nested call must not rebuild
+        // what its caller is using: a Character of their own, as before.
+        with_character([&](game::mechanics::Character& ch) {
+            if (!stats) {
+                fn(ch);
+                return;
+            }
+            game::mechanics::Character processed(ch.sheet(), no_tables(), ch.spells());
+            processed.process_all_stats();
+            fn(processed);
+        });
+        return;
+    }
+    if (!character_cache_) character_cache_.reset(new CharacterCache());
+    CharacterCache& cache = *character_cache_;
+    if (!cache.effects || cache.serial != character_serial_ || cache.spells != spell_table_) {
+        cache.effects.reset();
+        cache.stats.reset();
+        build_character_sheet(cache.sheet);
+        cache.spells = spell_table_;
+        cache.effects.emplace(cache.sheet, no_tables(), game::mechanics::spell_lookup(*cache.spells));
+        cache.serial = character_serial_;
+        ++character_builds_;
+    }
+    if (stats && !cache.stats) {
+        cache.stats.emplace(cache.sheet, no_tables(), game::mechanics::spell_lookup(*cache.spells));
+        cache.stats->process_all_stats();
+    }
+    struct Busy {
+        bool& flag;
+        bool was;
+        ~Busy() { flag = was; }
+    } busy{character_sheet_busy_, character_sheet_busy_};
+    character_sheet_busy_ = true;
+    fn(stats ? *cache.stats : *cache.effects);
 }
 
 void GameConnection::removelev_command() {
@@ -282,6 +346,37 @@ void GameConnection::removeaura_command(std::string_view args) {
     for (const auto& a : auras_)
         if (lower(a.name).find(needle) != std::string::npos) ids.push_back(a.spawn_id);
     for (std::uint32_t id : ids) remove_aura(id);
+}
+
+void GameConnection::removebuff_command(std::string_view args) { remove_named_buff(parse_remove_buff(args)); }
+
+void GameConnection::removepetbuff_command(std::string_view args) {
+    remove_named_buff(parse_remove_pet_buff(args));
+}
+
+void GameConnection::remove_named_buff(const RemoveBuff& r) {
+    if (!spell_table_ || r.name.empty()) return;
+    auto matches = [&](std::uint32_t spell) {
+        const game::SpellData* d = spell_table_->get(spell);
+        return d && remove_buff_matches(d->name, r.name);
+    };
+    if (r.pet) {
+        // RemovePetBuff: the pet window's first match, in its order (the server's slots).
+        std::optional<std::uint32_t> slot;
+        for (const auto& [s, buff] : pet_buffs_)
+            if (!buff.empty() && matches(buff.spell) && (!slot || s < *slot)) slot = s;
+        if (slot) remove_pet_buff(*slot);
+    }
+    if (r.self) {
+        // FindBuffIndex: the first long buff or song that matches, whether or not it may be clicked off (remove_buff
+        // refuses a detrimental one, as the server does); the discipline slot is in neither window.
+        for (int i = 0; i < game::kLongBuffSlots + game::kShortBuffSlots; ++i) {
+            const game::BuffSlot& b = spells_.buffs[static_cast<std::size_t>(i)];
+            if (b.empty() || !matches(b.spell)) continue;
+            remove_buff(i);
+            break;
+        }
+    }
 }
 
 void GameConnection::memspell_command(std::string_view args) {
@@ -333,41 +428,36 @@ void GameConnection::memspell_command(std::string_view args) {
 
 std::int32_t GameConnection::spell_duration_ticks(const game::SpellData& s) const {
     auto ticks = static_cast<std::int32_t>(s.duration_cap);
-    with_character([&](game::mechanics::Character& ch) { ticks = ch.spell_duration(s, pstatus_.level); });
+    with_cached_character(false,
+                          [&](game::mechanics::Character& ch) { ticks = ch.spell_duration(s, pstatus_.level); });
     return ticks;
 }
 
 std::int32_t GameConnection::spell_range_focus(const game::SpellData& s) const {
     std::int32_t mod = 0;
-    with_character([&](game::mechanics::Character& ch) { mod = ch.focus_range_modifier(s); });
+    with_cached_character(false, [&](game::mechanics::Character& ch) { mod = ch.focus_range_modifier(s); });
     return mod;
 }
 
-// with_character's Character has not run ProcessAllStats (its item totals and the bonuses from them are still
-// zero): these run it first, as the stats window does with its own.
+// The item totals and the bonuses from them need ProcessAllStats, as the stats window runs it on its own: the shared
+// character's processed copy, run once per build.
 std::int32_t GameConnection::spell_shield_bonus() const {
     std::int32_t v = 0;
     // Before RoF2's cap of 35: a server may let it go higher. The stats window shows the capped one.
-    with_character([&](game::mechanics::Character& ch) {
-        ch.process_all_stats();
-        v = ch.stats().spell_shield_uncapped;
-    });
+    with_cached_character(true, [&](game::mechanics::Character& ch) { v = ch.stats().spell_shield_uncapped; });
     return v;
 }
 
 std::int32_t GameConnection::spell_damage_bonus() const {
     std::int32_t v = 0;
-    with_character([&](game::mechanics::Character& ch) {
-        ch.process_all_stats();
-        v = ch.stats().spell_damage;
-    });
+    with_cached_character(true, [&](game::mechanics::Character& ch) { v = ch.stats().spell_damage; });
     return v;
 }
 
 int GameConnection::spell_landing_slot(std::uint32_t spell, std::optional<std::uint32_t> existing) const {
     if (!profile_ || !spell_table_ || !world_.player()) return -1;
     int slot = -1;
-    with_character([&](game::mechanics::Character& ch) {
+    with_cached_character(false, [&](game::mechanics::Character& ch) {
         game::SpellState state;
         if (existing) {
             // MQ's WillStackWith: one buff of the other spell, the player's, at the player's level.
@@ -1039,6 +1129,7 @@ bool GameConnection::remove_pet_buff(std::uint32_t slot) {
 
 void GameConnection::clear_buff_locally(int slot) {
     if (slot < 0 || slot >= game::kBuffSlots) return;
+    invalidate_character(); // no packet goes
     spells_.buffs[static_cast<std::size_t>(slot)] = {};
     reconcile_eye_control();
 }

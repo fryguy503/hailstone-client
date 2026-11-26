@@ -11,6 +11,25 @@
 
 namespace hailstone::audio {
 
+Pcm make_tone(std::uint32_t rate, double hz, std::uint32_t ms, std::uint32_t fade_ms, float amplitude) {
+    Pcm p;
+    p.rate = rate;
+    p.channels = 1;
+    const std::size_t frames = static_cast<std::size_t>(std::uint64_t{rate} * ms / 1000);
+    const std::size_t fade = std::min(static_cast<std::size_t>(std::uint64_t{rate} * fade_ms / 1000), frames / 2);
+    constexpr double kTwoPi = 6.283185307179586;
+    p.samples.resize(frames);
+    for (std::size_t i = 0; i < frames; ++i) {
+        double gain = amplitude;
+        if (fade > 0) {
+            const std::size_t edge = std::min(i, frames - 1 - i); // frames from the nearer end
+            if (edge < fade) gain *= static_cast<double>(edge) / static_cast<double>(fade);
+        }
+        p.samples[i] = static_cast<float>(gain * std::sin(kTwoPi * hz * static_cast<double>(i) / rate));
+    }
+    return p;
+}
+
 std::optional<Pcm> decode_wav(std::span<const std::byte> data) {
     unsigned int channels = 0, rate = 0;
     drwav_uint64 frames = 0;

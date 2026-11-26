@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -16,7 +17,16 @@ struct ServerManagementCommand {
     std::vector<std::string> aliases, groups;
 };
 
-// The config snapshot and locally registered commands have independent revisions.
+struct ServerManagementTlo {
+    std::string name, description, origin;
+};
+
+struct ServerManagementAddonTlos {
+    std::string repo, version, status;
+    std::optional<std::vector<std::string>> required_tlos, suggested_tlos;
+};
+
+// The config snapshot and locally registered commands and TLOs have independent revisions.
 struct ServerManagementView {
     std::string revision, file_revision, message;
     std::uint32_t serial = 0;
@@ -29,6 +39,7 @@ struct ServerManagementView {
     bool paused = false;
     std::vector<ServerManagementField> fields;
     std::vector<ServerManagementCommand> commands;
+    std::vector<ServerManagementTlo> tlos;
 };
 
 } // namespace hailstone::app

@@ -236,8 +236,8 @@ int run_model_viewer(const ModelViewerOptions& opts) {
                 groups.push_back(m.eqg ? game::new_style_bone_group(name) : game::classic_bone_group(name));
             a.bone_groups = &groups;
         }
-        if (rider) { // the seated rider's animation (ActorRenderer::prepare_spawns: P09, else standing)
-            a.clip = m.clip("P09") ? m.clip("P09") : m.clip("P01") ? m.clip("P01") : m.clip("");
+        if (rider) {
+            a.clip = &m.riding_clip(false);
             // Unseated (a mount without the dag), it stands where its spawn is: on the mount's spot.
             a.position.x = draws.back().position.x;
             a.position.y = draws.back().position.y;

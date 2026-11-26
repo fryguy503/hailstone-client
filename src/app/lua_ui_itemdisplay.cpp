@@ -18,6 +18,7 @@
 #include "app/lua_ui.h"
 #include "app/lua_ui_record.h"
 #include "app/lua_ui_windows.h"
+#include "app/ui_input.h"
 #include "core/log.h"
 #include "game/augments.h"
 #include "game/eq_names.h"
@@ -278,7 +279,7 @@ public:
                 data != std::format("1^{}^{}^{}^{}", request->item_id, request->final_item_id,
                                     request->level, request->hash))
                 return false;
-            return host.conn->request_evolving_final_result(*it, ImGui::GetIO().KeyShift);
+            return host.conn->request_evolving_final_result(*it, ui_keys().shift);
         }
         auto caret = data.find('^');
         if (caret == std::string_view::npos) return false;
@@ -432,7 +433,7 @@ public:
     bool click(UiHost& host, std::string_view id, std::string_view button, bool outside) override {
         if (id == "Hailstone_EvolvingFinalResult" && button == "left") {
             const auto* it = item(host);
-            return it && host.conn && host.conn->request_evolving_final_result(*it, ImGui::GetIO().KeyShift);
+            return it && host.conn && host.conn->request_evolving_final_result(*it, ui_keys().shift);
         }
         if (id == "IDW_ModButton" && button == "left") {
             // WndNotification @006ae945: the Modified view, then BuildItemInfo(item, 0) @006ae95b.
@@ -451,7 +452,7 @@ public:
         }
         if (id == "IDW_Appearance_Socket_Buy_Button")
             return button == "left"; // 0x6dcc00(0x432) opens the marketplace, which this client does not have
-        if (button == "rightup" && !outside && ImGui::GetIO().KeyAlt) {
+        if (button == "rightup" && !outside && ui_keys().alt) {
             // XWM_RCLICK with Alt on any control: Send_OP_ItemPreviewRequest(the window's item) and the preview shown.
             if (host.conn) host.conn->preview_item(item(host));
             return true;
@@ -462,10 +463,10 @@ public:
         if (socket < 0) return false;
         const net::Item* it = item(host);
         if (!it || !host.conn) return false;
-        const ImGuiIO& io = ImGui::GetIO();
+        const UiKeys keys = ui_keys();
         if (button == "left") {
             // XWM_LCLICK: Alt shows the augment (sub_006ae7b0), else insert / remove / swap (sub_006ae010).
-            if (io.KeyAlt) show_augment(host, socket, false);
+            if (keys.alt) show_augment(host, socket, false);
             else host.conn->augment_click(*it, socket);
             return true;
         }
@@ -499,8 +500,8 @@ public:
                 }
                 menu.push_back(std::move(m));
             }
-            ImVec2 mouse = ImGui::GetMousePos();
-            if (!ImGui::IsMousePosValid(&mouse)) mouse = {host.click_rect[0] > 0 ? host.click_rect[0] : 100.0f,
+            ImVec2 mouse = ui_mouse_pos();
+            if (!ui_mouse_pos_valid(&mouse)) mouse = {host.click_rect[0] > 0 ? host.click_rect[0] : 100.0f,
                                                           host.click_rect[1] > 0 ? host.click_rect[1] : 100.0f};
             host.open_menu(mouse.x, mouse.y, std::move(menu));
             return true;

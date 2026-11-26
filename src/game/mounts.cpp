@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 
+#include "game/eq_names.h"
 #include "game/race_models.h"
 #include "game/social.h"
 #include "game/world_state.h"
@@ -51,15 +52,13 @@ Spawn* spawn_by_partial_name(WorldState& w, std::string_view word) {
 
 bool is_npc_type(const Spawn& s) { return s.is_npc && !s.is_corpse; } // PlayerBase +0x125 == 1
 
-// PlayerClient_AttachRiderToMount @0x58fcd0 for a rider not yet on `mount`: both need actors; with point -1 the
-// mount must be a mount race, the rider able to ride and the mount's model must have the dag. Then the rider's model
-// hangs from the mount's dag 0xe (the renderer draws it there from the link). With `illusion_mounts` (Hailstone, a
-// deliberate difference: WorldState::illusion_mounts) the rider's own model is not checked.
+// PlayerClient_AttachRiderToMount @0x58fcd0: a mount race needs a seat dag. Hailstone lets playable forms use
+// that seat with either model generation. For other forms the stock rider checks apply with illusion_mounts off.
 bool attach_rider(const Spawn& rider, const Spawn& mount, std::int32_t point, MountQueries& q, bool illusion_mounts) {
-    if (!rider.actor_made || !mount.actor_made) return false;
     if (point == -1) {
         if (!is_mount_race(mount.race)) return false;
-        if (!illusion_mounts && (riding_blocked(rider) || human_actor_mount(rider))) return false;
+        const bool playable_form = !rider.is_npc && !rider.is_corpse && is_playable_race(rider.race);
+        if (!illusion_mounts && !playable_form && (riding_blocked(rider) || human_actor_mount(rider))) return false;
         if (!q.mount_point(rider, mount)) return false;
     }
     return true;
@@ -130,12 +129,13 @@ void dismount(WorldState& w, Spawn& rider, MountEvents& ev) {
 
 void do_stand(WorldState& w, Spawn& rider, Spawn* mount, MountQueries& q, MountEvents& ev) {
     if (!mount) return;
+    // The buff tick can run before the frame builds the actors, including after a zone-entry form change.
+    // The actor creation pass will try again. Keep the buff until then.
+    if (!rider.actor_made || !mount->actor_made) return;
     if (rider.mount_id) {
         if (rider.mount_id == mount->id) return;
         dismount(w, rider, ev);
     }
-    if (!q.new_models_loaded()) mount->rider_id = rider.id;
-    if (is_mount_race(mount->race) && riding_blocked(rider)) mount->rider_id = rider.id;
     const bool local = rider.id == w.player_id;
     std::int32_t point = -1;
     // The local player needs room for 3 x AvatarHeight between the ceiling and the floor (when CanIFitHere finds

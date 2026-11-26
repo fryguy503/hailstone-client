@@ -12,6 +12,7 @@
 #include "platform/process.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cctype>
@@ -128,6 +129,56 @@ BonePose blend(const BonePose& a, const BonePose& b, float t) {
     return p;
 }
 
+// The original player models have no mounted clip. Pose their leg chains once in saddle space (+X forward,
+// +Z up), keeping the character's original joint lengths and leaving the upper body free to animate.
+void make_classic_riding_clip(CharacterModel& model) {
+    if (model.luclin || model.tunic_point || model.clip("P09")) return;
+
+    struct Leg {
+        int thigh, calf, foot, toe;
+        float outward;
+    };
+    const int pelvis = model.find_bone("PE_TRACK");
+    const std::array legs{
+        Leg{model.find_bone("TH_R_TRACK"), model.find_bone("CA_R_TRACK"), model.find_bone("BO_R_TRACK"),
+            model.find_bone("TO_R_TRACK"), -1.0f},
+        Leg{model.find_bone("TH_L_TRACK"), model.find_bone("CA_L_TRACK"), model.find_bone("BO_L_TRACK"),
+            model.find_bone("TO_L_TRACK"), 1.0f},
+    };
+    if (pelvis < 0 || model.parents[pelvis] < 0) return;
+    for (const auto& leg : legs)
+        if (leg.thigh < 0 || leg.calf < 0 || leg.foot < 0 || model.parents[leg.thigh] != pelvis ||
+            model.parents[leg.calf] != leg.thigh || model.parents[leg.foot] != leg.calf) return;
+
+    std::vector<BonePose> local;
+    std::vector<glm::mat4> pose;
+    model.sample_local(model.first_clip({"P01"}), 0.0f, false, local);
+    model.compose(local, pose);
+    // The horse's rider bone is the saddle, so lower the hips from the standing pose to just above the saddle.
+    constexpr glm::vec3 kHipsInSaddle{0.0f, 0.0f, 0.3f};
+    local[pelvis].translation = glm::vec3(glm::inverse(pose[model.parents[pelvis]]) * glm::vec4(kHipsInSaddle, 1.0f));
+    model.compose(local, pose);
+
+    auto aim = [&](int bone, int child, glm::vec3 direction) {
+        const auto from_model = glm::inverse(glm::mat3(pose[model.parents[bone]]));
+        const auto current = from_model * glm::vec3(pose[child][3] - pose[bone][3]);
+        if (glm::length(current) < 1e-4f) return;
+        const glm::quat turn(glm::normalize(current), glm::normalize(from_model * direction));
+        local[bone].rotation = glm::normalize(turn * local[bone].rotation);
+        model.compose(local, pose);
+    };
+    for (const auto& leg : legs) {
+        aim(leg.thigh, leg.calf, {0.78f, 0.50f * leg.outward, -0.48f});
+        aim(leg.calf, leg.foot, {-0.12f, 0.08f * leg.outward, -1.0f});
+        if (leg.toe >= 0 && model.parents[leg.toe] == leg.foot)
+            aim(leg.foot, leg.toe, {1.0f, 0.06f * leg.outward, -0.12f});
+    }
+    AnimationClip clip;
+    clip.tracks.reserve(local.size());
+    for (const auto& bone : local) clip.tracks.push_back({bone});
+    model.classic_riding_pose = std::move(clip);
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -151,6 +202,14 @@ const AnimationClip& CharacterModel::first_clip(std::initializer_list<std::strin
     for (auto c : codes)
         if (const auto* a = clip(c, holding)) return *a;
     return clips.at("");
+}
+
+const AnimationClip& CharacterModel::riding_clip(bool running, bool holding) const {
+    if (running)
+        if (const auto* clip = this->clip("L10", holding)) return *clip;
+    if (const auto* clip = this->clip("P09", holding)) return *clip;
+    if (classic_riding_pose) return *classic_riding_pose;
+    return first_clip({"P01"}, holding);
 }
 
 void CharacterModel::sample_local(const AnimationClip& a, float time_seconds, bool loop,
@@ -1399,6 +1458,7 @@ CharacterModel CharacterLibrary::build_actor(const std::string& code, const wld:
         for (const auto& [c, clip] : m.clips)
             if (c.size() == 4 && c[3] == 'B' && clip.frame_count > 0) m.held_aliases.emplace(c.substr(0, 3), c);
     m.clips.emplace("", std::move(rest));
+    make_classic_riding_clip(m);
 
     // Rest-pose bounds.
     std::vector<glm::mat4> world;

@@ -1,0 +1,8 @@
+# Live smoke test (tools/live_smoke.sh, docs/ci.md "Live smoke tests"): items.
+# A summoned item reaches the inventory and is still there after a zone-in. Stock PEQ items; any GM character.
+zone qeynos2
+say #summonitem 13005
+wait 2
+expect-item 13005
+zone qeytoqrg
+expect-item 13005

@@ -346,6 +346,28 @@ bool item_name_matches(const net::Item& it, std::string_view query) {
     return icontains(it.name, query);
 }
 
+// The bank's items, then the shared bank's (MQ's FindBankItem / CountBankItems: BankItems, then SharedBankItems),
+// each slot with its bag's contents after it. The client holds them whether or not a banker is open.
+template <typename F> void each_banked(const Context& c, F&& fn) {
+    if (!c.conn) return;
+    for (const std::int16_t type : {net::kInvBank, net::kInvSharedBank}) {
+        for (const auto& [key, it] : c.conn->inventory().items()) {
+            if (key.first != type) continue;
+            if (fn(net::ItemSlot{type, key.second, -1, -1, 0, 0}, it)) return;
+            for (const auto& b : it.contents)
+                if (fn(net::ItemSlot{type, key.second, static_cast<std::int16_t>(b.index), -1, 0, 0}, b.item)) return;
+        }
+    }
+}
+
+// FindItem's, FindItemCount's, FindItemBank's and FindItemBankCount's index: a number is the item's id (MQ's
+// IsNumber), else its name as item_name_matches takes it ("=name" the whole name).
+bool item_query_matches(const net::Item& it, std::string_view index) {
+    std::int64_t id = 0;
+    if (parse_int(index, id)) return id == static_cast<std::int64_t>(it.id);
+    return item_name_matches(it, index);
+}
+
 constexpr const char* kSlotNames[] = {"charm",     "leftear",   "head",     "face",      "rightear", "neck",
                                       "shoulder",  "arms",      "back",     "leftwrist", "rightwrist", "range",
                                       "hands",     "mainhand",  "offhand",  "leftfinger", "rightfinger", "chest",
@@ -1219,6 +1241,79 @@ void register_group() {
     });
 }
 
+
+// A Window value's name: the window's, then, for a child, kChildMark and the child's (Window.Child below).
+constexpr char kChildMark = '\x1f';
+std::string_view window_part(std::string_view s) { return s.substr(0, s.find(kChildMark)); }
+std::string_view child_part(std::string_view s) {
+    const auto at = s.find(kChildMark);
+    return at == std::string_view::npos ? std::string_view{} : s.substr(at + 1);
+}
+
+// MQ's MaybeExactCompare: "=text" the whole text in any case, else the text anywhere in it in any case.
+bool maybe_exact_compare(std::string_view haystack, std::string_view needle) {
+    if (needle.empty()) return haystack.empty();
+    if (needle.front() == '=') return iequals(haystack, needle.substr(1));
+    if (needle.size() > haystack.size()) return false;
+    for (std::size_t i = 0; i + needle.size() <= haystack.size(); ++i)
+        if (iequals(haystack.substr(i, needle.size()), needle)) return true;
+    return false;
+}
+
+// A child value's state (Context::window_child); nothing for a window value or without the hook.
+std::optional<WindowChild> child_state(const Context& c, const Value& v, bool rows) {
+    if (v.i != 1 || !c.window_child) return std::nullopt;
+    return c.window_child(window_part(v.s), child_part(v.s), rows);
+}
+
+// Whether stock window `name` shows, from the connection's state where the window only mirrors it (MacroQuest's
+// scripts ask the UI what the client knows: ${Window[CastingWindow].Open} for "casting"). These answer with no UI
+// at all (a headless client) and agree with the stock windows' own shown() (app/lua_ui_*.cpp). pack1..pack10 are
+// TRUE while that slot holds a bag: a Hailstone bag's slots can be clicked with its window closed (/itemnotify),
+// which is what a script opens it for. Nothing for any other name.
+std::optional<bool> game_window_open(const Context& c, std::string_view name) {
+    if (!c.conn) return std::nullopt;
+    const GameConnection& k = *c.conn;
+    auto is = [&](std::string_view w) { return iequals(name, w); };
+    if (is("CastingWindow")) return k.spell_state().casting.casting();
+    if (is("SpellBookWnd")) return k.spell_book_open();
+    if (is("LootWnd")) return k.loot_session() && k.loot_session()->open;
+    if (is("MerchantWnd")) return k.merchant() && k.merchant()->open;
+    // CBankWnd is built from BigBankWnd (24 slots) or BankWnd (16), by the account's bank size.
+    if (is("BigBankWnd") || is("BankWnd")) return k.bank() && k.bank()->slots == (is("BankWnd") ? 16 : 24);
+    if (is("GuildBankWnd")) return k.guild_bank().banker != 0;
+    if (is("TradeWnd") || is("GiveWnd")) return k.trade() && k.trade()->open && k.trade()->with_npc == is("GiveWnd");
+    if (is("ConfirmationDialogBox")) return k.confirmation().has_value();
+    if (is("LargeDialogWindow")) return k.large_dialog().has_value();
+    if (is("TaskSelectWnd")) return k.tasks().offers.has_value();
+    if (is("RespawnWnd")) return k.respawn_window().has_value();
+    if (is("ProgressionSelectionWnd") || is("TaskTemplateSelectWnd")) {
+        const auto& sel = k.shroud_selection();
+        return k.shroud_selection_open() && sel && sel->status == 0 && (sel->context_id != 0) == is("TaskTemplateSelectWnd");
+    }
+    if (name.size() > 4 && iequals(name.substr(0, 4), "pack")) {
+        std::int64_t n = 0;
+        if (!parse_int(name.substr(4), n) || n < 1 || n > net::kSlotGeneral10 - net::kSlotGeneral1 + 1) return std::nullopt;
+        const net::Item* it = k.inventory().at(net::ItemSlot::possessions(static_cast<std::int16_t>(net::kSlotGeneral1 + n - 1)));
+        return it && it->is_bag();
+    }
+    return std::nullopt;
+}
+
+// The connection's answer, else the UI's (UiApi::shown), else FALSE.
+bool window_is_open(const Context& c, std::string_view name) {
+    if (auto open = game_window_open(c, name)) return *open;
+    return c.window_open && c.window_open(name);
+}
+
+// Open on a window value, or on a child: its window shows and the child is not hidden.
+bool window_open_member(const Context& c, const Value& v) {
+    if (!window_is_open(c, window_part(v.s))) return false;
+    if (v.i != 1) return true;
+    auto ch = child_state(c, v, false);
+    return ch && ch->shown.value_or(true);
+}
+
 void register_misc_types() {
     Type& zone = const_cast<Type&>(*g.zone);
     zone.to_value = [](const Context& c, const Value&) {
@@ -1297,14 +1392,87 @@ void register_misc_types() {
         return V::boolean(debuff_has_effect(c, v.i != 0, 96));
     });
 
+    // MQ's window type (MQ2WindowType.cpp) for a window and, through Child[name], one of its children: the value's
+    // name is the window's, and a child's (i == 1) follows it after kChildMark. A child's members come from the
+    // window's own state (Context::window_child: the stock windows' answers, with no drawing needed, so a client
+    // without a UI answers alike); the methods act as they are read (Context::window_act).
     Type& win = const_cast<Type&>(*g.window);
-    win.to_value = [](const Context& c, const Value& v) {
-        return V::string(c.window_open && c.window_open(v.s) ? "TRUE" : "FALSE");
-    };
-    add(g.window, "Open", [](const Context& c, const Value& v, std::string_view) {
-        return V::boolean(c.window_open && c.window_open(v.s));
+    win.to_value = [](const Context& c, const Value& v) { return V::string(window_open_member(c, v) ? "TRUE" : "FALSE"); };
+    add(g.window, "Open", [](const Context& c, const Value& v, std::string_view) { return V::boolean(window_open_member(c, v)); });
+    add(g.window, "Name", [](const Context&, const Value& v, std::string_view) {
+        return V::string(std::string(v.i == 1 ? child_part(v.s) : window_part(v.s)));
     });
-    add(g.window, "Name", [](const Context&, const Value& v, std::string_view) { return V::string(v.s); });
+    // Child[name]: MQ's GetChildItem finds it by its XML item name or ScreenID. Hailstone's windows key their
+    // children by ScreenID (game::canonical_child maps the item names E3 sends); whether such a child exists is
+    // not known here, so a name the window has no child for reads as one that shows nothing.
+    add(g.window, "Child", [](const Context&, const Value& v, std::string_view index) -> V {
+        if (index.empty()) return V::nil();
+        return V::object(g.window, 1, 0, std::string(window_part(v.s)) + kChildMark + std::string(index));
+    });
+    // Text: the child's text (MQ's GetWindowText, an STML box's text, a page's tab text); "" when it has none.
+    add(g.window, "Text", [](const Context& c, const Value& v, std::string_view) -> V {
+        auto ch = child_state(c, v, false);
+        return ch ? V::string(ch->text.value_or(std::string())) : V::nil();
+    });
+    // Enabled: IsEnabled. A child the window leaves as its XML has it reads as enabled (most are; the XML's own
+    // state is not read here).
+    add(g.window, "Enabled", [](const Context& c, const Value& v, std::string_view) -> V {
+        auto ch = child_state(c, v, false);
+        return ch ? V::boolean(ch->enabled.value_or(true)) : V::nil();
+    });
+    // Value: a gauge's value, 0..1000 (CGaugeWnd LastFrameVal, the value it drew; here the value it is set to);
+    // NULL for anything else.
+    add(g.window, "Value", [](const Context& c, const Value& v, std::string_view) -> V {
+        auto ch = child_state(c, v, false);
+        return ch && ch->gauge ? V::number(*ch->gauge) : V::nil();
+    });
+    // List[row(,column)]: that cell's text; List[text(,column)]: the 1-based row whose cell holds the text
+    // (MaybeExactCompare: "=text" the whole text, any case). The column is 1-based, 1 by default; one past the
+    // list's columns, a row past its end or text in no row is NULL, as in MQ. The rows are the window's own, in
+    // its order (the merchant's: as listselect counts them).
+    add(g.window, "List", [](const Context& c, const Value& v, std::string_view index) -> V {
+        auto ch = child_state(c, v, true);
+        if (!ch || !ch->is_list || index.empty()) return V::nil();
+        std::string_view key = index;
+        int column = 0;
+        if (const auto comma = index.find(','); comma != std::string_view::npos) {
+            key = index.substr(0, comma);
+            // Read wide and range-checked before it is narrowed: "-2147483648" or a column past int's range is no
+            // overflow.
+            const std::int64_t wanted = int64_from_text(index.substr(comma + 1), 0);
+            const std::int64_t col = wanted < 1 ? 0 : wanted - 1;
+            if (col >= ch->columns) return V::nil();
+            column = static_cast<int>(col);
+        }
+        auto cell = [&](const std::vector<std::string>& row) -> std::optional<std::string_view> {
+            if (static_cast<std::size_t>(column) >= row.size()) return std::nullopt;
+            return std::string_view(row[static_cast<std::size_t>(column)]);
+        };
+        std::int64_t n = 0;
+        if (parse_int(key, n)) {
+            if (n < 1 || n > static_cast<std::int64_t>(ch->rows.size())) return V::nil();
+            auto text = cell(ch->rows[static_cast<std::size_t>(n - 1)]);
+            return text ? V::string(std::string(*text)) : V::nil();
+        }
+        for (std::size_t r = 0; r < ch->rows.size(); ++r) {
+            auto text = cell(ch->rows[r]);
+            if (!text) return V::nil(); // MQ stops at a row without that column
+            if (maybe_exact_compare(*text, key)) return V::integer(static_cast<std::int64_t>(r) + 1);
+        }
+        return V::nil();
+    });
+    // The methods: MQ sends the click (SendWndClick2) or shows / hides the window (Show) as the member is read.
+    auto method = [](const char* name, const char* action, bool on_window) {
+        add(g.window, name, [action, on_window](const Context& c, const Value& v, std::string_view) -> V {
+            if (!c.window_act) return V::nil();
+            const std::string_view child = v.i == 1 && !on_window ? child_part(v.s) : std::string_view{};
+            return V::boolean(c.window_act(window_part(v.s), child, action));
+        });
+    };
+    method("LeftMouseUp", "leftmouseup", false);
+    method("RightMouseUp", "rightmouseup", false);
+    method("DoOpen", "doopen", true);
+    method("DoClose", "doclose", true);
 
     Type& plug = const_cast<Type&>(*g.plugin);
     plug.to_value = [](const Context& c, const Value& v) {
@@ -1441,6 +1609,26 @@ const game::AltAbility* owned_aa(const Context& c, std::string_view index) {
         const game::AltAbility* a = o.id ? aa.get(o.id) : nullptr;
         if (a && (iequals(c.conn->aa_name(*a), index) || iequals(c.conn->aa_display_name(*a), index))) return a;
     }
+    return nullptr;
+}
+
+// The AltAbility TLO's ability. A number is its group id: the first rank of that group the table holds, in rank id
+// order (MQ: the first in its table's order, with no level). A name (any case, as owned_aa matches it): the
+// player's own rank of it when they have one, else the first rank the table holds. MQ asks the game for a name's
+// "level appropriate" rank (AltAdvManager::GetAAById with the player's level), which is not decoded
+// (docs/unknowns.md); the owned rank is the one the player casts.
+const game::AltAbility* any_aa(const Context& c, std::string_view index) {
+    if (!c.conn || index.empty()) return nullptr;
+    const auto& aa = c.conn->alt_adv();
+    std::int64_t group = 0;
+    if (parse_int(index, group)) {
+        for (const auto& [id, a] : aa.table)
+            if (a.group == group) return &a;
+        return nullptr;
+    }
+    if (const game::AltAbility* own = owned_aa(c, index)) return own;
+    for (const auto& [id, a] : aa.table)
+        if (iequals(c.conn->aa_name(a), index) || iequals(c.conn->aa_display_name(a), index)) return &a;
     return nullptr;
 }
 
@@ -2790,7 +2978,8 @@ static void register_math(Registry& r) {
         const glm::vec3 b = colon == std::string_view::npos ? player : vec3_from_text(index.substr(colon + 1), player);
         return V::number(glm::distance(a, b));
     };
-    r.add_tlo("Math", [math_type](const Context&, std::string_view) { return V::object(math_type, 0); });
+    r.add_tlo("Math", [math_type](const Context&, std::string_view) { return V::object(math_type, 0); },
+              "Evaluate expressions and calculate distances.");
 
     // If[condition,whentrue,whenfalse], or with exactly two '~' If[condition~whentrue~whenfalse]: the text of one
     // branch (the false one runs to the end, commas included); NULL when the condition does not calculate.
@@ -2804,7 +2993,7 @@ static void register_math(Registry& r) {
         const auto cond = calculate(index.substr(0, first));
         if (!cond) return V::nil();
         return V::string(std::string(*cond != 0.0 ? index.substr(first + 1, second - first - 1) : index.substr(second + 1)));
-    });
+    }, "Choose one of two values using a condition.");
 
     // Range.Between[a,b:n] (a <= n <= b) and Range.Inside[a,b:n] (a < n < b); FALSE without the ':' or ','.
     Type& range = r.type("range");
@@ -2826,7 +3015,8 @@ static void register_math(Registry& r) {
     };
     range_member("Between", true);
     range_member("Inside", false);
-    r.add_tlo("Range", [range_type](const Context&, std::string_view) { return V::object(range_type, 0); });
+    r.add_tlo("Range", [range_type](const Context&, std::string_view) { return V::object(range_type, 0); },
+              "Test whether a number falls within a range.");
 }
 
 void register_game_tlos(Registry& r) {
@@ -2917,34 +3107,36 @@ void register_game_tlos(Registry& r) {
         if (!a || !b) return V::nil();
         const auto seen = c.line_of_sight({a->x, a->y, a->z}, {b->x, b->y, b->z});
         return seen ? V::boolean(*seen) : V::nil();
-    });
+    }, "Check line of sight between zone coordinates.");
     r.add_tlo("Navigation", [](const Context& c, std::string_view) -> V {
         return c.nav ? V::object(g.navigation, 0) : V::nil();
-    });
-    r.add_tlo("Stick", [](const Context& c, std::string_view) -> V { return c.nav ? V::object(g.stick, 0) : V::nil(); });
-    r.add_tlo("MoveTo", [](const Context& c, std::string_view) -> V { return c.nav ? V::object(g.moveto, 0) : V::nil(); });
+    }, "Navigation mesh and active path status.");
+    r.add_tlo("Stick", [](const Context& c, std::string_view) -> V { return c.nav ? V::object(g.stick, 0) : V::nil(); },
+              "Stick movement and positioning status.");
+    r.add_tlo("MoveTo", [](const Context& c, std::string_view) -> V { return c.nav ? V::object(g.moveto, 0) : V::nil(); },
+              "MoveTo movement and arrival status.");
     r.add_tlo("AdvPath", [](const Context& c, std::string_view) -> V {
         return c.nav ? V::object(g.advpath, 0) : V::nil();
-    });
+    }, "Path-following status.");
     r.add_tlo("Me", [](const Context& c, std::string_view) -> V {
         return c.conn && c.conn->world().player() ? V::object(g.character, c.conn->world().player_id) : V::nil();
-    });
+    }, "Your character and its attributes.");
     r.add_tlo("Target", [](const Context& c, std::string_view) -> V {
         const game::Spawn* s = c.conn ? spawn_of(c, c.conn->world().target_id) : nullptr;
         return s ? V::object(g.target, s->id) : V::nil();
-    });
+    }, "Your current target.");
     r.add_tlo("Spawn", [](const Context& c, std::string_view index) -> V {
         if (!c.conn) return V::nil();
         std::int64_t id = 0;
         if (parse_int(index, id)) return spawn_value(spawn_of(c, id));
         auto found = find_spawns(index, *c.conn, c.can_see);
         return found.empty() ? V::nil() : spawn_value(found.front());
-    });
+    }, "Find a spawn by ID or search.");
     r.add_tlo("SpawnCount", [](const Context& c, std::string_view index) -> V {
         if (!c.conn) return V::integer(0);
         return V::integer(static_cast<std::int64_t>(
             find_spawns(index, *c.conn, c.can_see).size()));
-    });
+    }, "Count matching spawns.");
     r.add_tlo("NearestSpawn", [](const Context& c, std::string_view index) -> V {
         if (!c.conn) return V::nil();
         // "N,search", "N" or "search".
@@ -2960,65 +3152,98 @@ void register_game_tlos(Registry& r) {
         auto found = find_spawns(search, *c.conn, c.can_see);
         if (n < 1 || n > static_cast<std::int64_t>(found.size())) return V::nil();
         return spawn_value(found[static_cast<std::size_t>(n - 1)]);
-    });
+    }, "Find the nearest matching spawn.");
     r.add_tlo("Group", [](const Context& c, std::string_view) -> V {
         return c.conn && c.conn->group().active ? V::object(g.group, 0) : V::nil();
-    });
-    r.add_tlo("Zone", [](const Context& c, std::string_view) -> V { return c.conn ? V::object(g.zone, c.conn->zone_id()) : V::nil(); });
-    r.add_tlo("Spell", [](const Context& c, std::string_view index) { return spell_by_index(c, index); });
+    }, "Your group and its members.");
+    r.add_tlo("Zone", [](const Context& c, std::string_view) -> V { return c.conn ? V::object(g.zone, c.conn->zone_id()) : V::nil(); },
+              "The zone you are in.");
+    r.add_tlo("Spell", [](const Context& c, std::string_view index) { return spell_by_index(c, index); },
+              "Find a spell by name or ID.");
     r.add_tlo("Cursor", [](const Context& c, std::string_view) {
         return item_value(c, net::ItemSlot::possessions(net::kSlotCursor));
-    });
+    }, "The item on your cursor.");
     r.add_tlo("FindItem", [](const Context& c, std::string_view index) -> V {
+        if (index.empty()) return V::nil();
         V found;
         each_carried(c, [&](const net::ItemSlot& s, const net::Item& it) {
-            if (!item_name_matches(it, index)) return false;
+            if (!item_query_matches(it, index)) return false;
             found = V::object(g.item, pack_slot(s));
             return true;
         });
         return found;
-    });
-    r.add_tlo("FindItemCount", [](const Context& c, std::string_view index) {
+    }, "Find an item in your inventory.");
+    r.add_tlo("FindItemCount", [](const Context& c, std::string_view index) -> V {
+        if (index.empty()) return V::nil();
         std::int64_t n = 0;
         each_carried(c, [&](const net::ItemSlot&, const net::Item& it) {
-            if (item_name_matches(it, index)) n += it.stack_count ? it.stack_count : 1;
+            if (item_query_matches(it, index)) n += it.stack_count ? it.stack_count : 1;
             return false;
         });
         return V::integer(n);
-    });
+    }, "Count matching items in your inventory.");
+    // MQ's FindItemBank and FindItemBankCount: the same over the bank and the shared bank (each_banked).
+    r.add_tlo("FindItemBank", [](const Context& c, std::string_view index) -> V {
+        if (index.empty()) return V::nil();
+        V found;
+        each_banked(c, [&](const net::ItemSlot& s, const net::Item& it) {
+            if (!item_query_matches(it, index)) return false;
+            found = V::object(g.item, pack_slot(s));
+            return true;
+        });
+        return found;
+    }, "Find an item in your bank or shared bank.");
+    r.add_tlo("FindItemBankCount", [](const Context& c, std::string_view index) -> V {
+        if (index.empty()) return V::nil();
+        std::int64_t n = 0;
+        each_banked(c, [&](const net::ItemSlot&, const net::Item& it) {
+            if (item_query_matches(it, index)) n += it.stack_count ? it.stack_count : 1;
+            return false;
+        });
+        return V::integer(n);
+    }, "Count matching items in your bank and shared bank.");
+    // MQ's AltAbility: any ability the AA table holds, owned or not (Me.AltAbility: only the player's).
+    r.add_tlo("AltAbility", [](const Context& c, std::string_view index) -> V {
+        const game::AltAbility* a = any_aa(c, index);
+        return a ? V::object(g.altability, a->id) : V::nil();
+    }, "Look up an alternate advancement ability.");
     r.add_tlo("Window", [](const Context&, std::string_view index) {
         return index.empty() ? V::nil() : V::object(g.window, 0, 0, std::string(index));
-    });
+    }, "Look up a game window by name.");
     r.add_tlo("Plugin", [](const Context&, std::string_view index) {
         return index.empty() ? V::nil() : V::object(g.plugin, 0, 0, std::string(index));
-    });
+    }, "Check whether a named plugin is loaded.");
     r.add_tlo("Time", [](const Context&, std::string_view) {
         return V::object(g.time, static_cast<std::int64_t>(std::time(nullptr)));
-    });
+    }, "The local system time.");
     r.add_tlo("GameTime", [](const Context& c, std::string_view) -> V {
         return c.conn && c.conn->time_of_day() ? V::object(g.gametime, 0) : V::nil();
-    });
-    r.add_tlo("EverQuest", [](const Context&, std::string_view) { return V::object(g.everquest, 0); });
-    r.add_tlo("MacroQuest", [](const Context&, std::string_view) { return V::object(g.macroquest, 0); });
-    r.add_tlo("Hailstone", [](const Context&, std::string_view) { return V::object(g.hailstone, 0); });
+    }, "The current in-game time.");
+    r.add_tlo("EverQuest", [](const Context&, std::string_view) { return V::object(g.everquest, 0); },
+              "Game state and client window information.");
+    r.add_tlo("MacroQuest", [](const Context&, std::string_view) { return V::object(g.macroquest, 0); },
+              "MacroQuest-compatible client information.");
+    r.add_tlo("Hailstone", [](const Context&, std::string_view) { return V::object(g.hailstone, 0); },
+              "Hailstone client information.");
     r.add_tlo("Heading", [](const Context&, std::string_view index) -> V {
         double d = 0;
         return parse_float(index, d) && std::isfinite(d) ? heading_value(std::fmod(std::fmod(d, 360.0) + 360.0, 360.0)) : V::nil();
-    });
+    }, "Convert a heading and read its direction.");
     r.add_tlo("Int", [](const Context&, std::string_view index) -> V {
         double d = 0;
         const auto n = parse_float(index, d) ? whole_number(d) : std::nullopt;
         return n ? V::integer(*n) : V::nil();
-    });
+    }, "Convert text to an integer.");
     r.add_tlo("Float", [](const Context&, std::string_view index) -> V {
         double d = 0;
         return parse_float(index, d) ? V::number(d) : V::nil();
-    });
+    }, "Convert text to a decimal number.");
     r.add_tlo("Bool", [](const Context&, std::string_view index) {
         std::string l = lower(index);
         return V::boolean(!(l.empty() || l == "false" || l == "null" || l == "0"));
-    });
-    r.add_tlo("String", [](const Context&, std::string_view index) { return V::string(std::string(index)); });
+    }, "Convert text to a boolean.");
+    r.add_tlo("String", [](const Context&, std::string_view index) { return V::string(std::string(index)); },
+              "Treat its argument as text.");
     register_math(r);
     r.add_tlo("Select", [](const Context&, std::string_view index) {
         // Select[x,a,b,c]: the 1-based position of x among the rest, 0 when absent.
@@ -3026,35 +3251,40 @@ void register_game_tlos(Registry& r) {
         for (std::size_t i = 1; i < a.size(); ++i)
             if (iequals(a[0], a[i])) return V::integer(static_cast<std::int64_t>(i));
         return V::integer(0);
-    });
+    }, "Find a value in a list.");
     // MQ's Raid and Corpse are always there (Raid's members say whether there is a raid, Corpse.Open whether a
     // corpse is open).
     // MQ's InvSlot[n|name]: a slot by MQ's number or name (an unknown name is slot 0, as in MQ).
     r.add_tlo("InvSlot", [](const Context& c, std::string_view index) -> V {
         if (!c.conn || index.empty()) return V::nil();
         return V::object(g.invslot, inv_slot_number(index).value_or(0));
-    });
+    }, "Look up an inventory slot.");
     // MQ's Merchant (always there: Open says whether one is), DoorTarget (/doortarget's door, NULL for none) and
     // Mercenary (always there: its state says whether there is one).
-    r.add_tlo("Merchant", [](const Context& c, std::string_view) -> V { return c.conn ? V::object(g.merchant, 0) : V::nil(); });
+    r.add_tlo("Merchant", [](const Context& c, std::string_view) -> V { return c.conn ? V::object(g.merchant, 0) : V::nil(); },
+              "The open merchant and its stock.");
     r.add_tlo("DoorTarget", [](const Context& c, std::string_view) -> V {
         if (!c.conn) return V::nil();
         auto id = c.conn->door_target();
         return id && c.conn->door(*id) ? V::object(g.door, *id) : V::nil();
-    });
-    r.add_tlo("Mercenary", [](const Context& c, std::string_view) -> V { return c.conn ? V::object(g.mercenary, 0) : V::nil(); });
-    r.add_tlo("Raid", [](const Context& c, std::string_view) -> V { return c.conn ? V::object(g.raid, 0) : V::nil(); });
-    r.add_tlo("Corpse", [](const Context& c, std::string_view) -> V { return c.conn ? V::object(g.corpse, 0) : V::nil(); });
-    r.add_tlo("Pet", [](const Context& c, std::string_view) -> V { return pet_value(my_pet(c)); });
+    }, "The door you have targeted.");
+    r.add_tlo("Mercenary", [](const Context& c, std::string_view) -> V { return c.conn ? V::object(g.mercenary, 0) : V::nil(); },
+              "Your mercenary and its state.");
+    r.add_tlo("Raid", [](const Context& c, std::string_view) -> V { return c.conn ? V::object(g.raid, 0) : V::nil(); },
+              "Your raid and its members.");
+    r.add_tlo("Corpse", [](const Context& c, std::string_view) -> V { return c.conn ? V::object(g.corpse, 0) : V::nil(); },
+              "The corpse currently open for looting.");
+    r.add_tlo("Pet", [](const Context& c, std::string_view) -> V { return pet_value(my_pet(c)); },
+              "Your current pet.");
     // Debuff: the player's counters; Debuff[pet] the pet's, NULL without a pet (as the Pet TLO finds it). Other
     // indexes are NULL.
     r.add_tlo("Debuff", [](const Context& c, std::string_view index) -> V {
         if (!c.conn) return V::nil();
         if (index.empty()) return V::object(g.debuff, 0);
         if (!iequals(index, "pet")) return V::nil();
-        const V pet = c.registry ? c.registry->tlo(c, "Pet") : V::nil();
-        return pet.kind == Value::Kind::Object ? V::object(g.debuff, 1) : V::nil();
-    });
+        // Debuff is an independent lookup. Pet's rule applies to lookups of the Pet root.
+        return my_pet(c) ? V::object(g.debuff, 1) : V::nil();
+    }, "Detrimental effects on you or your pet.");
 }
 
 } // namespace hailstone::mq

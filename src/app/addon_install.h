@@ -50,6 +50,7 @@ struct InstalledAddon {
     bool autoload = false, enabled = false; // managed Lua add-on; the player controls activation independently of updates
     std::string author, description, notes;
     std::vector<AddonFile> files;
+    std::optional<std::vector<std::string>> required_tlos, suggested_tlos;
 };
 
 std::filesystem::path addons_dir(const std::filesystem::path& data_dir);
@@ -160,7 +161,8 @@ bool remove_addon(const std::filesystem::path& data_dir, std::string_view name, 
 
 // The capability ceilings of the installed add-ons' files (plugin::Policy::set_ceilings): a script's Lua files and a
 // plugin's library, each with the capabilities the player accepted for its add-on.
-std::vector<plugin::Ceiling> addon_ceilings(const std::vector<InstalledAddon>& addons);
+std::vector<plugin::Ceiling> addon_ceilings(const std::vector<InstalledAddon>& addons,
+                                          const std::filesystem::path& data_dir = {});
 // The ceilings of the data folder's add-ons: addon_ceilings of the records that read, and a ceiling of no
 // capabilities on each Lua file and library now in the folder of an add-on whose record does not
 // (AddonRegistry::unreadable), each logged.

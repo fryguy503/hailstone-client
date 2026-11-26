@@ -1224,6 +1224,7 @@ local original = "; custom comment\r\n[gameplay_custom]\r\nmy_option = On # keep
   .. "required = Owner/Old:V1.2.3-RC.1\r\n"
   .. "[movement] ; duplicate section\r\nNPC_Collision   =   on   ; keep my spacing\r\n"
   .. '[COMMANDS]\r\nblocked_message = "old # message" ; keep this too\r\n'
+  .. "[TlOs]\r\nBlock  =  NearestSpawn  # keep TLO comment\r\n"
   .. "[existing_custom]\r\nvalue = untouched"
 T.files[management_cfg], T.hash_contents = original, true
 local a = management_zone("alpha")
@@ -1243,7 +1244,9 @@ local old_hash = cfg_hash(other)
 T.handlers = a
 local message = 'Ask an admin #help; "\195\137dit" the rule.'
 local _, changed = management_save(gm, token, 0,
-  { "movement", "npc_collision", "off" }, { "commands", "blocked_message", message })
+  { "movement", "npc_collision", "off" }, { "commands", "blocked_message", message },
+  { "TLOs", "Default", "deny" }, { "tlos", "allow", "Me, Target Offline-Addon_42" },
+  { "tlos", "block", "NearestSpawn, Spawn" })
 assert(changed == T.files[management_cfg])
 assert(changed:find("NPC_Collision = yes ; earlier duplicate", 1, true))
 assert(changed:find("NPC_Collision   =   off   ; keep my spacing", 1, true))
@@ -1251,14 +1254,18 @@ assert(changed:find("my_option = On # keep me", 1, true))
 assert(changed:find("; keep this too", 1, true) and changed:find('"' .. message .. '"', 1, true))
 assert(changed:find("required = Owner/Old:V1.2.3-RC.1", 1, true))
 assert(changed:find("suggest = https://github.com/Owner/Repo/releases/tag/V1.2.0", 1, true))
+assert(changed:find("[TlOs]\r\nBlock  =  NearestSpawn, Spawn  # keep TLO comment\r\n", 1, true))
+assert(changed:find("default = deny\r\nallow = Me, Target Offline-Addon_42\r\n", 1, true))
 assert(changed:sub(-#"value = untouched") == "value = untouched")
 local _, audit = management_backup(changed, original)
-assert(audit:find("edited=movement.npc_collision,commands.blocked_message", 1, true))
+assert(audit:find("edited=movement.npc_collision,commands.blocked_message,tlos.default,tlos.allow,tlos.block", 1, true))
 
 T.handlers = b
 assert(cfg_hash(other) ~= old_hash, "another zone immediately delivers the new policy")
-management_save(other, other_token, 3, { "client", "deny", "on" })
+management_save(other, other_token, 3, { "tlos", "allow", "Me" })
 assert(T.files[management_cfg] == changed, "a stale edit never writes")
+local _, snapshot = management_open(other)
+assert(snapshot == changed, "the next open round-trips TLO rules from disk")
 )lua");
 }
 
@@ -1432,10 +1439,70 @@ management_zone("windows")
 local gm = client(3, "GM", 200)
 local token, snapshot = management_open(gm)
 assert(snapshot == original)
-local _, changed = management_save(gm, token, 0, { "commands", "default", "deny" })
+local _, changed = management_save(gm, token, 0, { "tlos", "default", "deny" }, { "tlos", "allow", "Me, Target" })
 assert(T.files[management_cfg] == changed and changed:find("default = deny", 1, true))
+assert(changed:find("[tlos]\ndefault = deny\nallow = Me, Target\n", 1, true))
 management_backup(changed, original)
 assert(not T.dirs[management_lock] and not T.files[management_lock .. "/owner"])
+)lua");
+}
+
+TEST_CASE("Server script: management validates TLO root lists and preserves existing tokens") {
+    check_run(R"lua(
+local original = "[tlos]\ndefault = allow\nallow = Me.Bank, Target ; keep this note\nblock = Spawn\n"
+T.files[management_cfg] = original
+management_zone("tlo_validation")
+local gm = client(3, "GM", 200)
+local low = client(4, "Low GM", 199)
+local token = management_open(gm)
+local scans = T.policy_scans
+management_save(low, token, 1, { "tlos", "default", "deny" })
+assert(T.policy_scans == scans, "unauthorized TLO edits do not scan or write")
+
+management_save(gm, token, 2, { "tlos", "default", "off" })
+management_save(gm, token, 2, { "tlos", "gm", "Spawn:200" })
+for _, text in ipairs({ "Me.Bank", "Spawn[1]", "/Spawn", "Target; Me", "Spawn\r\n[client]", "Me#Target" }) do
+  management_save(gm, token, 2, { "tlos", "block", text })
+end
+management_save(gm, token, 2, { "tlos", "allow", "Me.Bank, Me.Bank, Target" })
+management_save(gm, token, 2, { "tlos", "allow", "me.bank, Target" })
+assert(T.files[management_cfg] == original and not T.dirs[management_history])
+
+local _, cfg = management_save(gm, token, 0,
+  { "tlos", "allow", "Me.Bank, TaRgEt, Offline-Addon_42" }, { "tlos", "block", "" })
+assert(cfg:find("allow = Me.Bank, TaRgEt, Offline-Addon_42 ; keep this note\n", 1, true))
+local _, snapshot = management_open(gm)
+assert(snapshot == cfg and snapshot:match("\nblock =%s*\n$"))
+management_backup(cfg, original)
+)lua");
+}
+
+TEST_CASE("Server script: management authorizes and revisions exact add-on TLO grants") {
+    check_run(R"lua(
+local original = "[tlos]\nblock = Me\n[addons]\nenforce = on\nallow = owner/current\n"
+T.files[management_cfg] = original
+management_zone("tlo_grants")
+local gm = client(3, "GM", 200)
+local low = client(4, "Low GM", 199)
+local token = management_open(gm)
+local edit = { "tlos", "addon_allow", "Owner/Repo:Me, owner/repo:Spawn" }
+local scans = T.policy_scans
+management_save(low, token, 1, edit)
+assert(T.policy_scans == scans, "unauthorized grant edits do not scan or write")
+
+for _, value in ipairs({ "owner/repo:Me.Bank", "owner/repo:/Me", "owner/repo@v1:Spawn", "repo:Me",
+  "https://github.com/owner/repo:Me", "owner/repo.git:Me", "owner/repo:Me\r\n[client]" }) do
+  management_save(gm, token, 2, { "tlos", "addon_allow", value })
+end
+assert(T.files[management_cfg] == original and not T.dirs[management_history])
+
+local _, cfg = management_save(gm, token, 0, edit, { "addons", "allow", "owner/current, owner/repo" })
+assert(cfg:find("addon_allow = Owner/Repo:Me, owner/repo:Spawn", 1, true))
+assert(cfg:find("allow = owner/current, owner/repo", 1, true))
+assert(cfg:find("block = Me", 1, true))
+management_backup(cfg, original)
+local _, snapshot = management_open(gm)
+assert(snapshot == cfg)
 )lua");
 }
 

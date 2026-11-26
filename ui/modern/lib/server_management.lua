@@ -28,7 +28,8 @@ function M.setCommands(draft, commands)
 end
 
 function M.new(view, resolveCommand)
-  local draft = { saved = {}, edits = {}, newAddons = {}, resolveCommand = resolveCommand, resolvedCommands = {} }
+  local draft = { saved = {}, edits = {}, newAddons = {}, resolveCommand = resolveCommand, resolvedCommands = {},
+    tlos = view.tlos or {} }
   for _, field in ipairs(view.fields) do
     draft.saved[field.section .. "." .. field.key] = field.value
   end
@@ -221,6 +222,64 @@ function M.filterCommands(draft, origin, pattern)
   return result
 end
 
+function M.validTloName(name)
+  return name:match("^[A-Za-z0-9_][A-Za-z0-9_-]*$") ~= nil
+end
+
+function M.tloRules(draft)
+  local default = M.get(draft, "tlos.default", "allow"):lower()
+  local state = { default = default == "deny" and "deny" or "allow", rules = {}, names = {} }
+  for _, rule in ipairs({ "allow", "block" }) do
+    for _, name in ipairs(tokens(M.get(draft, "tlos." .. rule))) do
+      if M.validTloName(name) then
+        local key = name:lower()
+        state.rules[key] = rule
+        state.names[key] = name
+      end
+    end
+  end
+  return state
+end
+
+function M.tloEffective(state, tlo)
+  local direct = state.rules[tlo.name:lower()]
+  if direct then return direct, "Explicit TLO rule" end
+  return state.default == "deny" and "block" or "allow", "Default policy"
+end
+
+function M.setTloRule(draft, tlo, rule, state)
+  if not M.validTloName(tlo.name) then return end
+  local key = tlo.name:lower()
+  local spelling = state.names[key] or tlo.name
+  local function match(item) return item:lower() == key end
+  for _, policy in ipairs({ "allow", "block" }) do
+    listUpdate(draft, "tlos." .. policy, false, match, rule == policy and spelling or nil, keepSpelling)
+  end
+end
+
+function M.filterTlos(draft, state, origin, pattern)
+  local result, registered = {}, {}
+  pattern = M.trim(pattern):lower()
+  local function include(row)
+    if row.origin == origin and (row.name:lower():find(pattern, 1, true)
+        or row.description:lower():find(pattern, 1, true)) then
+      result[#result + 1] = row
+    end
+  end
+  for _, row in ipairs(draft.tlos) do
+    registered[row.name:lower()] = true
+    include(row)
+  end
+  if origin == "addon" then
+    for key, name in pairs(state.names) do
+      if not registered[key] then include({ name = name, description = "Configured name with no registered provider.",
+        origin = "addon" }) end
+    end
+  end
+  table.sort(result, function(a, b) return a.name:lower() < b.name:lower() end)
+  return result
+end
+
 function M.addonIdentity(text, required)
   text = M.trim(text)
   local minimum
@@ -239,6 +298,59 @@ function M.addonIdentity(text, required)
     if #repo > 4 then repo = repo:gsub("%.git$", "") end
     return owner .. "/" .. repo, minimum
   end
+end
+
+local function addonTloToken(token)
+  local source, name = token:match("^([A-Za-z0-9-]+/[A-Za-z0-9_.-]+):(.+)$")
+  local repo = source and M.addonIdentity(source)
+  if repo and repo == source:lower() and M.validTloName(name) then return repo, name end
+end
+
+function M.addonTloGrants(draft)
+  local grants = {}
+  for _, token in ipairs(tokens(M.get(draft, "tlos.addon_allow"))) do
+    local repo, name = addonTloToken(token)
+    if repo then
+      local names = grants[repo] or {}
+      grants[repo] = names
+      names[name:lower()] = name
+    end
+  end
+  return grants
+end
+
+function M.setAddonTloGrant(draft, repo, name, grant)
+  local id = M.addonIdentity(repo)
+  if not id or not M.validTloName(name) then return end
+  local root = name:lower()
+  local function match(token)
+    local owner, tlo = addonTloToken(token)
+    return owner == id and tlo:lower() == root
+  end
+  listUpdate(draft, "tlos.addon_allow", false, match, grant and id .. ":" .. name or nil, keepSpelling)
+end
+
+function M.addonTloRows(info, grants)
+  local rows, seen = {}, {}
+  local function add(name, kind)
+    if M.validTloName(name) then
+      local key = name:lower()
+      if not seen[key] then
+        seen[key] = true
+        rows[#rows + 1] = { name = name, kind = kind }
+      end
+    end
+  end
+  for _, name in ipairs(info and info.required_tlos or {}) do add(name, "Required") end
+  for _, name in ipairs(info and info.suggested_tlos or {}) do add(name, "Suggested") end
+  for _, name in pairs(grants or {}) do add(name, "Existing grant") end
+  table.sort(rows, function(a, b) return a.name:lower() < b.name:lower() end)
+  return rows
+end
+
+function M.addonTloEffective(state, grants, tlo)
+  if grants and grants[tlo.name:lower()] then return "granted" end
+  return M.tloEffective(state, tlo)
 end
 
 local function versionNumber(text)
@@ -302,10 +414,13 @@ local function higherMinimum(candidate, current)
   return #ap > #bp
 end
 
-function M.addons(draft)
+function M.addons(draft, tloGrants)
   local rows, index = {}, {}
   for id, source in pairs(draft.newAddons) do
     index[id] = { id = id, source = source }
+  end
+  for id in pairs(tloGrants or M.addonTloGrants(draft)) do
+    if not index[id] then index[id] = { id = id } end
   end
   for _, key in ipairs({ "suggest", "allow", "required", "block" }) do
     for _, token in ipairs(tokens(M.get(draft, "addons." .. key), key ~= "suggest")) do

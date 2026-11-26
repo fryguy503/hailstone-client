@@ -1,8 +1,11 @@
 #include "core/addon_manifest.h"
 
+#include <algorithm>
 #include <charconv>
+#include <set>
 
 #include "core/addon_source.h"
+#include "core/ascii_case.h"
 #include "core/update_manifest.h"
 
 namespace hailstone {
@@ -12,6 +15,22 @@ namespace {
 constexpr std::size_t kMaxManifest = 64 * 1024;
 constexpr std::size_t kMaxPackages = 32;
 constexpr std::size_t kMaxText = 200;
+// The same value-size bound as server management. Leave room for the package records and signature in the manifest.
+constexpr std::size_t kMaxTloList = 8192;
+constexpr std::string_view kTloSeparators = ", \t";
+
+struct TloNameLess {
+    bool operator()(std::string_view a, std::string_view b) const { return icompare(a, b) < 0; }
+};
+
+bool addon_tlo_name_ok(std::string_view name) {
+    const auto identifier = [](char c) {
+        c = ascii_lower(c);
+        return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+    };
+    return !name.empty() && identifier(name.front()) &&
+           std::all_of(name.begin() + 1, name.end(), [&](char c) { return identifier(c) || c == '-'; });
+}
 
 std::vector<std::string_view> fields(std::string_view line) {
     std::vector<std::string_view> out;
@@ -99,6 +118,31 @@ bool addon_name_ok(std::string_view name) {
         if (!alnum && (i == 0 || (c != '-' && c != '_'))) return false;
     }
     return true;
+}
+
+std::optional<std::vector<std::string>> parse_addon_tlo_list(std::string_view text) {
+    const auto first = text.find_first_not_of(" \t");
+    if (first == std::string_view::npos) return std::nullopt;
+    text = text.substr(first, text.find_last_not_of(" \t") - first + 1);
+    if (text.size() > kMaxTloList) return std::nullopt;
+
+    std::vector<std::string> roots;
+    if (iequals(text, "none")) return roots;
+    std::set<std::string_view, TloNameLess> seen;
+    for (auto pos = text.find_first_not_of(kTloSeparators); pos != std::string_view::npos;) {
+        const auto end = text.find_first_of(kTloSeparators, pos);
+        const std::string_view root = text.substr(pos, end - pos);
+        if (!addon_tlo_name_ok(root) || iequals(root, "none")) return std::nullopt;
+        if (seen.insert(root).second) roots.emplace_back(root);
+        pos = text.find_first_not_of(kTloSeparators, end);
+    }
+    if (roots.empty()) return std::nullopt;
+    return roots;
+}
+
+void remove_required_tlos(const std::vector<std::string>& required, std::vector<std::string>& suggested) {
+    const std::set<std::string_view, TloNameLess> required_roots(required.begin(), required.end());
+    std::erase_if(suggested, [&](const std::string& root) { return required_roots.contains(root); });
 }
 
 const AddonPackage* addon_package_for(const AddonManifest& manifest, std::string_view platform) {
@@ -194,6 +238,11 @@ std::optional<AddonManifest> parse_addon_manifest(std::string_view text, std::st
                 for (const auto& c : m.caps) seen = seen || c == w;
                 if (!seen && m.caps.size() < 32) m.caps.emplace_back(w);
             }
+        } else if (f[0] == "required_tlos" || f[0] == "suggested_tlos") {
+            auto& roots = f[0] == "required_tlos" ? m.required_tlos : m.suggested_tlos;
+            if (roots) return fail(error, where + " repeats " + std::string(f[0]));
+            roots = parse_addon_tlo_list(rest_of(line, f[0]));
+            if (!roots) return fail(error, where + " has a bad " + std::string(f[0]));
         } else if (f[0] == "notes") {
             if (f.size() != 2 || !web_address(f[1])) return fail(error, where + " has a bad notes address");
             m.notes = std::string(f[1]);
@@ -249,6 +298,7 @@ std::optional<AddonManifest> parse_addon_manifest(std::string_view text, std::st
             return fail(error, "the add-on's signature does not match its key");
         m.key = key;
     }
+    if (m.required_tlos && m.suggested_tlos) remove_required_tlos(*m.required_tlos, *m.suggested_tlos);
     return m;
 }
 

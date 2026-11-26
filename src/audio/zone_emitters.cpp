@@ -270,6 +270,7 @@ void ZoneEmitters::reset_timer(std::size_t i, std::uint32_t now_ms) {
 
 void ZoneEmitters::update(const glm::vec3& listener, std::uint32_t now_ms, float effects_volume, float music_volume,
                           EmitterSink& sink) {
+    std::erase_if(fading_loops_, [&](std::uint32_t voice) { return !sink.alive(voice); });
     MusicManager& music = music_manager();
     music.set_volume(music_volume);
     for (std::size_t i = 0; i < set_.emitters.size(); ++i) {
@@ -310,6 +311,7 @@ void ZoneEmitters::update(const glm::vec3& listener, std::uint32_t now_ms, float
             // ReleaseLoopingSound: the kept voice fades out over +0x1c.
             if (s.voice) {
                 sink.release(s.voice, e.fade_out_ms);
+                if (e.fade_out_ms > 0) fading_loops_.push_back(s.voice);
                 s.voice = 0;
             }
             continue;
@@ -344,6 +346,8 @@ void ZoneEmitters::update(const glm::vec3& listener, std::uint32_t now_ms, float
 }
 
 void ZoneEmitters::clear(EmitterSink& sink) {
+    for (auto voice : fading_loops_) sink.release(voice, 0);
+    fading_loops_.clear();
     for (auto& s : state_)
         if (s.voice) {
             sink.release(s.voice, 0);

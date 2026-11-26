@@ -10,7 +10,7 @@ does not bypass a function's own caller, screen or server-state checks.
 `API.version`, `API.Supports(module[, member])` and `API.Describe([module[, member]])`
 provide contract version and structural discovery. They confer no permissions.
 
-Coverage: **364/364 method implementation links**, **230/364 adjacent binding comment excerpts**, and **6/6 constant implementation links**. Excerpts below are verbatim binding comments; they preserve any documented signatures and results, and do not invent omitted arguments or results. **See binding** marks an author documentation gap.
+Coverage: **366/366 method implementation links**, **231/366 adjacent binding comment excerpts**, and **6/6 constant implementation links**. Excerpts below are verbatim binding comments; they preserve any documented signatures and results, and do not invent omitted arguments or results. **See binding** marks an author documentation gap.
 
 Unresolved method implementations: none.
 Unresolved constant implementations: none.
@@ -76,6 +76,7 @@ Unresolved constant implementations: none.
 | `API.character.ClassName` | ``hs.ClassName(id [, short]) -> a class's name as the client shows it, its short name with `short`: a server's own``<br>`where its plugin or script named the class (game/eq_names.h), else the stock one ("Warrior", "WAR").` | `hs.ClassName` · [source](../src/app/lua_ui.cpp) | none (outer gate) | closed |
 | `API.character.ClassNamesRevision` | `hs.ClassNamesRevision() -> a number that changes whenever hs.ClassName's answers may have (a cache's key).` | `hs.ClassNamesRevision` · [source](../src/app/lua_ui.cpp) | none (outer gate) | closed |
 | `API.character.Gauge` | `fraction, text, value [, r, g, b] = hs.Gauge(eqType [, markInvisibility])`<br>`fraction 0..1, nil when the gauge is empty/unavailable; markInvisibility (Hailstone) as hs.Label's, on the`<br>`name captions of gauges 1, 6 and 27.`<br>`value is __GetGaugeValueFromEQ's own (0..1000, -1 nothing drawn at all, -2 full in dark red, -3 empty: a corpse,`<br>`-110..-10 and -2000..-1000 the special bands); r, g, b the fill tint CGaugeWnd::Draw gives a special value`<br>`(gauge_fill), nil for a normal one.` | `hs.Gauge` · [source](../src/app/lua_ui.cpp) | none (outer gate) | plain-capabilities |
+| `API.character.GaugeValues` | `current, maximum, percent = hs.GaugeValues(eqType [, petIndex [, requestExact]])`<br>`Group HP (11–15), pet HP (16–21), group mana (31–35) and endurance (36–40). Missing readings return nil.`<br>`For type 16, petIndex 1 (the default) selects the focused pet and 2/3 select the extra Pet window rows.`<br>`Percent is 0–100. Pass false for requestExact to read available readings without polling for exact points.` | `hs.GaugeValues` · [source](../src/app/lua_ui.cpp) | none (outer gate) | closed |
 | `API.character.Label` | `text [, r, g, b] = hs.Label(eqType [, markInvisibility])`<br>`The text a game label with this EQType shows. markInvisibility (Hailstone): the name plate's "(Name)" / "[Name]"`<br>`on the player's (1) and target's (28) names, for a spawn the player sees; the original's labels show them plain.` | `hs.Label` · [source](../src/app/lua_ui.cpp) | none (outer gate) | plain-capabilities |
 | `API.character.Money` | `plat, gold, silver, copper = hs.Money()` | `hs.Money` · [source](../src/app/lua_ui.cpp) | none (outer gate) | closed |
 | `API.character.Name` | `hs.Name() -> character name or nil` | `hs.Name` · [source](../src/app/lua_ui.cpp) | none (outer gate) | plain-capabilities |
@@ -448,12 +449,13 @@ called it, by priority and registration order.
 
 | Member | Documented signature / binding comment | Existing binding | Required capabilities | Hook policy |
 | --- | --- | --- | --- | --- |
+| `API.serverManagement.AddonTlos` | **See binding** | `hs.ServerManagementAddonTlos` · [source](../src/app/lua_ui_server_management.cpp) | none (outer gate) | closed |
 | `API.serverManagement.Available` | **See binding** | `hs.ServerManagementAvailable` · [source](../src/app/lua_ui_server_management.cpp) | none (outer gate) | closed |
 | `API.serverManagement.CanonicalCommandName` | **See binding** | `hs.ServerManagementCanonicalCommandName` · [source](../src/app/lua_ui_server_management.cpp) | none (outer gate) | closed |
 | `API.serverManagement.Close` | **See binding** | `hs.ServerManagementClose` · [source](../src/app/lua_ui_server_management.cpp) | none (outer gate) | closed |
 | `API.serverManagement.Open` | **See binding** | `hs.ServerManagementOpen` · [source](../src/app/lua_ui_server_management.cpp) | none (outer gate) | closed |
 | `API.serverManagement.Save` | **See binding** | `hs.ServerManagementSave` · [source](../src/app/lua_ui_server_management.cpp) | none (outer gate) | closed |
-| `API.serverManagement.View` | `The pack can keep its draft during zoning and when only the command catalog changes.` | `hs.ServerManagementView` · [source](../src/app/lua_ui_server_management.cpp) | none (outer gate) | closed |
+| `API.serverManagement.View` | `The pack can keep its draft during zoning and when only the local catalogs change.` | `hs.ServerManagementView` · [source](../src/app/lua_ui_server_management.cpp) | none (outer gate) | closed |
 
 ## session
 

@@ -1769,11 +1769,10 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
         } else if (mount && !new_style) {
             // 0x4b15b0 on a rider: its movement and idle animations become the mount race's rider animation
             // (racedata.txt's last field, empty in the shipped file: 0x4a, P09), or 0x4e (L10) while the mount runs
-            // at its run speed or faster; a model without the clip falls back as 0x4b1210 does (0x4e to 0x4a,
-            // 0x4a to standing). The rider animation is queued on the legs: an action plays on the upper body.
+            // at its run speed or faster. Hailstone provides a seated fallback for classic player models without
+            // a mounted animation. The rider animation is queued on the legs: an action plays on the upper body.
             const bool full_run = !mount->stalled && mount->run_speed <= mount->speed_run;
-            req.base = full_run ? &model->first_clip({"L10", "P09", "P01"}, holding)
-                                : &model->first_clip({"P09", "P01"}, holding);
+            req.base = &model->riding_clip(full_run, holding);
             req.base_anim = full_run ? 0x4e : 0x4a;
         } else {
             req.base = motion;

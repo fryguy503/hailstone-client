@@ -42,6 +42,53 @@ TEST_CASE("a mount's rider dag: <rider>_MOUNT01, else CHEST03_MOUNT01, else <cod
     CHECK(model_with("HSM", {"HSM_TRACK", "HSMNECK_TRACK"}).mount_point_bone("OGM") == -1);
 }
 
+TEST_CASE("a WLD rider uses its authored clips when available") {
+    auto model = model_with("OGM", {"OGM_TRACK"});
+    model.clips.emplace("P01", *model.clip(""));
+    CHECK(&model.riding_clip(false) == model.clip("P01"));
+    model.clips.emplace("P09", *model.clip(""));
+    CHECK(&model.riding_clip(false) == model.clip("P09"));
+    CHECK(&model.riding_clip(true) == model.clip("P09"));
+    model.clips.emplace("L10", *model.clip(""));
+    CHECK(&model.riding_clip(true) == model.clip("L10"));
+}
+
+TEST_CASE("classic human and ogre riders sit astride the saddle without a mounted clip" *
+          doctest::skip(!hailstone::test::game_dir())) {
+    auto lib = CharacterLibrary::load(*hailstone::test::game_dir(), "");
+    for (const char* code : {"HUM", "OGM"}) {
+        CAPTURE(code);
+        auto model = lib.model(code);
+        if (!model) {
+            MESSAGE("the game folder has no " << code << " model: not checked");
+            continue;
+        }
+        if (model->luclin || model->clip("P09")) continue; // some asset folders supply an authored clip
+        const auto& clip = model->riding_clip(false);
+        CHECK(&clip != model->clip("P01"));
+        const auto* run = model->clip("L10");
+        CHECK(&model->riding_clip(true) == (run ? run : &clip));
+        std::vector<glm::mat4> pose;
+        model->sample(clip, 0.0f, false, pose);
+        auto bone_at = [&](std::string_view suffix) {
+            const int bone = model->find_bone(suffix);
+            REQUIRE(bone >= 0);
+            return glm::vec3(pose[bone][3]);
+        };
+        const auto hips = bone_at("PE_TRACK");
+        CHECK(hips.z > 0.0f);
+        CHECK(hips.z < 0.5f);
+        const auto right_knee = bone_at("CA_R_TRACK");
+        const auto left_knee = bone_at("CA_L_TRACK");
+        CHECK(right_knee.x > hips.x);
+        CHECK(left_knee.x > hips.x);
+        CHECK(right_knee.y < hips.y);
+        CHECK(left_knee.y > hips.y);
+        CHECK(bone_at("BO_R_TRACK").z < right_knee.z);
+        CHECK(bone_at("BO_L_TRACK").z < left_knee.z);
+    }
+}
+
 TEST_CASE("a rider is drawn in its mount's bone frame, without its own scale") {
     auto horse = model_with("HRS", {"ROOT_BONE", "CHEST03_MOUNT01"});
     auto wld_rider = model_with("OGM", {"OGM_TRACK"});

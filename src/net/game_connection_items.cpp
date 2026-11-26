@@ -580,11 +580,11 @@ void GameConnection::click_slot(const ItemSlot& slot, bool shift, bool ctrl) {
         return;
     }
     if (slot.type == kInvTrade) {
-        // A click on an own trade slot drops the cursor item there (items never leave the trade). A drop that moved
+        // A click on an own trade slot offers the cursor item (items never leave the trade). A drop that moved
         // something plays the item-moved wave (CInvSlot::HandleLButtonUp @0x69633a).
         if (const Item* held = inventory_.cursor()) {
             const std::uint32_t count = held->stack_count;
-            trade_drop_cursor();
+            trade_drop_cursor(slot.slot);
             const Item* after = inventory_.cursor();
             if (!after || after->stack_count != count) item_moved_sound();
         }
@@ -938,8 +938,7 @@ void GameConnection::container_sound(std::uint32_t bag_type, bool open, bool in_
     SoundCue cue;
     cue.kind = SoundCue::Kind::Wave;
     cue.spell = static_cast<std::uint32_t>(game::container_sound(bag_type, open));
-    // Hailstone: only the opening has a volume of its own, in a bank slot a second one.
-    if (open) cue.context = in_bank ? SoundCue::Context::BankBagOpen : SoundCue::Context::BagOpen;
+    cue.context = in_bank ? SoundCue::Context::BankBag : SoundCue::Context::Bag;
     sound_cues_.push_back(cue);
 }
 

@@ -1,0 +1,10 @@
+# Live smoke test (tools/live_smoke.sh, docs/ci.md "Live smoke tests"): zoning.
+# After each zone-in, the possessions the client keeps match the server's (a zone-in resends the inventory), and
+# #goto moves within a zone. Stock PEQ zones; any GM character.
+zone qeytoqrg
+snapshot
+zone qeynos2
+expect-snapshot
+goto 100 100 3
+zone qeytoqrg
+expect-snapshot

@@ -26,6 +26,7 @@
 #include <imgui.h>
 
 #include "app/lua_ui_windows.h"
+#include "app/ui_input.h"
 #include "net/game_connection.h"
 #include "net/item_packets.h"
 
@@ -67,8 +68,8 @@ int BankSlotClick(lua_State* L) {
     const net::ItemSlot s = *at;
     std::string_view button = lua_isstring(L, 3) ? lua_tostring(L, 3) : "left";
     if (button == "left") {
-        const ImGuiIO& io = ImGui::GetIO();
-        h.conn->click_slot(s, io.KeyShift, io.KeyCtrl);
+        const UiKeys keys = ui_keys();
+        h.conn->click_slot(s, keys.shift, keys.ctrl);
     } else if (button == "right" || button == "rightup") {
         item_right_click(h, s);
     } else if (button == "rightheld") {

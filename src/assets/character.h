@@ -330,6 +330,8 @@ struct CharacterModel {
     std::vector<Material> materials;
     // Clip code -> clip. "" is the rest pose (one frame).
     std::map<std::string, AnimationClip, std::less<>> clips;
+    // A generated seated pose for compatible classic models. It has no animation code in the game files.
+    std::optional<AnimationClip> classic_riding_pose;
     // EQG models: classic codes answered by a track of `clips` (eqg_character::classic_aliases: "C05" ->
     // "SLPR_BA_1"); clip() follows them.
     std::map<std::string, std::string, std::less<>> clip_aliases;
@@ -372,6 +374,8 @@ struct CharacterModel {
     const AnimationClip* clip(std::string_view code, bool holding) const;
     // First of the codes that exists, else the rest pose.
     const AnimationClip& first_clip(std::initializer_list<std::string_view> codes, bool holding = false) const;
+    // The WLD rider's authored run or idle animation, with a seated pose for classic player models that lack it.
+    const AnimationClip& riding_clip(bool running, bool holding = false) const;
 
     // Local bone poses at a time; frames are interpolated (slerp / lerp).
     // Looping clips wrap, others hold their last frame.

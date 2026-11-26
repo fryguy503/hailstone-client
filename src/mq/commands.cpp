@@ -14,6 +14,7 @@
 #include "mq/map_filter.h"
 #include "mq/parse.h"
 #include "mq/spawn_search.h"
+#include "mq/typed_escapes.h"
 #include "net/game_connection.h"
 #include "plugin/policy.h"
 
@@ -129,7 +130,11 @@ Commands::Commands(CommandEnv env) : env_(std::move(env)) {
     // /squelch: the chat lines its command prints are dropped.
     h.on_chat(owner_, [this](plugin::ChatLine&) { return squelch_ ? plugin::Flow::Drop : plugin::Flow::Continue; });
 
-    h.add_command(owner_, "/echo", [this](std::string_view args) { say(std::string(args)); });
+    // /echo (MQ's Echo): the line with MQ's typed escapes as colour codes (mq/typed_escapes.h; a line no script sent
+    // loses the BEL a ${...} may have brought in first).
+    h.add_command(owner_, "/echo", [this](std::string_view args) {
+        say_coded(typed_line(args, !plugin::caller_name().empty()));
+    });
     h.add_command(owner_, "/mapfilter", [this](std::string_view args) { map_filter(args); }, plugin::kCapCommands);
     h.add_command(owner_, "/noparse", [this](std::string_view args) {
         const bool before = std::exchange(noparse_, true);
@@ -137,6 +142,9 @@ Commands::Commands(CommandEnv env) : env_(std::move(env)) {
         noparse_ = before;
     });
     h.add_command(owner_, "/docommand", [this](std::string_view args) { run_nested(args); });
+    // /invoke ${Window[...].DoOpen} (MQ's InvokeCmd sets bRunNextCommand and nothing else): the line's ${...} were
+    // read before the command got it, and reading a window method is what acts (Window's LeftMouseUp, DoOpen ...).
+    h.add_command(owner_, "/invoke", [](std::string_view) {});
     // /timed <deciseconds> <command> (MQ's DoTimedCmd): the command runs that many tenths of a second later, as
     // whoever sent it (a script's line stays held to its permissions). As in MQ the line is not ${}-expanded when it
     // is sent (filter skips it) but when it runs, so its values are those of that moment. The delay is MQ's
@@ -158,7 +166,7 @@ Commands::Commands(CommandEnv env) : env_(std::move(env)) {
             return;
         }
         timed_.push_back({now_ms() + static_cast<std::int64_t>(d) * 100, std::string(rest), plugin::caller_caps(),
-                          std::string(plugin::caller_name())});
+                          std::string(plugin::caller_name()), plugin::caller_tlo_proof()});
     });
     h.on_pulse(owner_, [this] { run_timed(); });
     // /doortarget [id <n> | <name>] | clear (MQ's DoorTarget): the door with that id, or the nearest (in 3D) whose name
@@ -380,8 +388,12 @@ void Commands::run_timed() {
     timed_.erase(keep, timed_.end());
     std::stable_sort(due.begin(), due.end(), [](const Timed& a, const Timed& b) { return a.due_ms < b.due_ms; });
     for (const Timed& t : due) {
-        plugin::CallerScope scope(t.caps, t.caller);
-        env_.run(t.line);
+        if (t.tlo_caller) {
+            plugin::CallerScope scope(t.caps, t.caller, *t.tlo_caller);
+            env_.run(t.line);
+        } else {
+            env_.run(t.line);
+        }
     }
 }
 
@@ -394,6 +406,12 @@ void Commands::map_filter(std::string_view args) {
 
 void Commands::say(const std::string& text) const {
     if (env_.echo && squelch_ == 0) env_.echo(text);
+}
+
+void Commands::say_coded(const std::string& text) const {
+    if (squelch_ != 0) return;
+    if (env_.echo_coded) env_.echo_coded(text);
+    else if (env_.echo) env_.echo(text);
 }
 
 Commands::~Commands() {

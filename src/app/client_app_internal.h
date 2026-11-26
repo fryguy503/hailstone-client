@@ -173,6 +173,8 @@
 #include "app/navigator.h"
 #include "ui/asset_picker.h"
 #include "core/asset_folder_choice.h"
+#include "mq/popup.h"
+#include "mq/typed_escapes.h"
 
 namespace hailstone::app {
 
@@ -473,7 +475,16 @@ public:
         aenv.server_name = [this] { return char_view_.server_name; };
         aenv.server_profile = [this] { return server_profile_.id; };
         aenv.profile_name = [this] { return server_profile_.name; };
-        aenv.window_open = [this](std::string_view w) { return ui_api_ && ui_api_->shown(w); };
+        aenv.window_open = [this](std::string_view w) { return ui_api_ && ui_api_->window_shown(w); };
+        // Window.Child's reads, DoOpen / DoClose and the click methods (mq::Context): UiApi's windows are state
+        // alone (UiHost and the connection), built with or without anything drawn.
+        aenv.window_child = [this](std::string_view w, std::string_view c, bool rows) -> std::optional<mq::WindowChild> {
+            if (!ui_api_) return std::nullopt;
+            return ui_api_->window_child(w, c, rows);
+        };
+        aenv.window_act = [this](std::string_view w, std::string_view c, std::string_view action) {
+            return window_act(w, c, action);
+        };
         aenv.world_placement_scene = [this] { return world_placement_scene(); };
         aenv.world_placement_input_allowed = [this] { return world_placement_input_allowed(); };
         aenv.face = [this](double degrees, bool) { face_degrees(degrees); };
@@ -529,11 +540,44 @@ public:
         automation_->hooks().add_command(plugin::Hooks::kClient, "/removeaura", [this](std::string_view args) {
             if (conn_) conn_->removeaura_command(args);
         }, plugin::kCapActions);
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/removebuff", [this](std::string_view args) {
+            if (conn_) conn_->removebuff_command(args);
+        }, plugin::kCapActions);
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/removepetbuff", [this](std::string_view args) {
+            if (conn_) conn_->removepetbuff_command(args);
+        }, plugin::kCapActions);
+        // MQ's /beep: a sound only, as /echo writes only (beep_command).
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/beep", [this](std::string_view args) {
+            beep_command(args);
+        });
+        // MQ's popups on the game's centre-screen text (mq/popup.h); display only, as /echo.
+        static constexpr std::pair<const char*, mq::PopupKind> kPopups[] = {
+            {"/popup", mq::PopupKind::Plain},
+            {"/popcustom", mq::PopupKind::Custom},
+            {"/popupecho", mq::PopupKind::Echo}};
+        for (const auto& entry : kPopups) {
+            const mq::PopupKind kind = entry.second; // (not a structured binding: Apple Clang will not capture one)
+            automation_->hooks().add_command(plugin::Hooks::kClient, entry.first, [this, kind](std::string_view args) {
+                if (!conn_) return;
+                mq::Popup p = mq::parse_popup(args, kind);
+                if (!p.usage.empty()) {
+                    conn_->client_message(p.usage); // the client's own codes
+                    return;
+                }
+                // The player's escapes as codes, the BEL a ${...} brought in out (mq/typed_escapes.h), as /echo.
+                p.text = mq::typed_line(p.text, !plugin::caller_name().empty());
+                mq::show_popup(conn_->text_overlay(), p, static_cast<std::uint32_t>(net::GameConnection::now_ms()));
+                if (kind == mq::PopupKind::Echo) conn_->client_message(mq::popup_echo_line(p));
+            });
+        }
         automation_->hooks().add_command(plugin::Hooks::kClient, "/memspell", [this](std::string_view args) {
             if (conn_) conn_->memspell_command(args);
         }, plugin::kCapActions);
         automation_->hooks().add_command(plugin::Hooks::kClient, "/itemnotify", [this](std::string_view args) {
             itemnotify_command(args);
+        }, plugin::kCapActions);
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/notify", [this](std::string_view args) {
+            notify_command(args);
         }, plugin::kCapActions);
         // MQ's /nomodkey, /shiftkey and /ctrlkey: the command after them runs with those keys forced for its clicks
         // (E3 sends "/nomodkey /itemnotify ..." so a key the player holds changes nothing). The line itself is checked
@@ -978,6 +1022,23 @@ private:
     // /itemnotify (game/item_notify.h): the mouse notification on the slot or item the line names, with command_keys()
     // (client_app_items.cpp).
     void itemnotify_command(std::string_view args);
+    // /notify (game/window_notify.h): a window child's click, list or tab selection. The buttons notify_action()
+    // knows run the connection's call, UI or none; anything else goes to the stock window.
+    void notify_command(std::string_view args);
+    // MQ's window methods read in a line (mq::Context::window_act): a click goes as /notify sends it, DoOpen and
+    // DoClose show or hide the stock window.
+    bool window_act(std::string_view window, std::string_view child, std::string_view action);
+    // /beep [sound]: the chosen Beep sound, a game sound by name, or MQ's tone (client_app_options.cpp).
+    void beep_command(std::string_view args);
+    static constexpr const char* kBeepTone = "Tone"; // option_choices("beep_sound")[0]
+    // option_choices("beep_sound"): the tone, the short list (beep_featured_ entries), every other sound file; kept
+    // for the sound system they were read from (client_app_options.cpp).
+    const std::vector<std::string>& beep_choices() const;
+    mutable std::vector<std::string> beep_choices_;
+    mutable std::size_t beep_featured_ = 0;
+    mutable const audio::AudioSystem* beep_choices_for_ = nullptr;
+    static constexpr double kBeepToneHz = 1280.0;    // MQ's Beep(0x500, 250)
+    static constexpr std::uint32_t kBeepToneMs = 250;
     // The modifier keys a command's click uses: those /nomodkey, /shiftkey or /ctrlkey forced while their line runs,
     // else the keyboard's (MacroQuest's clicks read the keyboard too).
     net::SlotClickKeys command_keys() const;
@@ -1739,7 +1800,6 @@ private:
     // (client_app_player.cpp), and the mount the controls moved last frame (0: the player itself).
     struct MountAnswers final : game::MountQueries {
         ClientApp* app = nullptr;
-        bool new_models_loaded() override;
         bool mount_point(const game::Spawn& rider, const game::Spawn& mount) override;
         bool can_i_fit_here() override;
         double room_above() override;

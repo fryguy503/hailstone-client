@@ -63,6 +63,7 @@ local settings = {
 	guild_invites_world    = 1,  -- /guildinvite reaches players in other zones (Hailstone clients)
 	client_files           = 1,  -- send client_files/ to Hailstone clients (0: they get an empty list)
 	group_declines         = 1,  -- tell the inviter when a RoF2 client declines a group invitation
+	group_vitals           = 0,  -- 1 sends exact same-zone group and pet values to requesting Hailstone clients
 	files_rescan           = 300, -- seconds the client_files/ list is kept before a client's request looks again (min 30)
 	files_chunks_per_second = 768, -- file pieces (32 KB) one client is sent a second, more wait; 0: no limit
 	files_chunks_per_second_zone = 1024, -- the same for all of the zone's clients together; 0: no limit
@@ -75,6 +76,9 @@ local settings = {
 local OP_SETTINGS_REQUEST = 0x1432
 local OP_SETTINGS         = 0x1433
 local MAGIC      = 0x50534d4e
+local OP_GROUP_VITALS_REQUEST, OP_GROUP_VITALS = 0x143c, 0x143d
+local GROUP_VITALS_MAGIC, GROUP_VITALS_VERSION = 0x56505348, 1 -- HSPV
+local GROUP_VITALS_MAX = 12
 
 -- Hailstone 0.7.0 and older send the same packets 0x0e lower (0x1422-0x1427). They are still answered, on the
 -- opcodes the client asked on, so a server that updates this script keeps serving clients that have not updated.
@@ -1639,6 +1643,7 @@ local management = (function()
 			allow = "repos", block = "repos" },
 		commands = { default = "mode", allow = "commands", block = "commands", gm = "gm_commands", allow_groups = "groups",
 			block_groups = "groups", blocked_message = "message" },
+		tlos = { default = "mode", allow = "tlo_roots", block = "tlo_roots", addon_allow = "tlo_grants" },
 		management = { min_status = "min_status" },
 	}
 
@@ -1895,17 +1900,26 @@ local management = (function()
 		return result
 	end
 
-	local function valid_command_word(kind, word)
+	local function tlo_name(name)
+		return name:match("^[0-9A-Za-z_][0-9A-Za-z_-]*$")
+	end
+
+	local function valid_rule_word(kind, word)
 		if kind == "groups" then return groups[word:lower()] end
 		if kind == "commands" then return word ~= "/" end
+		if kind == "tlo_roots" then return tlo_name(word) end
+		if kind == "tlo_grants" then
+			local repo, root = word:match("^([^:]+):([^:]+)$")
+			return repo and repo_identity(repo) == repo:lower() and tlo_name(root)
+		end
 		local command, status = word:match("^(.+):([0-9]+)$")
 		return command and command ~= "/" and unsigned(status, 1, 32767)
 	end
 
-	local function valid_command_list(kind, value, original)
+	local function valid_rule_list(kind, value, original)
 		local existing
 		for word in value:gmatch("[^ ,]+") do
-			if not valid_command_word(kind, word) then
+			if not valid_rule_word(kind, word) then
 				-- Another row may be edited without rewriting the author's malformed tokens. Only carry exact
 				-- tokens that appeared in this key of the snapshot, without adding copies.
 				if not existing then
@@ -1929,8 +1943,8 @@ local management = (function()
 		if kind == "press_commands" then return unsigned(value, 0, 2147483647) end
 		if kind == "min_status" then return unsigned(value, 1, 32767) end
 		if kind == "repos" or kind == "required" then return repositories(value, kind == "required") ~= nil end
-		if kind == "groups" or kind == "commands" or kind == "gm_commands" then
-			return valid_command_list(kind, value, original)
+		if kind == "groups" or kind == "commands" or kind == "gm_commands" or kind == "tlo_roots" or kind == "tlo_grants" then
+			return valid_rule_list(kind, value, original)
 		end
 		for word in value:gmatch("[^ ,]+") do
 			local low = word:lower()
@@ -1965,7 +1979,7 @@ local management = (function()
 			section, key = section:lower(), key:lower()
 			local kind = schema[section] and schema[section][key]
 			local id = section .. "." .. key
-			local original = section == "commands" and read_control(raw or "", section, key) or nil
+			local original = (section == "commands" or section == "tlos") and read_control(raw or "", section, key) or nil
 			if not kind or seen[id] or value:find("[%z\1-\31\127]")
 				or not valid_value(kind, kind == "message" and value or trim(value), original) then
 				return nil, "Invalid or duplicate setting: [" .. (schema[section] and section or "unknown") .. "]"
@@ -2342,9 +2356,77 @@ if ([System.IO.File]::Exists($dst)) {
 	}
 end)()
 
+-- A snapshot includes only the requesting player's active pet and the group's in-zone members and active pets.
+-- The request carries no spawn IDs. Two requests per character per second allow for normal delivery jitter.
+local group_vitals_limit = limiter(1)
+local function on_group_vitals_request(client, packet)
+	if not allow(group_vitals_limit, client:CharacterID(), 2) or setting("enabled") == 0
+		or setting("group_vitals") ~= 1 or packet:GetSize() ~= 6
+		or packet:ReadInt32(0) ~= GROUP_VITALS_MAGIC or packet:ReadInt16(4) ~= GROUP_VITALS_VERSION then
+		return
+	end
+
+	local entries, seen = {}, {}
+	local self_id = client:GetID()
+	local function add(mob, hp_only)
+		if mob == nil or not mob.valid or #entries >= GROUP_VITALS_MAX then return end
+		local id = mob:GetID()
+		if id == 0 or id == self_id or seen[id] then return end
+		seen[id] = true
+		entries[#entries + 1] = { mob = mob, id = id, hp_only = hp_only }
+	end
+	local function add_member(member)
+		if not member or not member.valid or member:GetID() == self_id then return end
+		add(member, false)
+		add(member:GetPet(), true)
+	end
+
+	add(client:GetPet(), true)
+	local raid = client:GetRaid()
+	if raid and raid.valid then
+		-- The raid's own roster supplies the Group window while raiding. Never include another subgroup.
+		local subgroup = raid:GetGroup(client)
+		if raid.GetGroupNumber and subgroup >= 0 and subgroup < 12 then
+			for i = 0, 71 do
+				if raid:GetGroupNumber(i) == subgroup then add_member(raid:GetMember(i)) end
+			end
+		end
+	else
+		local group = client:GetGroup()
+		if group and group.valid then
+			for i = 0, 5 do add_member(group:GetMember(i)) end
+		end
+	end
+
+	local reply = Packet(OP_GROUP_VITALS, 8 + #entries * 52, true)
+	reply:WriteInt32(0, GROUP_VITALS_MAGIC)
+	reply:WriteInt16(4, GROUP_VITALS_VERSION)
+	reply:WriteInt16(6, #entries)
+	for i, entry in ipairs(entries) do
+		local offset, mob = 8 + (i - 1) * 52, entry.mob
+		local mana, max_mana, endurance, max_endurance = 0, 0, 0, 0
+		if not entry.hp_only then
+			mana, max_mana = mob:GetMana(), mob:GetMaxMana()
+			if mob:IsClient() then
+				local player = mob:CastToClient()
+				endurance, max_endurance = player:GetEndurance(), player:GetMaxEndurance()
+			end
+		end
+		reply:WriteInt32(offset, entry.id)
+		reply:WriteInt64(offset + 4, mob:GetHP())
+		reply:WriteInt64(offset + 12, mob:GetMaxHP())
+		reply:WriteInt64(offset + 20, mana)
+		reply:WriteInt64(offset + 28, max_mana)
+		reply:WriteInt64(offset + 36, endurance)
+		reply:WriteInt64(offset + 44, max_endurance)
+	end
+	client:QueuePacket(reply)
+end
+
 -- The server's settings for the client. Bit 0, the retired player count setting, stays clear.
 -- Bit 1 advertises Server Management to an eligible account. The encounter still authorizes each request.
 -- Bit 2 carries the recipient's account status for command rules. Older replies do not carry the field.
+-- Bit 3 advertises exact group and pet vitals.
 local function send_settings(client)
 	if setting("enabled") == 0 then
 		return
@@ -2354,6 +2436,7 @@ local function send_settings(client)
 	local flags = management.advertised(rank or 0) and 2 or 0
 	local include_rank = opcode == OP_SETTINGS and rank ~= nil
 	if include_rank then flags = flags + 4 end
+	if opcode == OP_SETTINGS and setting("group_vitals") == 1 then flags = flags + 8 end
 	local p = Packet(opcode, include_rank and 12 or 10, true)
 	p:WriteInt32(0, MAGIC)
 	p:WriteInt16(4, 1)
@@ -2395,6 +2478,10 @@ local function on_unhandled_opcode(e)
 	end
 	if op == OP_ZONE_LINKS_REQUEST then
 		on_zone_links_request(e.self, packet)
+		return
+	end
+	if op == OP_GROUP_VITALS_REQUEST then
+		if not e.connecting then on_group_vitals_request(e.self, packet) end
 		return
 	end
 	if op == management.request then

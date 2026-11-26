@@ -1,0 +1,12 @@
+# Live smoke test (tools/live_smoke.sh, docs/ci.md "Live smoke tests"): NPCs.
+# Hail an NPC, trade it an item it has no use for (PEQ's guards hand it back), and kill an NPC with #damage.
+# Stock PEQ's Qeynos Hills; any GM character.
+zone qeytoqrg
+say #summonitem 13005
+wait 2
+hail Guard
+expect-chat Hail, Guard
+give Guard 13005
+expect-chat you can have it back
+expect-item 13005
+kill rat

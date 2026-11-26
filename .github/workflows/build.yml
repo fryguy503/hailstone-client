@@ -1,0 +1,40 @@
+name: Build and test
+
+# The Linux build and every hailstone_tests case (tools/premerge.sh), on a maintainer's own machine registered as a
+# self-hosted runner (docs/ci.md "Self-hosted build"), so a pull request shows a build without spending Actions
+# minutes. Off until the repository variable HAILSTONE_SELF_HOSTED is "true": without a runner a job would wait in
+# the queue for good.
+#
+# The runner runs the code it is given, so it takes pull requests only from branches of this repository (people with
+# write access), never from forks, and never on pull_request_target.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: linux build and hailstone_tests
+    if: >-
+      vars.HAILSTONE_SELF_HOSTED == 'true' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, linux, x64, hailstone]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      # The build directory lives outside the workspace, which checkout cleans, so builds are incremental. One per
+      # runner: two runners on one machine get their own (RUNNER_NAME).
+      - name: Build, test and check
+        run: tools/premerge.sh --build-dir "$HOME/.cache/hailstone-ci/$RUNNER_NAME/build" --jobs "${HAILSTONE_JOBS:-20}"

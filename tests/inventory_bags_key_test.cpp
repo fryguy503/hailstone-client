@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <imgui.h>
@@ -30,10 +31,11 @@ net::Item item(std::uint32_t id, const char* name, std::int16_t slot, bool bag, 
     return it;
 }
 
-std::vector<std::int32_t> wave_cues(net::GameConnection& c) {
-    std::vector<std::int32_t> out;
+// The Individual Sounds volume each Wave cue plays at (Bags or Bank bags), by the bag's slot.
+std::vector<std::pair<std::int32_t, net::SoundCue::Context>> wave_cues_with_context(net::GameConnection& c) {
+    std::vector<std::pair<std::int32_t, net::SoundCue::Context>> out;
     for (const net::SoundCue& cue : c.take_sound_cues())
-        if (cue.kind == net::SoundCue::Kind::Wave) out.push_back(static_cast<std::int32_t>(cue.spell));
+        if (cue.kind == net::SoundCue::Kind::Wave) out.emplace_back(static_cast<std::int32_t>(cue.spell), cue.context);
     return out;
 }
 
@@ -145,8 +147,13 @@ TEST_CASE("bank bags key: the bank's and the shared bank's bags open while the b
     // The inventory's bags are not the bank key's: the next press closes the bank's alone.
     api.right_click_item(net::ItemSlot::possessions(25));
     CHECK(open() == "Bank Sack|Shared Box|Pouch|");
+    conn.take_sound_cues();
     api.toggle_all_bank_bags();
     CHECK(open() == "Pouch|||");
+    // The bank bags' close waves are on the Bank bags volume.
+    using X = net::SoundCue::Context;
+    using Cue = std::pair<std::int32_t, X>;
+    CHECK(wave_cues_with_context(conn) == std::vector<Cue>{{0x91, X::BankBag}, {0x91, X::BankBag}});
     api.toggle_all_bank_bags();
     CHECK(open() == "Pouch|Bank Sack|Shared Box|");
     api.toggle_all_bank_bags();
@@ -164,7 +171,8 @@ TEST_CASE("bank bags key: the bank's and the shared bank's bags open while the b
     conn.take_sound_cues();
     conn.close_bank();
     app::prune_bag_windows(conn);
-    CHECK(wave_cues(conn) == std::vector<std::int32_t>{0x91, 0x91, 0x91});
+    // Each close wave is on its own bag's volume: the carried Pouch on Bags, the bank's two on Bank bags.
+    CHECK(wave_cues_with_context(conn) == std::vector<Cue>{{0x91, X::Bag}, {0x91, X::BankBag}, {0x91, X::BankBag}});
     REQUIRE(conn.activate_bank(60));
     CHECK(open() == "|||");
     api.toggle_all_bank_bags();

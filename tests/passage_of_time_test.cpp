@@ -399,6 +399,83 @@ TEST_CASE("The connection runs the ticks: the buffs and regen move the pools bet
     CHECK(conn.player_status().mana == 100);
 }
 
+TEST_CASE("Mana ticks use the local maximum until the server reports its own") {
+    auto config = test::MockConfig::standard();
+    config.characters.front().class_ = 2;
+    config.characters.front().level = 60;
+    test::Rig rig(std::move(config));
+    {
+        std::filesystem::create_directories(rig.dir.path() / "Resources");
+        std::ofstream(rig.dir.path() / "Resources" / "BaseData.txt") << kBaseData;
+    }
+    rig.game.rescan();
+    auto& conn = rig.conn;
+    conn.set_game_steps(std::vector<std::int64_t>{});
+    REQUIRE(rig.to_zone());
+    auto profile = *conn.profile();
+    profile.profile_344c[3] = profile.profile_344c[4] = 5;
+    conn.set_profile_for_test(profile);
+    conn.set_spell_table_for_test(std::make_shared<SpellTable>());
+
+    GameTables tables;
+    tables.class_levels.parse(kBaseData);
+    const auto sheet = build_sheet(profile, conn.inventory(), conn.spell_state(), conn.live_state());
+    Character character(sheet, tables, spell_lookup(conn.spell_table()));
+    character.process_all_stats();
+    const auto local_max = static_cast<std::uint32_t>(character.max_mana());
+    REQUIRE(local_max > 2);
+    REQUIRE(local_max < 4860);
+    auto tick = [&] {
+        const auto now = conn.spell_state().last_buff_tick_ms + 6001;
+        conn.set_game_steps(std::vector<std::int64_t>{now});
+        rig.step();
+        REQUIRE(conn.spell_state().last_buff_tick_ms == now);
+        conn.set_game_steps(std::vector<std::int64_t>{});
+    };
+    auto update_mana = [&](std::uint32_t current, std::uint32_t maximum) {
+        const auto me = static_cast<std::uint16_t>(conn.world().player_id);
+        rig.server.zone.send_reliable(net::encode_points_update(false, {current, maximum, me}));
+        REQUIRE(rig.until([&] {
+            const auto& status = conn.player_status();
+            return status.mana == current && status.max_mana == maximum;
+        }));
+    };
+
+    // ManaChange carries the current pool only, so the first tick uses the local formula.
+    conn.receive_zone_packet_for_test(net::encode(net::ManaChange{local_max + 1, 777, 0, false, 0}));
+    REQUIRE(conn.player_status().max_mana == 0);
+    tick();
+    CHECK(conn.player_status().mana == local_max);
+
+    // The report's unequip and re-equip maxima survive the client tick without another server packet.
+    update_mana(4860, 4860);
+    tick();
+    CHECK(conn.player_status().mana == 4860);
+    update_mana(4907, 4907);
+    tick();
+    CHECK(conn.player_status().mana == 4907);
+    tick();
+    CHECK(conn.player_status().mana == 4907);
+
+    // The latest maximum also caps regeneration when it is lower than the formula's result.
+    update_mana(local_max - 2, local_max - 1);
+    tick();
+    CHECK(conn.player_status().mana == local_max - 1);
+
+    // Zero is also an explicit maximum when it comes from the server.
+    update_mana(0, 0);
+    tick();
+    CHECK(conn.player_status().mana == 0);
+
+    // A new zone uses the local formula until its server reports a maximum for the new spawn.
+    const int entries = rig.server.zone_entries;
+    rig.server.request_zone_change(1, 20.0f, 10.0f, 3.0f);
+    REQUIRE(rig.until([&] { return rig.server.zone_entries == entries + 1 && conn.in_zone(); }));
+    conn.receive_zone_packet_for_test(net::encode(net::ManaChange{local_max + 1, 777, 0, false, 0}));
+    tick();
+    CHECK(conn.player_status().mana == local_max);
+}
+
 TEST_CASE("The connection's endurance tick follows actual running, walking and stopping") {
     test::Rig rig;
     {

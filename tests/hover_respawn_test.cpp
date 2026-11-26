@@ -7,6 +7,7 @@
 
 #include "core/byte_io.h"
 #include "game/coords.h"
+#include "game/spa_ids.h"
 #include "mock_server/harness.h"
 #include "net/item_packets.h"
 #include "net/notice_packets.h"
@@ -59,7 +60,8 @@ AppPacket bind_packet(std::uint16_t zone = 2, std::uint16_t instance = 0,
     return AppPacket(to_wire(Op::ZonePlayerToBind), w.take());
 }
 
-AppPacket rez_offer(std::uint32_t spell = 100, std::uint16_t zone = 2, std::uint16_t instance = 0) {
+AppPacket rez_offer(std::uint32_t spell = 100, std::uint16_t zone = 2, std::uint16_t instance = 0,
+                    const char* your_name = "Gennro") {
     ByteWriter w;
     w.le<std::uint32_t>(0);
     w.le(zone);
@@ -68,7 +70,7 @@ AppPacket rez_offer(std::uint32_t spell = 100, std::uint16_t zone = 2, std::uint
     w.f32(40);
     w.f32(12);
     w.le<std::uint32_t>(0);
-    w.fixed_string("Gennro", 64);
+    w.fixed_string(your_name, 64);
     w.le<std::uint32_t>(0);
     w.fixed_string("Healer", 64);
     w.le(spell);
@@ -657,6 +659,71 @@ TEST_CASE("Resurrection outside hover: Yes still echoes the accepted offer immed
     REQUIRE(answer != log.end());
     CHECK(answer->data == answer_rezz(rez_offer(), true).data);
     CHECK(MockEqServer::count(log, Op::RespawnWindow) == 0);
+}
+
+TEST_CASE("Resurrection offers word the question by the offered spell, as Handle_OP_RezzRequest @0x4bead0") {
+    // The mock game folder lacks 9046, 9047 and 3563, so the questions are the quoted fallbacks; it has 4632.
+    struct Offer {
+        std::uint32_t spell;
+        int effect;
+        int base;
+        std::string expected;
+    };
+    const Offer offers[] = {
+        {100, game::SPA_RESURRECT, 96, "Healer wants to cast Test Offer (96 percent) upon you. Do you wish this?"},
+        // Base[0] as it stands: no range check and no need for the resurrection SPA.
+        {101, game::SPA_RESURRECT, -1, "Healer wants to cast Test Offer (-1 percent) upon you. Do you wish this?"},
+        {102, game::SPA_INSTANT_HP, 150, "Healer wants to cast Test Offer (150 percent) upon you. Do you wish this?"},
+        {103, game::SPA_SUMMON_TO_CORPSE, 1,
+         "Healer is attempting to return you to your corpse.  If you accept this, you will still be able to get a "
+         "resurrection later.  Do you wish this?"},
+        {106, 0, 0, "Healer wants to RESURRECT you. Do you wish this?"}, // absent from the local spell table
+    };
+    std::string spell_rows;
+    for (const auto& offer : offers) {
+        if (offer.effect == 0) continue;
+        std::vector<std::string> fields(237, "0");
+        fields[0] = std::to_string(offer.spell);
+        fields[1] = "Test Offer";
+        fields[20] = std::to_string(offer.base);
+        fields[86] = std::to_string(offer.effect);
+        for (std::size_t i = 0; i < fields.size(); ++i) spell_rows += (i ? "^" : "") + fields[i];
+        spell_rows += "\n";
+    }
+    auto spells = std::make_shared<game::SpellTable>();
+    REQUIRE(spells->parse(spell_rows) == 4);
+    HoverRig h;
+    REQUIRE(h.rig.to_zone());
+    auto& c = h.rig.conn;
+    c.set_spell_table_for_test(spells);
+    h.rig.chat();
+    for (const auto& offer : offers) {
+        CAPTURE(offer.spell);
+        c.receive_zone_packet_for_test(rez_offer(offer.spell));
+        REQUIRE(c.confirmation());
+        CHECK(c.confirmation()->id == kConfirmRezz);
+        CHECK(c.confirmation()->text == offer.expected);
+        CHECK(c.confirmation()->timeout_ms == 300000);
+        CHECK_FALSE(c.confirmation()->ok_only);
+        // Each offer also prints eqstr 4632 in colour 0x108.
+        const auto lines = h.rig.chat();
+        REQUIRE(lines.size() == 1);
+        CHECK(lines[0].text == "REZ OFFERED");
+        CHECK(lines[0].color == 0x108);
+    }
+}
+
+TEST_CASE("Resurrection offers for another character are ignored, as Handle_OP_RezzRequest @0x4bead0") {
+    HoverRig h;
+    REQUIRE(h.rig.to_zone());
+    auto& c = h.rig.conn;
+    h.rig.chat();
+    c.receive_zone_packet_for_test(rez_offer(100, 2, 0, "Someone"));
+    CHECK_FALSE(c.confirmation());
+    CHECK(h.rig.chat().empty());
+    c.receive_zone_packet_for_test(rez_offer(100, 2, 0, "GENNRO")); // compared without case
+    REQUIRE(c.confirmation());
+    CHECK(c.confirmation()->id == kConfirmRezz);
 }
 
 TEST_CASE("Hover respawn: a new death discards an unanswered offer for an earlier corpse") {

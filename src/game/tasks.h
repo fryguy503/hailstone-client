@@ -92,6 +92,9 @@ struct TaskOffers {
     std::uint32_t giver_id = 0;          // the task giver's spawn id
     bool shared = false;                 // came as OP_SharedTaskSelectWindow
     std::vector<TaskOffer> offers;
+    // CTaskSelectWnd's selected row (Hailstone keeps it with the offers, so a script's Accept takes what the window
+    // shows, or the first offer with no UI). A new offer list starts at its first row.
+    int selected = 0;
 };
 
 struct TaskHistory {

@@ -216,7 +216,7 @@ local choices = { offset = 0 }
 local respawnOfferShown = false
 ui.window("Respawn", function()
   if not W.shown(RESPAWN) then respawnOfferShown = false; return end
-  local offer = W.shown("ConfirmationDialogBox") and API.windows.ChildShown("ConfirmationDialogBox", "ResurrectionOffer") == true
+  local offer = API.windows.ChildShown("ConfirmationDialogBox", "ResurrectionOffer") == true
   local takeFocus, returnFocus = offer and not respawnOfferShown, respawnOfferShown and not offer
   respawnOfferShown = offer
   T.frame()

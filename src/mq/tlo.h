@@ -18,6 +18,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -114,11 +115,29 @@ struct AbilityState {
     std::int64_t reuse_ms = 0;
 };
 
+// What a stock window's child shows, for Window[w].Child[c] (the client's UiApi::window_child: the window's own
+// state, the same answers it draws with, with no drawing needed).
+struct WindowChild {
+    std::optional<std::string> text;
+    std::optional<bool> enabled; // nullopt: the window leaves it as its XML has it
+    std::optional<bool> shown;
+    std::optional<int> gauge;    // a gauge's value, 0..1000
+    bool is_list = false;        // a list: its rows below, when they were asked for
+    int columns = 0;
+    std::vector<std::vector<std::string>> rows; // each row's column texts
+};
+
 struct Context {
     const Registry* registry = nullptr;
     const net::GameConnection* conn = nullptr;
     nav::NavControl* nav = nullptr; // the client's navigation (/nav, the Navigation TLO); null: none
     std::function<bool(std::string_view window)> window_open; // Window[name].Open
+    // Window[name].Child[child]'s reads (`rows`: a list's rows too); nullopt: no such window.
+    std::function<std::optional<WindowChild>(std::string_view window, std::string_view child, bool rows)> window_child;
+    // MQ's window methods, which act as they are read (/invoke ${Window[...].DoOpen} only reads its line):
+    // "leftmouseup" and "rightmouseup" on a child (`child` empty: the window), "doopen" and "doclose" on a window.
+    // False: nothing took it.
+    std::function<bool(std::string_view window, std::string_view child, std::string_view action)> window_act;
     std::function<bool(std::string_view plugin)> plugin_loaded; // Plugin[name].IsLoaded
     std::function<bool()> foreground; // EverQuest.Foreground: the game's window has the focus; null: false
     // One of the player's abilities by name (or an AA's group, a skill's number); nullopt: the player has none such.
@@ -136,6 +155,16 @@ struct Context {
     std::string config_path;
 };
 
+// Who registered a TLO: the client itself, or an add-on (a compiled plugin's AddTopLevelObject). The Server
+// Management view lists the two apart; a description is text only and says nothing about where a TLO came from.
+enum class TloOrigin : std::uint8_t { BuiltIn, Addon };
+
+struct TloCatalogEntry {
+    std::string name;
+    std::string description; // empty: none given
+    TloOrigin origin = TloOrigin::BuiltIn;
+};
+
 class Registry {
 public:
     Registry();
@@ -144,11 +173,22 @@ public:
     // A new type (or the one of that name); keep the pointer, it stays valid.
     Type& type(const std::string& name);
     const Type* find_type(std::string_view name) const;
-    void add_tlo(std::string name, TloFn fn);
+    void add_tlo(std::string name, TloFn fn, std::string_view description = {}, TloOrigin origin = TloOrigin::BuiltIn);
     void remove_tlo(std::string_view name);
     bool has_tlo(std::string_view name) const;
     std::vector<std::string> tlos() const;
+    std::vector<TloCatalogEntry> tlo_catalog() const;
+    std::uint32_t tlo_catalog_serial() const { return tlo_catalog_serial_; }
 
+    // Whether the server's TLO policy (plugin::TloRules) lets the code running now look up the root `name`. Silent:
+    // for completion and other checks that are not a lookup.
+    bool tlo_allowed(const Context& ctx, std::string_view name) const;
+    // The same for a lookup: a refusal also tells the player, once for each caller (the script or plugin running,
+    // or the player) and root until the server's rules change, through set_denial_notice's function, as
+    // GameConnection::allow_server_command does for a blocked command. tlo() checks with it.
+    bool allow_tlo(const Context& ctx, std::string_view name) const;
+    // Where those notices go (a chat line); null: nowhere.
+    void set_denial_notice(std::function<void(const std::string& text)> fn) { denial_notice_ = std::move(fn); }
     Value tlo(const Context& ctx, std::string_view name, std::string_view index = {}) const;
     Value member(const Context& ctx, const Value& self, std::string_view name, std::string_view index = {}) const;
     // An object's plain value (its type's to_value, until it is not an object); other values as they are.
@@ -168,8 +208,19 @@ public:
     const Type* bool_type() const { return bool_; }
 
 private:
+    struct TloRegistration {
+        TloFn fn;
+        std::string description;
+        TloOrigin origin = TloOrigin::BuiltIn;
+    };
     std::map<std::string, std::unique_ptr<Type>, CaseLess> types_;
-    std::map<std::string, TloFn, CaseLess> tlos_;
+    std::map<std::string, TloRegistration, CaseLess> tlos_;
+    std::uint32_t tlo_catalog_serial_ = 0;
+    std::function<void(const std::string&)> denial_notice_;
+    // The (caller, root) pairs told about under the rules of this connection and serial.
+    mutable std::set<std::pair<std::string, std::string>> denials_told_;
+    mutable const net::GameConnection* denials_conn_ = nullptr;
+    mutable std::uint32_t denials_serial_ = 0;
     const Type *int_ = nullptr, *float_ = nullptr, *string_ = nullptr, *bool_ = nullptr;
 };
 

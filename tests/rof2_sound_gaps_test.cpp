@@ -132,16 +132,16 @@ TEST_CASE("Individual sounds: /autoinventory merging part of a stack into a worn
     CHECK(context_cues(c) == std::vector<X>{X::ItemWorn});
 }
 
-TEST_CASE("Individual sounds: a bag opens in the BagOpen context, in a bank slot BankBagOpen") {
+TEST_CASE("Individual sounds: carried and bank bags use the same context when opening and closing") {
     mq_test::World w("sound_bag_group");
     auto& c = *w.conn;
     using X = net::SoundCue::Context;
     c.take_sound_cues();
     c.container_sound(kBagType, true);
     c.container_sound(kBagType, true, true);
-    c.container_sound(kBagType, false); // closing has no volume of its own
+    c.container_sound(kBagType, false);
     c.container_sound(kBagType, false, true);
-    CHECK(context_cues(c) == std::vector<X>{X::BagOpen, X::BankBagOpen, X::None, X::None});
+    CHECK(context_cues(c) == std::vector<X>{X::Bag, X::BankBag, X::Bag, X::BankBag});
 }
 
 TEST_CASE("Individual sounds: the group of a Wave cue and of a spawn's footsteps") {
@@ -154,9 +154,9 @@ TEST_CASE("Individual sounds: the group of a Wave cue and of a spawn's footsteps
     CHECK(app::wave_cue_group(cue) == G::None);
     cue.context = net::SoundCue::Context::ItemWorn;
     CHECK(app::wave_cue_group(cue) == G::Equip);
-    cue.context = net::SoundCue::Context::BagOpen;
+    cue.context = net::SoundCue::Context::Bag;
     CHECK(app::wave_cue_group(cue) == G::OpenBag);
-    cue.context = net::SoundCue::Context::BankBagOpen;
+    cue.context = net::SoundCue::Context::BankBag;
     CHECK(app::wave_cue_group(cue) == G::OpenBank);
 
     game::Spawn player;                 // another player: not an NPC, whatever its owner field says
@@ -173,8 +173,11 @@ TEST_CASE("Individual sounds: the group of a Wave cue and of a spawn's footsteps
     CHECK(app::footstep_group(pet, false) == G::PetFootsteps);
     CHECK(app::footstep_group(npc, false) == G::OtherFootsteps);
 
-    // Every group the options list has a wave to test with; the others have none.
-    for (const audio::IndividualSound& sound : audio::individual_sounds()) CHECK(app::test_wave(sound.group) > 0);
+    // Every group the options list has a wave to test with but Beep, whose Test plays the chosen Beep sound (a named
+    // sound or the tone: ClientApp::beep_command); the others have none.
+    for (const audio::IndividualSound& sound : audio::individual_sounds())
+        CHECK((app::test_wave(sound.group) > 0 || sound.group == G::Beep)); // (one value: doctest takes no ||)
+    CHECK(app::test_wave(G::Beep) == 0);
     CHECK(app::test_wave(G::None) == 0);
 }
 

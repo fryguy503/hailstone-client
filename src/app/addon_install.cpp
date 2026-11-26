@@ -425,6 +425,8 @@ ParsedRegistry parse_registry(const fs::path& file) {
         else if (what == "author") a.author = std::string(rest);
         else if (what == "description") a.description = std::string(rest);
         else if (what == "notes") a.notes = std::string(rest);
+        else if (what == "required_tlos") a.required_tlos = parse_addon_tlo_list(rest);
+        else if (what == "suggested_tlos") a.suggested_tlos = parse_addon_tlo_list(rest);
         else if (what == "file") {
             auto [hash, rest2] = split(rest);
             auto [size, path] = split(rest2);
@@ -441,6 +443,9 @@ ParsedRegistry parse_registry(const fs::path& file) {
         }
     }
     close();
+    for (auto& a : r.good) {
+        if (a.required_tlos && a.suggested_tlos) remove_required_tlos(*a.required_tlos, *a.suggested_tlos);
+    }
     return r;
 }
 
@@ -539,6 +544,17 @@ std::string registry_text(const std::vector<InstalledAddon>& addons) {
     std::string text = "# The add-ons Hailstone installed (docs/addons.md). Written by the client.\n";
     text += kRegistryHeader;
     text += "\n";
+    const auto append_roots = [&](std::string_view name, const std::optional<std::vector<std::string>>& roots) {
+        if (!roots) return;
+        text += name;
+        text += ' ';
+        if (roots->empty()) text += "none";
+        for (std::size_t i = 0; i < roots->size(); ++i) {
+            if (i) text += ',';
+            text += (*roots)[i];
+        }
+        text += '\n';
+    };
     for (const auto& a : addons) {
         text += "\naddon " + a.name + " " + std::string(addon_kind_word(a.kind)) + "\n";
         text += "source " + a.source + "\n";
@@ -551,6 +567,8 @@ std::string registry_text(const std::vector<InstalledAddon>& addons) {
         if (!a.author.empty()) text += "author " + a.author + "\n";
         if (!a.description.empty()) text += "description " + a.description + "\n";
         if (!a.notes.empty()) text += "notes " + a.notes + "\n";
+        append_roots("required_tlos", a.required_tlos);
+        append_roots("suggested_tlos", a.suggested_tlos);
         for (const auto& f : a.files) text += "file " + to_hex(f.sha256) + " " + std::to_string(f.size) + " " + f.path + "\n";
     }
     return text;
@@ -1278,7 +1296,7 @@ bool library_file(std::string_view path) {
 
 std::vector<plugin::Ceiling> addon_ceilings(const fs::path& data_dir, bool scan_for_enforcement) {
     const AddonRegistry reg = read_addon_registry(data_dir);
-    std::vector<plugin::Ceiling> out = addon_ceilings(reg.addons);
+    std::vector<plugin::Ceiling> out = addon_ceilings(reg.addons, data_dir);
     // Changed or extra code in a managed folder still belongs to that source for explicit blocks. Its bytes are
     // not manifest-verified, so it cannot satisfy a closed allowlist or a requirement. With enforcement off it
     // keeps the existing behavior of a player-edited file, rather than gaining the original manifest's ceiling.
@@ -1345,17 +1363,19 @@ std::vector<plugin::Ceiling> addon_ceilings(const fs::path& data_dir, bool scan_
     return out;
 }
 
-std::vector<plugin::Ceiling> addon_ceilings(const std::vector<InstalledAddon>& addons) {
+std::vector<plugin::Ceiling> addon_ceilings(const std::vector<InstalledAddon>& addons, const fs::path& data_dir) {
     std::vector<plugin::Ceiling> out;
     for (const auto& a : addons)
         for (const auto& f : a.files) {
             const std::string ext = extension_of(f.path);
+            const fs::path file = data_dir.empty() ? fs::path{} : addon_folder(data_dir, a.kind, a.name) / rel(f.path);
             if (a.kind == AddonKind::Script && ext == ".lua")
-                out.push_back({plugin::FileKind::Script, f.sha256, a.caps, a.name, a.source, true, iequal(f.path, "init.lua")});
+                out.push_back({plugin::FileKind::Script, f.sha256, a.caps, a.name, a.source, true,
+                               iequal(f.path, "init.lua"), file});
             else if (a.kind == AddonKind::Plugin && (ext == ".so" || ext == ".dll" || ext == ".dylib") &&
                      f.path.find('/') == std::string::npos &&
                      iequal(plugin::plugin_name(rel(f.path)), a.name))
-                out.push_back({plugin::FileKind::Plugin, f.sha256, a.caps, a.name, a.source});
+                out.push_back({plugin::FileKind::Plugin, f.sha256, a.caps, a.name, a.source, true, true, file});
         }
     return out;
 }

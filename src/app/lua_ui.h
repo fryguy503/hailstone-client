@@ -75,6 +75,8 @@ struct UiHost {
     std::function<std::optional<ServerManagementView>(std::uint32_t known_serial, std::uint32_t known_catalog_serial)>
         server_management;
     std::function<bool(std::string_view expected_revision, const std::vector<ServerManagementEdit>&)> save_server_management;
+    std::function<std::optional<ServerManagementAddonTlos>(std::string_view source, bool request)>
+        server_management_addon_tlos;
     std::function<void()> close_server_management;
     int game_state = 0;                    // CEverQuest::GameState: 1 character select, 2 creation, 5 in game
     const game::mechanics::Character* character = nullptr; // the player as the original computes it
@@ -260,12 +262,31 @@ struct UiHost {
     // pre-game scene's camera at creation, the client's customization camera in game.
     std::vector<game::CustomizationCameraCall> customization_camera;
     int quantity_serial = 0;
+    // The open quantity dialog's slider and box (quantity_sync in app/lua_ui_dialogs.cpp): kept here, not in its
+    // window, so a script's /notify QuantityWnd sets and accepts the same dialog with or without a UI. `key`: the
+    // owner (UiQuantity::serial, -1 the connection's request, 0 none); `request`: the connection request's slot
+    // (type, slot, sub, aug) and maximum the slider was started for.
+    struct QuantityEntry {
+        int key = 0;
+        std::int32_t min = 0, max = 0, value = 0; // value: the slider, min-relative
+        std::string text;                        // QTYW_SliderInput
+        bool request_open = false;
+        std::optional<std::array<std::int32_t, 4>> request_slot;
+        std::uint32_t request_max = 0;
+    };
+    QuantityEntry quantity_entry;
+    // Shift and Ctrl as a script's line forced them (/nomodkey, /shiftkey, /ctrlkey), for the dialogs its clicks
+    // open; none: the keyboard's.
+    std::optional<std::array<bool, 2>> forced_mods;
     // The screen rectangle {x0, y0, x1, y1} of the child the last click went to (the stock callers place the quantity
     // dialog at their button or slot).
     std::array<float, 4> click_rect{-1, -1, -1, -1};
     // The ground drop's confirmation (CEverQuest::LMouseUp's ConfirmationDialog 0x6e, eqstr 9057): the client's
     // flag, set when GameConnection::request_drop_cursor() asked.
     bool* drop_confirm = nullptr;
+    // Counts the confirmation box's answers (answer_confirmation_question), from its window or a script's /notify:
+    // the next question starts its own time limit.
+    std::uint32_t confirm_answers = 0;
     // A text entry question (CTextEntryWnd::Activate): the prompt, the longest answer and the owner's handler.
     struct TextEntry {
         std::string prompt, text;
@@ -440,6 +461,10 @@ void draw_client_confirm(UiHost& host);
 // Whether ConfirmationDialogBox now asks a question whose Yes destroys something for good (an item's destroy, a
 // guild's disband): code other than the pack's own may not press its Yes (hs.ClickChild, WindowButton, ClickChildAt).
 bool destructive_confirmation_up(const UiHost& host);
+// Whether a Yes on ConfirmationDialogBox from code (`by_code`: a script, a plugin, code other than the pack's own)
+// is refused because destructive_confirmation_up: logged when it is. Every way code can press that Yes asks it
+// (hs.ClickChild, WindowButton, ClickChildAt, a script's /notify and Window[...].Child[...].LeftMouseUp).
+bool refuse_code_destroy_yes(const UiHost& host, bool by_code);
 
 // CQuantityWnd::Open (game/quantity_dialog.h) for a window: accepted at once calls `done`, else shows the dialog.
 void open_quantity(UiHost& host, const game::QuantityOpen& in, std::function<void(std::int32_t)> done,
@@ -515,6 +540,14 @@ public:
     // The enabled state the window gives a child (nullopt: the XML's), and a link clicked in an STML child (testing
     // aids).
     std::optional<bool> child_state(std::string_view screen, std::string_view child);
+    // Window[w].Child[c] for the MQ TLOs (mq::Context::window_child): what the stock window gives the child (its
+    // text, enabled and shown state, a gauge's value, with `rows` a list's rows), from its own state, so it answers
+    // without anything drawn. MQ's names are taken (game::canonical_window / canonical_child, then the name as
+    // given); nullopt for a window this client does not have.
+    std::optional<mq::WindowChild> window_child(std::string_view window, std::string_view child, bool rows);
+    // Window[w].Open's UI answer and DoOpen / DoClose, with MQ's window names.
+    bool window_shown(std::string_view window) const;
+    bool show_window(std::string_view window, bool show);
     bool stml_link(std::string_view screen, std::string_view child, int message, std::string_view data);
     // The rows' first texts of a stock window's list (testing aids).
     std::vector<std::string> list_texts(std::string_view screen, std::string_view child);
@@ -555,6 +588,15 @@ public:
 private:
     std::unique_ptr<Impl> impl_;
 };
+
+// /notify <window> <child> <notification> [value] (MQ's WindowNotify, app/window_notify_run.cpp): the client's
+// state for what E3 presses (game/window_notify.h), else the stock window through `api` (null: no UI). A script's
+// (plugin::caller_name() not empty) Yes on a destroy's question is refused (refuse_code_destroy_yes). False when the
+// line was refused (no connection, a bad line, that Yes); true when it went to the client or the window.
+bool run_notify_command(UiHost& host, UiApi* api, std::string_view args);
+// MQ's window methods read in a line (mq::Context::window_act): LeftMouseUp / RightMouseUp go as /notify sends
+// them, DoOpen / DoClose show or hide the stock window. Held to the caller's 'actions' capability.
+bool run_window_act(UiHost& host, UiApi* api, std::string_view window, std::string_view child, std::string_view action);
 
 // The chat keys (game/chat_input.h; app/lua_ui_chat.cpp): the active chat window's input takes the keyboard with
 // `text` added (hs.ChatTakeFocus), and the chat buffer is cleared (slots 479 / 480).

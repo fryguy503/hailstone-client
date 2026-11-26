@@ -196,6 +196,8 @@ struct Script {
     Sha256Digest hash{};
     // Modules already loaded into this state remain subject to a later server policy change.
     std::vector<std::pair<std::string, Sha256Digest>> modules;
+    plugin::TloCaller tlo_caller;
+    std::vector<std::pair<std::filesystem::path, Sha256Digest>> tlo_modules;
     bool managed = false;
     Sha256Digest managed_revision{};
     std::uint32_t caps = 0;
@@ -241,6 +243,7 @@ struct Script {
         // What the code whose line it was may do (plugin::ChatLine::origin_caps): a line a script or plugin wrote
         // runs another script's handler with no more than that (l_next_event).
         std::uint32_t origin = plugin::kCapAll;
+        std::optional<plugin::WeakTloCaller> tlo_origin{};
     };
     std::deque<Queued> queued;
     std::vector<std::pair<std::string, int>> windows;                    // mq.imgui: name, draw function
@@ -251,6 +254,7 @@ struct Script {
         lua_State* t = nullptr;
         int ref = LUA_NOREF;
         std::uint32_t caps = 0;
+        bool tlo_allowed = false;
     };
     std::vector<Thread> threads;
     // The capabilities of the thread resumed now (Thread::caps), which need_caps holds the script's functions to as

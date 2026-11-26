@@ -242,6 +242,37 @@ TEST_CASE("group: OP_MobManaUpdate / OP_MobEnduranceUpdate are 3 bytes") {
     CHECK(d->percent == 57);
 }
 
+TEST_CASE("group vitals: extension uses bounded 64-bit snapshots") {
+    const auto request = encode_group_vitals_request();
+    CHECK(request.opcode == 0x143c);
+    CHECK(bytes_of(request) == std::vector<std::uint8_t>{'H', 'S', 'P', 'V', 1, 0});
+
+    constexpr std::int64_t hp_max = 0x123456789;
+    auto reply = encode_group_vitals({{0x1234, {-3, hp_max}, {20, 100}, {}}});
+    CHECK(reply.opcode == 0x143d);
+    REQUIRE(reply.data.size() == 60);
+    const auto decoded = decode_group_vitals(reply);
+    REQUIRE(decoded);
+    REQUIRE(decoded->size() == 1);
+    const auto& entry = decoded->front();
+    CHECK(entry.spawn_id == 0x1234);
+    CHECK(entry.hp.current == -3);
+    CHECK(entry.hp.maximum == hp_max);
+    CHECK(entry.mana.current == 20);
+    CHECK(entry.mana.maximum == 100);
+    CHECK(entry.endurance.maximum == 0);
+
+    reply.data.pop_back();
+    CHECK_FALSE(decode_group_vitals(reply));
+    CHECK_FALSE(decode_group_vitals(encode_group_vitals(GroupVitals(kMaxGroupVitals + 1, {1, {}, {}, {}}))));
+    CHECK_FALSE(decode_group_vitals(encode_group_vitals({{1, {1, -1}, {}, {}}})));
+    CHECK_FALSE(decode_group_vitals(encode_group_vitals({{1, {}, {}, {}}, {1, {}, {}, {}}})));
+    CHECK_FALSE(decode_group_vitals(request));
+    const auto empty = decode_group_vitals(encode_group_vitals({}));
+    REQUIRE(empty);
+    CHECK(empty->empty());
+}
+
 TEST_CASE("pets: OP_PetCommands is 12 bytes: command, target, flag") {
     PetCommandPacket c;
     c.command = kPetAttack;

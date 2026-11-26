@@ -2,6 +2,7 @@
 // the server's rules allow it, its MQ callbacks on the hook bus, held to its capabilities.
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <deque>
@@ -834,6 +835,12 @@ TEST_CASE("native plugins: MQ callbacks, commands and TLOs, then unloaded cleanl
     h.run("/hello there");
     CHECK(h.printed_line("[MQ2Example] Hello, there!"));
     CHECK(h.p("${Example}") == "Example");
+    {
+        const auto catalog = h.reg.tlo_catalog();
+        const auto row = std::find_if(catalog.begin(), catalog.end(), [](const auto& r) { return r.name == "Example"; });
+        REQUIRE(row != catalog.end());
+        CHECK(row->origin == mq::TloOrigin::Addon);
+    }
     h.hooks.pulse();
     h.hooks.pulse();
     CHECK(h.p("${Example.Pulses}") == "2");
@@ -873,6 +880,51 @@ TEST_CASE("native plugins: a TLO name already taken is refused, and stays after 
     h.plugins->unload("MQ2Example");
     CHECK(h.p("${Example}") == "client's");
     CHECK(h.reg.has_tlo("Me"));
+}
+
+TEST_CASE("native plugins: TLO policy gates registered roots and SDK macro parsing") {
+    Host h;
+    h.approve(plugin::kCapAll);
+    REQUIRE(h.plugins->load("MQ2Example"));
+    CHECK(h.p("${Example.MyHP}") == "75");
+    net::GameConnectionTestAccess::set_server_rules(
+        *h.world.conn, plugin::parse_server_cfg("[tlos]\nblock = Me\n"));
+    // Example.MyHP parses Me through the SDK. The example converts the resulting NULL with atoi.
+    CHECK(h.p("${Example.MyHP}") == "0");
+    net::GameConnectionTestAccess::set_server_rules(
+        *h.world.conn, plugin::parse_server_cfg("[tlos]\nblock = Example\n"));
+    CHECK(h.p("${example.MyHP} ${Me.Name}") == "NULL Tester");
+    CHECK(h.reg.has_tlo("Example"));
+}
+
+TEST_CASE("native plugins: managed TLO grants require verified bytes at the recorded path") {
+    Host h(true);
+    h.approve(plugin::kCapAll);
+    const plugin::Ceiling verified{
+        plugin::FileKind::Plugin, h.hash(), plugin::kCapAll, "MQ2Example", "owner/example", true, true, h.file,
+    };
+    h.policy.set_ceilings({verified});
+    net::GameConnectionTestAccess::set_server_rules(
+        *h.world.conn, plugin::parse_server_cfg("[tlos]\nblock = Me\naddon_allow = owner/example:Me\n"));
+    REQUIRE(h.plugins->load("MQ2Example"));
+    CHECK(h.p("${Me.Name} ${Example.MyHP}") == "NULL 75");
+    {
+        plugin::CallerScope unverified(plugin::kCapAll, "MQ2Example");
+        CHECK(h.p("${Example.MyHP}") == "0");
+    }
+    auto denied = plugin::parse_server_cfg("[tlos]\nblock = Me\naddon_allow = owner/example:Me\n"
+                                          "[addons]\nenforce = on\nblock = owner/example\n");
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, denied);
+    CHECK(h.p("${Example.MyHP}") == "0");
+    denied.addons = {};
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, denied);
+    CHECK(h.p("${Example.MyHP}") == "75");
+    auto different_path = verified;
+    different_path.installed_path = h.file.parent_path() / "unrelated.dll";
+    h.policy.set_ceilings({different_path});
+    h.plugins->policy_changed({});
+    CHECK(h.plugins->loaded("MQ2Example"));
+    CHECK(h.p("${Example.MyHP}") == "0");
 }
 
 TEST_CASE("native plugins: callbacks it may not use are left off; the policy can unload it") {

@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -23,6 +24,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "ui/code_syntax.h"
+#include "ui/imgui_frame.h"
 #include "ui/lua/lua_host.h"
 
 #include <lua.hpp>
@@ -40,13 +42,13 @@ struct EditorState {
     bool accept = false;
     bool hovered = false; // the names' window had the mouse last frame (a click there takes the box's focus)
     ImGuiID input = 0;
-    int seen = 0;  // the frame it was last drawn
-    int made = -1; // the frame it was first drawn
+    std::uint64_t seen = 0; // the frame it was last drawn (ui::imgui_frame, from 1)
+    std::uint64_t made = 0; // the frame it was first drawn; 0 not yet
 };
 
 // An editor not drawn for this many frames is forgotten; past kMaxEditors (ids made from changing text) every one
 // not drawn last frame is (the sweep runs before this frame's first editor: those drawn last frame stay). The map is C++ memory, outside every Lua memory limit.
-constexpr int kForgetFrames = 3600;
+constexpr std::uint64_t kForgetFrames = 3600;
 constexpr std::size_t kMaxEditors = 256;
 
 std::unordered_map<ImGuiID, EditorState>& editors() {
@@ -56,15 +58,15 @@ std::unordered_map<ImGuiID, EditorState>& editors() {
 
 // Once a frame, before any editor of it is looked up (a reference into the map stays valid until then: the map only
 // erases here, and a nested ui.CodeEditor in a completion function only adds).
-void forget_editors(int frame) {
-    static int swept = -1;
+void forget_editors(std::uint64_t frame) {
+    static std::uint64_t swept = 0;
     if (frame == swept) return;
     swept = frame;
     auto& e = editors();
     const bool over = e.size() > kMaxEditors;
     std::erase_if(e, [&](const auto& kv) {
-        const int seen = kv.second.seen;
-        return seen > frame || frame - seen > (over ? 1 : kForgetFrames); // (a new ImGui context counts from 0)
+        const std::uint64_t seen = kv.second.seen;
+        return seen > frame || frame - seen > (over ? std::uint64_t{1} : kForgetFrames);
     });
 }
 
@@ -169,10 +171,10 @@ std::vector<std::pair<float, float>> code_editor_places(const std::string& text,
     return out;
 }
 
-int code_editors_oldest() {
-    int oldest = -1;
+std::int64_t code_editors_oldest() {
+    std::int64_t oldest = -1;
     for (const auto& [key, st] : editors())
-        if (oldest < 0 || st.made < oldest) oldest = st.made;
+        if (oldest < 0 || static_cast<std::int64_t>(st.made) < oldest) oldest = static_cast<std::int64_t>(st.made);
     return oldest;
 }
 
@@ -212,10 +214,11 @@ int CodeEditor(lua_State* L) {
     const float line_h = ImGui::GetFontSize();
     ImGui::PushID(id);
     const ImGuiID key = ImGui::GetID("##code");
-    forget_editors(ImGui::GetFrameCount());
+    const std::uint64_t frame = imgui_frame();
+    forget_editors(frame);
     EditorState& st = editors()[key];
-    st.seen = ImGui::GetFrameCount();
-    if (st.made < 0) st.made = st.seen;
+    st.seen = frame;
+    if (st.made == 0) st.made = st.seen;
     const bool showing = !st.names.empty();
 
     // Ctrl+Up / Ctrl+Down move the highlight (ImGui's box only scrolls on them, and it never scrolls: see above).

@@ -2,6 +2,7 @@
 goes into a package (no --out inside it, no link out of it, no dotfiles)."""
 import importlib.util
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -11,6 +12,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 KEY = (ROOT / "update-key.pub").read_text().split()[0]  # what a release binary holds (make_update.py checks it)
+NO_TLO_DEPENDENCIES = ("--required-tlos", "none", "--suggested-tlos", "none")
 
 
 def load(name):
@@ -57,6 +59,43 @@ class ZipNameTests(unittest.TestCase):
 
 
 class PackageContentTests(unittest.TestCase):
+    def test_make_addon_validates_optional_tlo_declarations_for_scripts_and_plugins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, lib, out = Path(tmp) / "src", Path(tmp) / "lib", Path(tmp) / "out"
+            src.mkdir()
+            lib.mkdir()
+            (src / "init.lua").write_text("print('hi')\n")
+            (lib / "demo.dll").write_bytes(b"MZ")
+            common = ("--name", "demo", "--version", "1.0.0", "--caps", "read", "--out", out)
+            for options in (("--kind", "script", "--dir", src),
+                            ("--kind", "plugin", "--platform", f"windows-x64={lib}")):
+                for field, other in (("--required-tlos", "--suggested-tlos"), ("--suggested-tlos", "--required-tlos")):
+                    shutil.rmtree(out, ignore_errors=True)
+                    result = run("make_addon.py", *common, *options, other, "none")
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(f"warning: no {field}", result.stderr)
+                    manifest = (out / "hailstone-addon.txt").read_text()
+                    self.assertIn(f"{other[2:].replace('-', '_')} none\n", manifest)
+                    self.assertNotIn(field[2:].replace("-", "_"), manifest)
+            shutil.rmtree(out)
+            result = run("make_addon.py", *common, "--kind", "script", "--dir", src)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("warning: no --required-tlos", result.stderr)
+            self.assertIn("warning: no --suggested-tlos", result.stderr)
+            self.assertNotIn("_tlos", (out / "hailstone-addon.txt").read_text())
+            shutil.rmtree(out)
+            script = (*common, "--kind", "script", "--dir", src)
+            for invalid in ("Me.Name", "Spawn[1]", "none,Me", "A" * (make_addon.MAX_TLO_LIST + 1)):
+                result = run("make_addon.py", *script, "--required-tlos", invalid, "--suggested-tlos", "none")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("--required-tlos: use exact TLO root names", result.stderr)
+            self.assertFalse(out.exists())
+            result = run("make_addon.py", *script, "--required-tlos", "Me,TARGET,me", "--suggested-tlos", "spawn,Spawn,target")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            manifest = (out / "hailstone-addon.txt").read_text()
+            self.assertIn("required_tlos Me,TARGET\n", manifest)
+            self.assertIn("suggested_tlos spawn\n", manifest)
+
     def test_make_addon_refuses_out_inside_dir_and_links_out_of_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "src"
@@ -64,14 +103,14 @@ class PackageContentTests(unittest.TestCase):
             (src / "init.lua").write_text("print('hi')\n")
             (src / ".secret").write_text("key")
             result = run("make_addon.py", "--name", "demo", "--kind", "script", "--version", "1.0.0", "--caps", "read",
-                         "--dir", src, "--out", src / "release")
+                         *NO_TLO_DEPENDENCIES, "--dir", src, "--out", src / "release")
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("inside", result.stderr)
             self.assertFalse((src / "release").exists())
 
             out = Path(tmp) / "out"
             result = run("make_addon.py", "--name", "demo", "--kind", "script", "--version", "1.0.0", "--caps", "read",
-                         "--dir", src, "--out", out)
+                         *NO_TLO_DEPENDENCIES, "--dir", src, "--out", out)
             self.assertEqual(result.returncode, 0, result.stderr)
             with zipfile.ZipFile(out / "demo-1.0.0.zip") as z:
                 self.assertEqual(z.namelist(), ["init.lua"])  # the dotfile stays out
@@ -81,13 +120,13 @@ class PackageContentTests(unittest.TestCase):
                 outside.write_text("not for the package")
                 os.symlink(outside, src / "data.txt")
                 result = run("make_addon.py", "--name", "demo", "--kind", "script", "--version", "1.0.1", "--caps",
-                             "read", "--dir", src, "--out", out)
+                             "read", *NO_TLO_DEPENDENCIES, "--dir", src, "--out", out)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("a link out of", result.stderr)
                 os.remove(src / "data.txt")
                 os.symlink("init.lua", src / "same.lua")  # inside: stored as the file
                 result = run("make_addon.py", "--name", "demo", "--kind", "script", "--version", "1.0.2", "--caps",
-                             "read", "--dir", src, "--out", out)
+                             "read", *NO_TLO_DEPENDENCIES, "--dir", src, "--out", out)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 with zipfile.ZipFile(out / "demo-1.0.2.zip") as z:
                     self.assertEqual(z.read("same.lua"), b"print('hi')\n")
@@ -100,12 +139,12 @@ class PackageContentTests(unittest.TestCase):
                 (folder / library).write_text(library)
             out = Path(tmp) / "out"
             result = run("make_addon.py", "--name", "demo", "--kind", "plugin", "--version", "1.0.0", "--caps", "read",
-                         "--platform", f"linux-x64={a}", "--platform", f"linux-x64={b}", "--out", out)
+                         *NO_TLO_DEPENDENCIES, "--platform", f"linux-x64={a}", "--platform", f"linux-x64={b}", "--out", out)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("given twice", result.stderr)
             self.assertFalse((out / "hailstone-addon.txt").exists())
             result = run("make_addon.py", "--name", "demo", "--kind", "plugin", "--version", "1.0.0", "--caps", "read",
-                         "--platform", f"linux-x64={a}", "--platform", f"windows-x64={b}", "--out", out)
+                         *NO_TLO_DEPENDENCIES, "--platform", f"linux-x64={a}", "--platform", f"windows-x64={b}", "--out", out)
             self.assertEqual(result.returncode, 0, result.stderr)
             lines = [l for l in (out / "hailstone-addon.txt").read_text().splitlines() if l.startswith("package ")]
             self.assertEqual([l.split()[1] for l in lines], ["linux-x64", "windows-x64"])

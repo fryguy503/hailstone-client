@@ -467,7 +467,8 @@ hs = {
     const char* setup = R"lua(
 ui = {window=function() end, GetSetting=function() end}
 local theme = {C={}, palettes={list={{id='test', name='Test'}}}, palette='test'}
-dofile = function(name) return name == 'lib/theme.lua' and theme or {} end
+local libs = {['lib/theme.lua']=theme, ['lib/vitals.lua']={addOptions=function() end}}
+dofile = function(name) return libs[name] or {} end
 )lua";
     const char* checks = R"lua(
 local rows = PAGES[4][2]()

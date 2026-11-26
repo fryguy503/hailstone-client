@@ -66,8 +66,8 @@ audio::SoundGroup footstep_group(const game::Spawn& s, bool local) {
 audio::SoundGroup wave_cue_group(const net::SoundCue& cue) {
     using Context = net::SoundCue::Context;
     switch (cue.context) {
-    case Context::BagOpen: return audio::SoundGroup::OpenBag;
-    case Context::BankBagOpen: return audio::SoundGroup::OpenBank;
+    case Context::Bag: return audio::SoundGroup::OpenBag;
+    case Context::BankBag: return audio::SoundGroup::OpenBank;
     case Context::ItemWorn: return audio::SoundGroup::Equip;
     case Context::None: break;
     }
@@ -86,6 +86,7 @@ std::int32_t test_wave(audio::SoundGroup group, std::uint32_t pick) {
     case audio::SoundGroup::Money: return game::kSoundCoin;
     case audio::SoundGroup::Thunder: return game::Weather::kThunder1;
     case audio::SoundGroup::Equip: return game::kSoundItemMoved;
+    case audio::SoundGroup::Beep: // no wave id: the chosen Beep sound (ClientApp::beep_command)
     case audio::SoundGroup::None:
     case audio::SoundGroup::Count: break;
     }

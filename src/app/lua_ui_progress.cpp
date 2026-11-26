@@ -546,14 +546,10 @@ public:
         list_.columns = 2;
         list_.labels = {"Task Title", "Duration"};
         list_.widths = {220, 60};
-        // A replaced offer list (another giver, type or set of tasks) starts again at its first row, so Accept and
-        // Preview never act on whatever new offer landed on the old row.
-        bool same = o.giver_id == giver_id_ && o.type == type_ && o.shared == shared_ && o.offers.size() == ids_.size();
-        for (std::size_t i = 0; same && i < ids_.size(); ++i) same = o.offers[i].task_id == ids_[i];
-        if (!same) selected_ = -1;
-        if (selected_ >= static_cast<int>(o.offers.size())) selected_ = -1;
-        if (selected_ < 0 && !o.offers.empty()) selected_ = 0;
-        list_.selected = selected_;
+        // The selection is the offers' own (TaskOffers::selected): a replaced offer list (another giver, type or set
+        // of tasks) starts again at its first row, so Accept and Preview never act on whatever new offer landed on
+        // the old row.
+        list_.selected = net::GameConnection::selected_task_offer(o) ? o.selected : -1;
         giver_id_ = o.giver_id;
         type_ = o.type;
         shared_ = o.shared;
@@ -568,7 +564,7 @@ public:
     }
     bool list_click(UiHost& host, std::string_view id, int row, bool, int) override {
         if (id != "TaskList") return false;
-        selected_ = row;
+        if (host.conn && shows_current(*host.conn)) host.conn->select_task_offer(row);
         // CTaskSelectWnd_SelectTask @0x76b5c0 hides the reward window when it is showing a preview and the newly
         // selected offer has no preview, so it never shows one task's rewards beside another's description.
         if (host.conn) {
@@ -601,7 +597,7 @@ public:
     bool click(UiHost& host, std::string_view id, std::string_view button, bool) override {
         if (!shown(host) || button != "left") return false;
         if (id == "AcceptButton") {
-            if (const auto* t = selected_offer(*host.conn)) host.conn->accept_task(t->task_id);
+            if (selected_offer(*host.conn)) host.conn->accept_selected_task();
         } else if (id == "TSEL_PreviewRewardButton") {
             // CTaskSelectWnd::WndNotification @0x76b660 -> preview manager @0x463a90: action 4 and the task ID.
             if (const auto* t = selected_offer(*host.conn); t && t->reward_preview) host.conn->preview_task_reward(t->task_id);
@@ -612,19 +608,24 @@ public:
     }
 
 private:
-    // A packet can replace the offers before the UI rebuilds its rows. Keep actions tied to the displayed offer.
+    // The selected offer, only while the offers are the ones the window last showed: a packet can replace them
+    // before the UI rebuilds its rows, and the window's Accept and Preview act on a displayed offer only. (A
+    // script's /notify, with or without a UI, takes the connection's selection: GameConnection::accept_selected_task.)
     const game::TaskOffer* selected_offer(const net::GameConnection& c) const {
+        return shows_current(c) ? net::GameConnection::selected_task_offer(*c.tasks().offers) : nullptr;
+    }
+    bool shows_current(const net::GameConnection& c) const {
         const auto& o = c.tasks().offers;
-        if (!o || o->giver_id != giver_id_ || o->type != type_ || o->shared != shared_ || selected_ < 0) return nullptr;
-        const auto row = static_cast<std::size_t>(selected_);
-        if (row >= ids_.size() || row >= o->offers.size() || o->offers[row].task_id != ids_[row]) return nullptr;
-        return &o->offers[row];
+        if (!o || o->giver_id != giver_id_ || o->type != type_ || o->shared != shared_ || o->offers.size() != ids_.size())
+            return false;
+        for (std::size_t i = 0; i < ids_.size(); ++i)
+            if (o->offers[i].task_id != ids_[i]) return false;
+        return true;
     }
     ListData list_;
-    std::vector<std::uint32_t> ids_;
+    std::vector<std::uint32_t> ids_; // the offers last shown (list)
     std::uint32_t giver_id_ = 0, type_ = 0;
     bool shared_ = false;
-    int selected_ = -1;
 };
 
 class ShroudSelectionWindow : public StockWindow {

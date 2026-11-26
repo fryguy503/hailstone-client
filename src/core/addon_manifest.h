@@ -13,6 +13,8 @@
 //   description Loots what you tell it to.   optional, the rest of the line
 //   caps read,events,actions,ui      what it needs (docs/plugins.md "Capabilities"); a ceiling on what it gets; a
 //                                    tool's are none (it is a program of its own, not run by the client)
+//   required_tlos Me,Target          TLO roots essential to a script or plugin, or none
+//   suggested_tlos Spawn             roots used by optional features, or none
 //   notes https://...                optional: its release notes
 //   package any 41233 <sha256> autoloot-1.3.0.zip
 //   key <Ed25519 public key, 64 hex digits>          optional
@@ -64,6 +66,8 @@ struct AddonManifest {
     std::string notes;             // http(s), "" none
     std::vector<AddonPackage> packages;
     std::optional<Ed25519PublicKey> key; // set only when the signature checked against it
+    // Missing declarations are unknown. An explicit "none" is a known empty list.
+    std::optional<std::vector<std::string>> required_tlos, suggested_tlos;
 };
 
 // The manifest in `text`; nullopt with *error why not. A manifest with a key must carry a signature that matches it,
@@ -72,6 +76,10 @@ std::optional<AddonManifest> parse_addon_manifest(std::string_view text, std::st
 
 // Whether `name` can be an add-on's: 1 to 32 letters, digits, '-' and '_', starting with a letter or digit.
 bool addon_name_ok(std::string_view name);
+
+// The declarations in a manifest or installed record. An invalid list returns nullopt.
+std::optional<std::vector<std::string>> parse_addon_tlo_list(std::string_view text);
+void remove_required_tlos(const std::vector<std::string>& required, std::vector<std::string>& suggested);
 
 // The package for `platform` ("any" for a script or UI pack), or null.
 const AddonPackage* addon_package_for(const AddonManifest& manifest, std::string_view platform);

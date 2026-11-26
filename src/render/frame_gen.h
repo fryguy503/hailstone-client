@@ -85,7 +85,6 @@ private:
     VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout composite_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;
-    VkDescriptorSet motion_set_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, 2> synth_sets_{};
     std::array<VkDescriptorSet, 3> composite_sets_{};
     VkPipelineLayout compute_layout_ = VK_NULL_HANDLE;

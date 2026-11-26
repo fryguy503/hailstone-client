@@ -9,6 +9,7 @@
 
 #include "app/update_install.h"
 #include "core/addon_source.h"
+#include "core/ascii_case.h"
 #include "core/atomic_file.h"
 #include "core/binary_header.h"
 #include "core/config.h"
@@ -245,6 +246,76 @@ std::optional<std::pair<AddonManifest, std::string>> AddonManager::fetch_manifes
         *error = addon_source_text(*source) + " has no " + std::string(kAddonManifestName) +
                  ": it is not a Hailstone add-on (or the repository is private)";
     return std::nullopt;
+}
+
+std::optional<ServerManagementAddonTlos> AddonManager::addon_tlos(std::string_view source, bool request) {
+    const auto parsed = parse_addon_link(source);
+    if (!parsed) return std::nullopt;
+    const auto manifest_source = addon_source_text(*parsed);
+    const auto identity = plugin::normalize_addon_identity(manifest_source);
+    if (!identity) return std::nullopt;
+    const auto& repo = *identity;
+    const bool main_release = parsed->tag.empty() && parsed->branch.empty();
+    const auto key = main_release ? repo : repo + (parsed->tag.empty() ? "#" + parsed->branch : "@" + parsed->tag);
+    const auto same_source = [&](std::string_view link) {
+        const auto other = parse_addon_link(link);
+        return other && plugin::addon_identity(link) == repo &&
+               other->tag == parsed->tag && other->branch == parsed->branch;
+    };
+    std::optional<AddonExpect> expect;
+    {
+        const std::lock_guard lock(mutex_);
+        const auto review = tlo_reviews_.find(key);
+        if (review != tlo_reviews_.end() && (!request || review->second.status == "pending")) return review->second;
+
+        const InstalledAddon* installed = nullptr;
+        for (const auto& row : status_.addons) {
+            if (!row.installed || !same_source(row.addon.source)) continue;
+            if (installed) {
+                installed = nullptr; // A local install should identify one unambiguous release.
+                break;
+            }
+            installed = &row.addon;
+        }
+        if (!request && installed) {
+            return ServerManagementAddonTlos{repo, installed->version, "ready",
+                                             installed->required_tlos, installed->suggested_tlos};
+        }
+        if (installed && installed->key) expect = AddonExpect{installed->name, *installed->key};
+        for (const auto& entry : status_.catalog) {
+            if (!same_source(entry.addon.source)) continue;
+            if (!request && entry.manifest) {
+                const auto& m = *entry.manifest;
+                return ServerManagementAddonTlos{repo, m.version_text, "ready", m.required_tlos, m.suggested_tlos};
+            }
+            if (!expect) expect = AddonExpect{entry.addon.name, entry.addon.key};
+            break;
+        }
+        if (!request) return ServerManagementAddonTlos{repo, {}, "unchecked", {}, {}};
+
+        constexpr std::size_t kMaxReviews = 64;
+        if (review == tlo_reviews_.end() && tlo_reviews_.size() >= kMaxReviews) {
+            const auto discard = std::find_if(tlo_reviews_.begin(), tlo_reviews_.end(), [](const auto& entry) {
+                return entry.second.status != "pending";
+            });
+            if (discard == tlo_reviews_.end()) return ServerManagementAddonTlos{repo, {}, "unavailable", {}, {}};
+            tlo_reviews_.erase(discard);
+        }
+        tlo_reviews_.insert_or_assign(key, ServerManagementAddonTlos{repo, {}, "pending", {}, {}});
+    }
+    post([this, key, repo, manifest_source, expect = std::move(expect)] {
+        auto manifest = fetch_manifest(manifest_source, nullptr);
+        auto result = ServerManagementAddonTlos{repo, {}, "unavailable", {}, {}};
+        if (manifest) {
+            auto& m = manifest->first;
+            if (!expect || (iequals(m.name, expect->name) && m.key && *m.key == expect->key)) {
+                result = {repo, std::move(m.version_text), "ready", std::move(m.required_tlos), std::move(m.suggested_tlos)};
+            }
+        }
+        const std::lock_guard lock(mutex_);
+        tlo_reviews_.insert_or_assign(key, std::move(result));
+    });
+    return ServerManagementAddonTlos{repo, {}, "pending", {}, {}};
 }
 
 std::string AddonManager::manifest_problem(const AddonManifest& m, std::uint32_t* caps) const {
@@ -497,6 +568,8 @@ std::optional<AddonManager::Staged> AddonManager::download(const AddonManifest& 
     a.description = m.description;
     a.notes = m.notes;
     a.files = std::move(*files);
+    a.required_tlos = m.required_tlos;
+    a.suggested_tlos = m.suggested_tlos;
     return Staged{std::move(a), file};
 }
 
@@ -545,6 +618,8 @@ void AddonManager::install_offer(bool older_ok) {
         s.addon.caps = offer->caps;
         s.addon.author = m.author;
         s.addon.description = m.description;
+        s.addon.required_tlos = m.required_tlos;
+        s.addon.suggested_tlos = m.suggested_tlos;
     }
     s.state = AddonState::Downloading;
     s.new_version = m.version_text;

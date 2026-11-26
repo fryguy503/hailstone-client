@@ -38,8 +38,6 @@ bool human_actor_mount(const Spawn& s);
 class MountQueries {
 public:
     virtual ~MountQueries() = default;
-    // CDisplay +0x128 (NewPCModelsLoaded): the Luclin player models are loaded.
-    virtual bool new_models_loaded() = 0;
     // PlayerClient_AttachRiderToMount's dag 0xe on the mount's model (SetBone +0x19c, FindBoneByName: "<rider
     // code>_MOUNT01" exactly, else "<mount code>RIDER_DAG" as a prefix; the first name it sets,
     // "CHEST03_MOUNT01", is replaced by the second before the check): whether the mount's model has it.
@@ -72,7 +70,7 @@ struct MountEvents {
     bool close_spell_book = false;
 };
 
-// do_stand @0x593f20 (PlayerClient vtable +0xcc): `rider` mounts `mount`.
+// do_stand @0x593f20 (PlayerClient vtable +0xcc): `rider` mounts `mount` once both actors are ready.
 void do_stand(WorldState& w, Spawn& rider, Spawn* mount, MountQueries& q, MountEvents& ev);
 // The dismount @0x590510 (vtable +0x60): `rider` gets off its mount.
 void dismount(WorldState& w, Spawn& rider, MountEvents& ev);

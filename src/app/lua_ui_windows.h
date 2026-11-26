@@ -427,8 +427,8 @@ void add_login_windows(std::vector<std::unique_ptr<StockWindow>>& out);        /
 // `frame` are UiApi's replacement record (UiApi::replaces), under the names "LoginScreen", "serverselect",
 // "CharacterListWnd" and "CharacterCreateScreen".
 struct ScreenReplacements {
-    std::map<std::string, int, std::less<>>* at = nullptr;
-    const int* frame = nullptr;
+    std::map<std::string, std::uint64_t, std::less<>>* at = nullptr;
+    const std::uint64_t* frame = nullptr;
 };
 void register_pregame_api(lua_State* L, UiHost& host, ScreenReplacements& screens);
 // CHelpWnd::SetFile on the help window (help\\<file>).
@@ -467,6 +467,34 @@ bool open_player_menu(UiHost& host, std::uint32_t spawn_id, float x, float y);
 // A right click on an item (CInvSlot::HandleRButtonUp): a bag opens or closes its container window, anything else
 // shows its information (app/lua_ui_items.cpp).
 void item_right_click(UiHost& host, const net::ItemSlot& slot);
+// The confirmation box's question (ConfirmationDialogBox): 1 the ground drop, 2 the connection's, 3 a window's own
+// (UiHost::confirm), 4 the guild invitation, 0 none; and its Yes or No (false when none is up). The window and a
+// script's /notify answer through this, so one works without the other.
+int confirmation_question(UiHost& host);
+bool answer_confirmation_question(UiHost& host, bool yes);
+// The merchant window's list and buttons from the connection's state (app/lua_ui_items.cpp), for the window and a
+// script's /notify alike: the list's rows' merchant slots in the window's own order (unusable items left out unless
+// Show All); a row's selection (MerchantSession::considered); Buy on that item and Sell of the inventory item picked
+// (each opens the quantity dialog). False when there is nothing to act on.
+// The quantity dialog (QuantityWnd) from UiHost::quantity_entry, for its window and a script's /notify alike
+// (app/lua_ui_dialogs.cpp): quantity_sync follows its owner (a window's UiHost::quantity, else the connection's
+// quantity_request()) and returns 0 none, 1 the same dialog, 2 a new one (its slider at its start; `position`, if
+// given, where it opens); set the slider (min-relative, as QTYW_Slider's newvalue) and the box with it; Accept
+// (the box's number to the owner). False when no dialog is open.
+int quantity_sync(UiHost& host, std::optional<std::pair<int, int>>* position);
+bool quantity_set_slider(UiHost& host, int value);
+bool quantity_accept(UiHost& host);
+// The inventory's coin buttons (IW_Money0..3: the quantity dialog for coin onto the cursor) and its Alt. Currency
+// page (a row of GameConnection::alt_currency_list picked; Reclaim; Create Item), from the connection's state for
+// the window and a script's /notify alike (app/lua_ui_items.cpp). False when there is nothing to act on.
+bool inventory_money_button(UiHost& host, int coin);
+bool alt_currency_select_row(UiHost& host, int row);
+bool alt_currency_reclaim_button(UiHost& host);
+bool alt_currency_create_button(UiHost& host);
+std::vector<std::uint32_t> merchant_list_slots(UiHost& host);
+bool merchant_select_row(UiHost& host, int row);
+bool merchant_buy_button(UiHost& host);
+bool merchant_sell_button(UiHost& host);
 // The same with the modifier keys given (a command's: /itemnotify under /nomodkey or /shiftkey), not the keyboard's.
 void item_right_click(UiHost& host, const net::ItemSlot& slot, net::SlotClickKeys keys);
 // The left button held on an item slot (CInvSlotWnd::HandleLButtonHeld, game::inventory_hot_button): a hotbutton

@@ -20,6 +20,8 @@
 #include "audio/sound_control.h"
 #include "audio/sound_library.h"
 #include "core/config.h"
+#include "core/step_clock.h"
+#include "game/weather.h"
 #include "game_files.h"
 #include "pfs_fixtures.h"
 #include "scratch_dir.h"
@@ -60,6 +62,21 @@ std::vector<std::byte> wav16(std::uint32_t rate, const std::vector<std::int16_t>
     u32(static_cast<std::uint32_t>(s.size() * 2));
     put(s.data(), s.size() * 2);
     return d;
+}
+
+void write_weather_waves(const std::filesystem::path& dir) {
+    std::filesystem::create_directories(dir / "sounds");
+    std::ofstream(dir / "soundassets.txt") << "159^rainloop.wav\n158^wind_lp1.wav\n";
+    const auto wav = wav16(48000, {16384, 16384, 16384, 16384});
+    for (const char* name : {"rainloop.wav", "wind_lp1.wav"})
+        std::ofstream(dir / "sounds" / name, std::ios::binary)
+            .write(reinterpret_cast<const char*>(wav.data()), static_cast<std::streamsize>(wav.size()));
+}
+
+bool mix_is_audible(Mixer& mixer) {
+    std::vector<float> out(2 * 512);
+    mixer.render(out.data(), out.size() / 2);
+    return std::any_of(out.begin(), out.end(), [](float sample) { return sample != 0.0f; });
 }
 
 } // namespace
@@ -459,6 +476,95 @@ TEST_CASE("Audio system: voice pools, rain and wind emitters") {
     CHECK(audio.weather_emitters().enabled(1));
 }
 
+TEST_CASE("Audio system: unloading a zone stops rain and wind loops until new weather") {
+    test::ScratchDir dir("weather_audio_unload");
+    write_weather_waves(dir.path());
+    GameDir game(dir.path());
+
+    auto check_unload = [&](bool rain, bool fading) {
+        CAPTURE(rain);
+        AudioSystem audio(game, AudioSettings{}, false);
+        audio.set_self_advance(false);
+        audio.set_zone("greatdivide");
+        audio.library().wait_idle();
+        audio.set_weather(rain, !rain);
+        audio.update(10);
+        REQUIRE(audio.mixer().voice_count() == 1);
+        REQUIRE(mix_is_audible(audio.mixer()));
+
+        if (fading) {
+            audio.set_weather(false, false);
+            audio.update(20);
+            REQUIRE(audio.mixer().voice_count() == 1);
+            REQUIRE(mix_is_audible(audio.mixer()));
+        }
+
+        audio.set_zone("");
+        CHECK(audio.mixer().voice_count() == 0);
+        audio.update(30);
+        CHECK_FALSE(mix_is_audible(audio.mixer()));
+
+        audio.set_zone("eastwastes");
+        audio.update(40);
+        CHECK_FALSE(mix_is_audible(audio.mixer()));
+        audio.set_weather(rain, !rain);
+        audio.update(50);
+        CHECK(audio.mixer().voice_count() == 1);
+        CHECK(mix_is_audible(audio.mixer()));
+    };
+
+    SUBCASE("active loops") {
+        check_unload(true, false);
+        check_unload(false, false);
+    }
+    SUBCASE("loops fading after the weather clears") {
+        check_unload(true, true);
+        check_unload(false, true);
+    }
+}
+
+TEST_CASE("Audio system: clearing rain or snow fades its loop while staying in the zone") {
+    test::ScratchDir dir("weather_audio_clear");
+    write_weather_waves(dir.path());
+    GameDir game(dir.path());
+
+    for (const bool snow : {false, true}) {
+        CAPTURE(snow);
+        AudioSystem audio(game, AudioSettings{}, false);
+        audio.set_zone("greatdivide");
+        audio.library().wait_idle();
+        game::Weather weather;
+        core::StepClock clock;
+        std::uint32_t now_ms = 100;
+        // An unfocused client can tick at 10 Hz with no graphics frames.
+        auto advance_ticks = [&](int count) {
+            for (int i = 0; i < count; ++i, now_ms += 100) {
+                for (const auto& step : clock.advance(static_cast<std::uint64_t>(now_ms) * 1000))
+                    weather.update(static_cast<double>(step.ms) / 1000.0, true, [] { return 50; });
+                audio.set_weather(weather.raining(), weather.windy());
+                audio.update(now_ms);
+            }
+        };
+        weather.handle_message(snow ? 1 : 0, 10);
+        advance_ticks(14);
+        REQUIRE(weather.raining() == !snow);
+        REQUIRE(weather.windy() == snow);
+        REQUIRE(audio.mixer().voice_count() == 1);
+        REQUIRE(mix_is_audible(audio.mixer()));
+
+        weather.handle_message(0, 0); // EQEmu's clear command uses a zero-filled packet for either kind.
+        advance_ticks(10);
+        CHECK_FALSE(weather.raining());
+        CHECK_FALSE(weather.windy());
+        CHECK(audio.mixer().voice_count() == 1); // normal three-second audio fade after weather clears
+        CHECK(mix_is_audible(audio.mixer()));
+
+        advance_ticks(35);
+        CHECK(audio.mixer().voice_count() == 0);
+        CHECK_FALSE(mix_is_audible(audio.mixer()));
+    }
+}
+
 TEST_CASE("Audio settings: SoundMixAhead (SoundManager::SetMixAhead's 4..96 fragments of 8 ms)") {
     CHECK(mix_ahead_ms(8) == 64);
     CHECK(mix_ahead_ms(1) == 32);   // below 4: 4
@@ -757,4 +863,64 @@ TEST_CASE("Audio system: the global music is set once the sound archives are ind
     REQUIRE(playing);
     CHECK(playing->id == kMusicBank);
     CHECK(playing->file == "gl.xmi");
+}
+
+// MQ's /beep with no sound is Windows' Beep(0x500, 250): the tone the Beep sound "Tone" plays (app/client_app_options.cpp).
+TEST_CASE("Audio: make_tone gives a 1280 Hz tone of 250 ms, faded at both ends") {
+    constexpr std::uint32_t kRate = 48000, kMs = 250, kFadeMs = 5;
+    constexpr double kHz = 1280.0;
+    constexpr float kAmplitude = 0.5f;
+    const Pcm p = make_tone(kRate, kHz, kMs, kFadeMs, kAmplitude);
+    CHECK(p.rate == kRate);
+    CHECK(p.channels == 1);
+    REQUIRE(p.frames() == kRate * kMs / 1000);
+    CHECK(p.samples.front() == 0.0f);                   // faded in from silence
+    CHECK(std::fabs(p.samples.back()) < 0.01f);         // and out to it
+    float peak = 0.0f;
+    int crossings = 0;
+    for (std::size_t i = 0; i < p.samples.size(); ++i) {
+        peak = std::max(peak, std::fabs(p.samples[i]));
+        if (i > 0 && (p.samples[i - 1] < 0.0f) != (p.samples[i] < 0.0f)) ++crossings;
+    }
+    CHECK(peak <= kAmplitude);
+    CHECK(peak > kAmplitude * 0.99f);
+    // Two sign changes a cycle: 1280 cycles a second for a quarter of one.
+    CHECK(std::abs(crossings - static_cast<int>(2 * kHz * kMs / 1000)) <= 2);
+}
+
+TEST_CASE("Audio system: /beep's sounds, a game folder's named sound or the tone, at the Beep volume") {
+    test::ScratchDir dir("audio_beep");
+    std::filesystem::create_directories(dir.path() / "sounds");
+    std::ofstream(dir.path() / "soundassets.txt")
+        << "YouveGotMail^mail.wav\nAlertBell^bell.wav\n1^Unknown\n139^LevelUp.WAV\n140^levelup.wav\n142^Button_1.WAV\n";
+    GameDir game(dir.path());
+    AudioSystem audio(game, AudioSettings{}, false);
+    audio.set_self_advance(false);
+    // The Beep sound's choices after the tone: the named sounds, sorted.
+    CHECK(audio.named_sounds() == std::vector<std::string>{"AlertBell", "YouveGotMail"});
+    // A named sound by its name in any case, or by its wave file; a name the game folder lacks plays nothing.
+    CHECK(audio.play_named_group_2d("youvegotmail", SoundGroup::Beep));
+    CHECK(audio.play_named_group_2d("BELL.WAV", SoundGroup::Beep));
+    CHECK_FALSE(audio.play_named_group_2d("NoSuchSound", SoundGroup::Beep));
+    // A numbered entry's wave file too, in any case; "Unknown" is no sound.
+    CHECK(audio.play_named_group_2d("levelup.wav", SoundGroup::Beep));
+    CHECK_FALSE(audio.play_named_group_2d("Unknown", SoundGroup::Beep));
+    // Every file once (in any case), sorted in any case, without "Unknown": the Beep sound's search.
+    CHECK(audio.sound_files() == std::vector<std::string>{"bell.wav", "Button_1.WAV", "LevelUp.WAV", "mail.wav"});
+    // The tone is a voice on the mixer at once (no file to decode), played once: gone after its 250 ms.
+    const std::size_t before = audio.mixer().voice_count();
+    audio.play_tone_2d(1280.0, 250, SoundGroup::Beep);
+    CHECK(audio.mixer().voice_count() == before + 1);
+    const std::size_t frames = audio.mixer().rate() * 300 / 1000; // past the tone's end
+    std::vector<float> out(2 * frames);
+    audio.mixer().render(out.data(), frames);
+    CHECK(audio.mixer().voice_count() == before);
+    // At a Beep volume of 0 nothing plays.
+    AudioSettings quiet;
+    quiet.individual[SoundGroup::Beep] = kSilentPercent;
+    AudioSystem silent(game, quiet, false);
+    silent.set_self_advance(false);
+    const std::size_t none = silent.mixer().voice_count();
+    silent.play_tone_2d(1280.0, 250, SoundGroup::Beep);
+    CHECK(silent.mixer().voice_count() == none);
 }

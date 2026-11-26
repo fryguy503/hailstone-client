@@ -1613,17 +1613,18 @@ or moved); with no floor found, every frame until there is one. Only `display_po
 ring, picking, NPC walls); `position` keeps the server's z for range and melee. When a physics step has just landed a
 spawn on the zone floor, the draw reuses that landing instead of a second zone-mesh query.
 
-#### Riding while illusioned
+#### Riding with classic models and illusions
 
-A deliberate difference: option `illusion_mounts` (hailstone.ini `game.illusion_mounts`, Options > General "Ride
-While Illusioned", on by default). On, no rider's model is checked, local or remote; off, the original's checks apply.
-EQEmu does not check the rider's race. The mount's model must still have a seat: `<rider code>_MOUNT01`,
-`CHEST03_MOUNT01` or a `RIDER` dag (the Skystriders' `mpg.eqg` has `CHEST03_MOUNT01`).
+Hailstone lets players in playable forms ride with either classic or Luclin models, including when Options > General
+"Ride While Illusioned" (`game.illusion_mounts`, on by default) is off. Turning the option on also allows other forms
+to bypass the stock rider checks. With it off, those forms still need to satisfy PlayerClient_AttachRiderToMount
+(game/mounts.cpp): a model with a tunic point (races 1, 367 and 522 pass this check), and no human fallback for a
+mount race. The mount itself needs a seat: `<rider code>_MOUNT01`, `CHEST03_MOUNT01` or its `RIDER` dag.
+Classic player models with no riding animation use a seated pose on compatible skeletons. Models with an authored
+riding animation still use it.
 
-The original's PlayerClient_AttachRiderToMount (game/mounts.cpp) refuses a rider whose model has no tunic point
-(0x58dde0; races 1, 367 and 522 always pass) or is a mount race drawn as the human fallback, which in practice refuses
-an illusioned player: the spell fails with 5524 ("You must have both the Horse Models and your current Luclin
-Character Model enabled to summon a mount.") and the buff is removed.
+If a summon-mount buff ticks before both actors are built, Hailstone waits for actor creation to retry the link.
+This includes the destination zone's initial spawns and a rider whose appearance changes at zone-in.
 
 ## Name sprites
 
@@ -2269,6 +2270,10 @@ The periodic update drives the timed mechanics. It and UseSkill send uninitialis
 
 Without the game folder's BaseData.txt row for the character the ticks wait. The server's HP, mana and endurance
 updates overwrite the pools whenever they come; the ticks move them on in between, as in the original.
+
+Hailstone caps the mana predicted by the six-second tick at the maximum from the player's latest `OP_ManaUpdate`.
+Until the server sends a maximum, the tick uses the client formula. Mana vitals supplied by a server extension still
+take priority. The Character diagnostics still compare the client formula with the server's reported maximum.
 
 #### Held buff countdowns
 

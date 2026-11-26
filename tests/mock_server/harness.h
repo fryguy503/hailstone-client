@@ -51,6 +51,7 @@ public:
                                               << "13889 Forage\n"
                                               << "13893 Kick\n"
                                               << "9342 NO ROOM FOR THE BANDOLIER\n"
+                                              << "4632 REZ OFFERED\n"
                                               << "4557 SHROUD BANK NOT EMPTY\n"
                                               << "4558 SHROUD BANK NOTHING TO MOVE\n"
                                               << "6188 SHROUD COIN %1\n";

@@ -131,9 +131,47 @@ TEST_CASE("addon_manager: managed activation stays separate from update preferen
     CHECK(h.row("autoloot")->addon.enabled);
 }
 
+TEST_CASE("addon_manager: TLO review only fetches the manifest when requested") {
+    Harness h;
+    h.publish("1.2.0", "read", "-- script\n", nullptr, "required_tlos Me\nsuggested_tlos Target\n");
+    h.publish_buff("1.0.0");
+    std::vector<std::string> fetched;
+    h.on_fetch = [&](const std::string& url) { fetched.push_back(url); };
+    h.start();
+    fetched.clear();
+
+    const auto unchecked = h.manager->addon_tlos(kRepo, false);
+    REQUIRE(unchecked);
+    CHECK(unchecked->status == "unchecked");
+    CHECK_FALSE(h.manager->addon_tlos("not-a-repo", true));
+    CHECK(fetched.empty());
+    CHECK(h.manager->addon_tlos(kRepo, true)->status == "pending");
+    h.manager->wait_idle();
+    const auto reviewed = h.manager->addon_tlos("https://github.com/OWNER/AutoLoot", false);
+    REQUIRE(reviewed);
+    CHECK(reviewed->status == "ready");
+    CHECK(reviewed->repo == kRepo);
+    CHECK(reviewed->version == "1.2.0");
+    CHECK(reviewed->required_tlos == std::vector<std::string>{"Me"});
+    CHECK(reviewed->suggested_tlos == std::vector<std::string>{"Target"});
+    REQUIRE(fetched.size() == 1);
+    CHECK(fetched.front().ends_with(kAddonManifestName));
+    CHECK_FALSE(h.manager->status().offer);
+    CHECK_FALSE(h.manager->has_ready());
+    CHECK_FALSE(fs::exists(h.folder()));
+
+    CHECK(h.manager->addon_tlos("owner/autobuff", true)->status == "pending");
+    h.manager->wait_idle();
+    const auto legacy = h.manager->addon_tlos("owner/autobuff", false);
+    REQUIRE(legacy);
+    CHECK(legacy->status == "ready");
+    CHECK_FALSE(legacy->required_tlos);
+    CHECK_FALSE(legacy->suggested_tlos);
+}
+
 TEST_CASE("addon_manager: a link's manifest is the install card, and yes installs it") {
     Harness h;
-    h.publish("1.0.0", "read,ui,actions");
+    h.publish("1.0.0", "read,ui,actions", "-- script\n", nullptr, "required_tlos Me\nsuggested_tlos none\n");
     h.start();
     const AddonsStatus s = h.inspect("https://github.com/owner/autoloot");
     REQUIRE_MESSAGE(s.offer, s.message);
@@ -141,6 +179,8 @@ TEST_CASE("addon_manager: a link's manifest is the install card, and yes install
     CHECK(s.offer->source == kRepo);
     CHECK(s.offer->page == "https://github.com/owner/autoloot");
     CHECK(s.offer->manifest.name == "autoloot");
+    CHECK(s.offer->manifest.required_tlos == std::vector<std::string>{"Me"});
+    CHECK(s.offer->manifest.suggested_tlos == std::vector<std::string>{});
     CHECK(s.offer->caps == (plugin::kCapRead | plugin::kCapUi | plugin::kCapActions));
     CHECK(s.offer->installed_version.empty());
     CHECK(s.offer->blocked.empty());
@@ -165,6 +205,8 @@ TEST_CASE("addon_manager: a link's manifest is the install card, and yes install
     REQUIRE(installed.size() == 1);
     CHECK(installed[0].source == kRepo);
     CHECK(installed[0].caps == (plugin::kCapRead | plugin::kCapUi | plugin::kCapActions));
+    CHECK(installed[0].required_tlos == s.offer->manifest.required_tlos);
+    CHECK(installed[0].suggested_tlos == s.offer->manifest.suggested_tlos);
     CHECK(h.manager->status().serial > 0);
     CHECK(h.manager->serial() == h.manager->status().serial); // what the world reads each frame
     // The package goes once installed.

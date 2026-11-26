@@ -21,6 +21,7 @@ inline constexpr std::uint16_t kOpHailstoneSettings = 0x1433;
 inline constexpr std::uint16_t kHailstoneSettingsVersion = 1;
 inline constexpr std::uint32_t kServerManagementOffered = 1u << 1; // This client may request a management snapshot.
 inline constexpr std::uint32_t kServerAccountStatus = 1u << 2;
+inline constexpr std::uint32_t kServerGroupVitals = 1u << 3; // Group and pet points are available on request.
 
 struct HailstoneSettings {
     std::uint32_t flags = 0;

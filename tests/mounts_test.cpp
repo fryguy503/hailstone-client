@@ -11,9 +11,8 @@ using namespace hailstone::game;
 namespace {
 
 struct Answers final : MountQueries {
-    bool models = true, point = true, fits = false;
+    bool point = true, fits = false;
     double room = 1e30;
-    bool new_models_loaded() override { return models; }
     bool mount_point(const Spawn&, const Spawn&) override { return point; }
     bool can_i_fit_here() override { return fits; }
     double room_above() override { return room; }
@@ -118,19 +117,73 @@ TEST_CASE("do_stand's refusals: no room (4067) and no rider dag (5524) end the s
     CHECK(me.mount_id == 0);
     // A rider whose model cannot ride (no tunic point, not race 1 / 367 / 522) is refused too.
     q.point = true;
-    me.race = 2;
+    me.race = 75;
     me.tunic_point = false;
     CHECK(riding_blocked(me));
     MountEvents ev3;
     do_stand(w, me, &horse, q, ev3);
     CHECK(me.mount_id == 0);
-    CHECK(horse.rider_id == 10); // set before the attach (do_stand @0x593f7d)
+    CHECK(horse.rider_id == 0);
+}
+
+TEST_CASE("classic and Luclin player models ride with the illusion option off") {
+    for (bool tunic_point : {false, true}) {
+        CAPTURE(tunic_point);
+        WorldState w;
+        w.player_id = 10;
+        Spawn& me = add(w, 10, "Gennro", 9, false);
+        me.tunic_point = tunic_point;
+        Spawn& remote = add(w, 11, "Somebody", 130, false);
+        remote.tunic_point = tunic_point;
+        Spawn& horse = add(w, 20, "Gennro`s_Mount00", 216, true);
+        Spawn& sokokar = add(w, 21, "Somebody`s_Mount00", Race::SokokarMount, true);
+        Answers q;
+        MountEvents ev;
+        make_rider_mount_up(w, horse, q, ev);
+        make_rider_mount_up(w, remote, q, ev);
+        CHECK(ev.messages.empty());
+        CHECK_FALSE(ev.remove_mount_affect);
+        CHECK(w.controlled_id == horse.id);
+        CHECK(me.mount_id == horse.id);
+        CHECK(horse.rider_id == me.id);
+        CHECK(remote.mount_id == sokokar.id);
+        CHECK(sokokar.rider_id == remote.id);
+    }
+}
+
+TEST_CASE("the mount buff waits for both actors without refusing the rider or removing its buff") {
+    for (bool rider_first : {false, true}) {
+        CAPTURE(rider_first);
+        WorldState w;
+        w.player_id = 10;
+        Spawn& me = add(w, 10, "Gennro", 130, false);
+        Spawn& horse = add(w, 20, "Gennro`s_Mount00", 216, true);
+        me.actor_made = rider_first;
+        horse.actor_made = !rider_first;
+        Answers q;
+        MountEvents waiting;
+        summon_mount_tick(w, q, waiting);
+        CHECK(waiting.messages.empty());
+        CHECK_FALSE(waiting.remove_mount_affect);
+        CHECK(w.controlled_id == 0);
+        CHECK(me.mount_id == 0);
+        CHECK(horse.rider_id == 0);
+
+        me.actor_made = horse.actor_made = true;
+        MountEvents ready;
+        make_rider_mount_up(w, rider_first ? horse : me, q, ready);
+        CHECK(ready.messages.empty());
+        CHECK_FALSE(ready.remove_mount_affect);
+        CHECK(w.controlled_id == horse.id);
+        CHECK(me.mount_id == horse.id);
+        CHECK(horse.rider_id == me.id);
+    }
 }
 
 TEST_CASE("illusion_mounts: a rider whose model cannot ride still mounts; the mount's dag is still needed") {
     WorldState w;
     w.illusion_mounts = true;
-    Spawn& me = add(w, 10, "Gennro", 2, false);
+    Spawn& me = add(w, 10, "Gennro", 75, false);
     Spawn& horse = add(w, 20, "Gennro`s_Mount00", 709, true); // Onyx Skystrider
     w.player_id = 10;
     me.tunic_point = false; // an illusion's model with no tunic point
@@ -158,7 +211,7 @@ TEST_CASE("illusion_mounts: a rider whose model cannot ride still mounts; the mo
     // A mount without a seat for the rider still refuses it (the renderer has nowhere to draw it).
     WorldState w3;
     w3.illusion_mounts = true;
-    Spawn& me3 = add(w3, 10, "Gennro", 2, false);
+    Spawn& me3 = add(w3, 10, "Gennro", 75, false);
     me3.tunic_point = false;
     Spawn& horse3 = add(w3, 20, "Gennro`s_Mount00", 709, true);
     w3.player_id = 10;

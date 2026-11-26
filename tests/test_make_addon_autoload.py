@@ -16,7 +16,8 @@ class ManagedScriptPackageTests(unittest.TestCase):
                 source.mkdir()
                 (source / "init.lua").write_text("return 1\n")
                 args = [sys.executable, str(ROOT / "tools/make_addon.py"), "--name", "managed", "--kind", "script",
-                        "--version", "1.0.0", "--caps", "read,ui", "--dir", str(source), "--out", str(output)]
+                        "--version", "1.0.0", "--caps", "read,ui", "--required-tlos", "none", "--suggested-tlos", "none",
+                        "--dir", str(source), "--out", str(output)]
                 if managed:
                     args.append("--autoload")
                 subprocess.run(args, check=True, capture_output=True)

@@ -13,6 +13,7 @@
 #include <imgui.h>
 
 #include "app/lua_ui_windows.h"
+#include "app/ui_input.h"
 #include "game/barter.h"
 #include "game/bazaar.h"
 #include "game/client_options.h"
@@ -343,15 +344,15 @@ public:
         if (!host.conn || id != "BZR_ItemList") return false;
         auto& c = *host.conn;
         selected_ = row;
-        const ImGuiIO& io = ImGui::GetIO();
-        bool flags = io.KeyShift || io.KeyCtrl; // GetKeyboardFlags & 0xc
+        const UiKeys keys = ui_keys();
+        bool flags = keys.shift || keys.ctrl; // GetKeyboardFlags & 0xc
         if (row < 0 || row >= static_cast<int>(c.bazaar_search_state().results.size())) return true;
         if (right) {
             // Message 3 on the list: the Trader column finds the trader (the path at most every 15 s); else with
             // Shift or Ctrl the item preview (sub_00633660), without them the inspect (Send_OP_TraderShop_00633520).
             if (column == 7) find_trader(host, static_cast<std::size_t>(row), true);
             else if (flags) c.preview_item_id(c.bazaar_search_state().results[static_cast<std::size_t>(row)].item_id);
-            else c.bazaar_inspect(static_cast<std::size_t>(row), io.KeyShift);
+            else c.bazaar_inspect(static_cast<std::size_t>(row), keys.shift);
             return true;
         }
         if (column == 8) {
@@ -359,7 +360,7 @@ public:
             return true;
         }
         // A click with Shift or Ctrl (keyboard flags 0xc) inspects.
-        if (flags) c.bazaar_inspect(static_cast<std::size_t>(row), io.KeyShift);
+        if (flags) c.bazaar_inspect(static_cast<std::size_t>(row), keys.shift);
         return true;
     }
 
@@ -583,7 +584,7 @@ private:
         return v > 0 ? v : 1;
     }
     std::array<int, 2> centred(UiHost& host) {
-        ImVec2 ds = ImGui::GetIO().DisplaySize;
+        ImVec2 ds = ui_display_size();
         auto r = host.textures ? host.textures->screen_rect("BazaarConfirmationWnd") : std::nullopt;
         int w = r ? r->w : 400, h = r ? r->h : 250;
         return {(static_cast<int>(ds.x) - w) / 2, (static_cast<int>(ds.y) - h) / 2};
@@ -651,7 +652,7 @@ ListData compensation_list(UiHost& host, const std::vector<net::BuyLineTrade>& i
     return d;
 }
 
-bool mod_alt() { return ImGui::GetIO().KeyAlt; }
+bool mod_alt() { return ui_keys().alt; }
 
 } // namespace
 
@@ -716,7 +717,7 @@ public:
         }
         if (id == "DetailList") {
             detail_sel_ = row;
-            if (right) host.conn->barter_merchant_inspect(row, ImGui::GetIO().KeyShift);
+            if (right) host.conn->barter_merchant_inspect(row, ui_keys().shift);
             return true;
         }
         return false;
@@ -848,7 +849,7 @@ public:
         if (!host.conn) return false;
         auto& c = *host.conn;
         const auto& s = c.barter_search_state();
-        bool shift = ImGui::GetIO().KeyShift;
+        bool shift = ui_keys().shift;
         if (id == "InventoryList") {
             int i = index_of(inventory_order_, row);
             if (!right && i >= 0) c.barter_search_set_text(s.inventory[static_cast<std::size_t>(i)].name);
@@ -893,7 +894,7 @@ public:
         if (!host.conn || button != "left") return false;
         auto& c = *host.conn;
         const auto& s = c.barter_search_state();
-        bool shift = ImGui::GetIO().KeyShift;
+        bool shift = ui_keys().shift;
         if (id == "SearchButton") c.barter_search(s.text);
         else if (id == "RefreshInventoryButton") c.barter_search_refresh_inventory();
         else if (id == "WelcomeButton") c.barter_search_welcome();
@@ -1040,11 +1041,11 @@ public:
     bool list_click(UiHost& host, std::string_view id, int row, bool right, int) override {
         if (!host.conn) return false;
         auto& c = *host.conn;
-        const auto& io = ImGui::GetIO();
+        const UiKeys keys = ui_keys();
         if (id == "ItemSearchList") {
             int i = index_of(result_order_, row);
-            if (right) c.barter_item_inspect(i, io.KeyShift);
-            else c.barter_item_click(i, io.KeyShift, io.KeyCtrl, io.KeyAlt);
+            if (right) c.barter_item_inspect(i, keys.shift);
+            else c.barter_item_click(i, keys.shift, keys.ctrl, keys.alt);
             return true;
         }
         if (id == "InventoryList") {
@@ -1132,8 +1133,8 @@ private:
 // preview (Send_OP_ItemPreviewRequest @0x6ffc20); a left click with Shift or Ctrl inspects as well as selecting.
 // The lists hold only the goods' ids and names, so the item display waits for the server's OP_ItemLinkResponse.
 void point_merchant_good_click(net::GameConnection& c, std::uint32_t item_id, const std::string& name, bool right, int column) {
-    const ImGuiIO& io = ImGui::GetIO();
-    bool flags = io.KeyShift || io.KeyCtrl;
+    const UiKeys keys = ui_keys();
+    bool flags = keys.shift || keys.ctrl;
     if (right) {
         if (column >= 3) return;
         if (flags) c.preview_item_id(item_id);

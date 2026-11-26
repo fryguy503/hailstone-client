@@ -231,6 +231,60 @@ std::optional<MobPercent> decode_mob_percent(const AppPacket& p) {
     });
 }
 
+namespace {
+constexpr std::uint32_t kGroupVitalsMagic = 0x56505348; // HSPV
+constexpr std::uint16_t kGroupVitalsVersion = 1;
+constexpr std::size_t kGroupVitalsHeader = 8;
+constexpr std::size_t kGroupVitalsRecord = 52;
+} // namespace
+
+AppPacket encode_group_vitals_request() {
+    ByteWriter w;
+    w.le(kGroupVitalsMagic);
+    w.le(kGroupVitalsVersion);
+    return AppPacket(kOpHsGroupVitalsRequest, w.take());
+}
+
+AppPacket encode_group_vitals(const GroupVitals& v) {
+    ByteWriter w;
+    w.le(kGroupVitalsMagic);
+    w.le(kGroupVitalsVersion);
+    w.le(static_cast<std::uint16_t>(v.size()));
+    for (const auto& entry : v) {
+        w.le(entry.spawn_id);
+        for (const auto* points : {&entry.hp, &entry.mana, &entry.endurance}) {
+            w.le(points->current);
+            w.le(points->maximum);
+        }
+    }
+    return AppPacket(kOpHsGroupVitals, w.take());
+}
+
+std::optional<GroupVitals> decode_group_vitals(const AppPacket& p) {
+    if (p.opcode != kOpHsGroupVitals || p.data.size() < kGroupVitalsHeader) return std::nullopt;
+    ByteReader r(p.data);
+    if (r.le<std::uint32_t>() != kGroupVitalsMagic || r.le<std::uint16_t>() != kGroupVitalsVersion)
+        return std::nullopt;
+    const auto count = r.le<std::uint16_t>();
+    if (count > kMaxGroupVitals || p.data.size() != kGroupVitalsHeader + count * kGroupVitalsRecord)
+        return std::nullopt;
+    GroupVitals out;
+    out.reserve(count);
+    for (std::uint16_t i = 0; i < count; ++i) {
+        GroupVital entry;
+        entry.spawn_id = r.le<std::uint32_t>();
+        if (!entry.spawn_id || std::ranges::find(out, entry.spawn_id, &GroupVital::spawn_id) != out.end())
+            return std::nullopt;
+        for (auto* points : {&entry.hp, &entry.mana, &entry.endurance}) {
+            points->current = r.le<std::int64_t>();
+            points->maximum = r.le<std::int64_t>();
+            if (points->maximum < 0) return std::nullopt;
+        }
+        out.push_back(entry);
+    }
+    return out;
+}
+
 AppPacket encode_leadership_exp_toggle(bool on) {
     ByteWriter w;
     w.le<std::uint8_t>(on ? 1 : 0);

@@ -169,9 +169,20 @@ void ClientApp::run_with_keys(std::string_view line, net::SlotClickKeys keys) {
     while (!line.empty() && line.front() == ' ') line.remove_prefix(1);
     if (!conn_ || line.empty()) return;
     const std::optional<net::SlotClickKeys> before = forced_keys_; // (nested: /shiftkey /nomodkey ...)
+    const auto mods_before = ui_host_.forced_mods;
     forced_keys_ = keys;
+    ui_host_.forced_mods = std::array<bool, 2>{keys.shift, keys.ctrl};
     conn_->send_command(std::string(line));
     forced_keys_ = before;
+    ui_host_.forced_mods = mods_before;
+}
+
+void ClientApp::notify_command(std::string_view args) {
+    if (conn_) run_notify_command(ui_host_, ui_api_.get(), args);
+}
+
+bool ClientApp::window_act(std::string_view window, std::string_view child, std::string_view action) {
+    return run_window_act(ui_host_, ui_api_.get(), window, child, action);
 }
 
 // MQ's ItemNotify on Hailstone's own clicks: leftmouseup is the slot's left click (CInvSlot::HandleLButtonUp: pick up,

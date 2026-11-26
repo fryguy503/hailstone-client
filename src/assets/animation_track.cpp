@@ -148,8 +148,7 @@ std::size_t AnimationTrack::storage_bytes(StorageSet& seen) const {
 void CharacterModel::compact_animations() {
     // Intern only this model's live tracks: no global pool or weak-entry table grows as a client explores zones.
     std::unordered_multimap<std::uint64_t, const AnimationTrack*> pool;
-    for (auto& [name, clip] : clips) {
-        (void)name;
+    auto compact_clip = [&](AnimationClip& clip) {
         for (auto& track : clip.tracks) {
             if (track.empty()) continue;
             track.compact();
@@ -163,7 +162,12 @@ void CharacterModel::compact_animations() {
                 }
             if (!shared) pool.emplace(hash, &track);
         }
+    };
+    for (auto& [name, clip] : clips) {
+        (void)name;
+        compact_clip(clip);
     }
+    if (classic_riding_pose) compact_clip(*classic_riding_pose);
 }
 
 } // namespace hailstone::assets

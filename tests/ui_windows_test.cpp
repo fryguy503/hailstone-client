@@ -41,6 +41,7 @@
 #include "net/notice_packets.h"
 #include "net/opcodes.h"
 #include "net/pet_packets.h"
+#include "net/settings_packets.h"
 #include "net/social_packets.h"
 #include "net/zone_packets.h"
 #include "manual_clock.h"
@@ -924,6 +925,142 @@ TEST_CASE("Modern Group: clicking the pet bar targets the pet and clicking the o
     CHECK(conn.world().target_id == member.spawn_id);
 }
 
+TEST_CASE("Modern Group and Pet: each resource has a saved readout mode") {
+    RolePackRig r("modern", {"group.lua", "pet.lua"});
+    REQUIRE(r.run(R"lua(
+      local drawText, beginMenu, endMenu, menuItem = ui.DrawText, ui.BeginMenu, ui.EndMenu, ui.MenuItem
+      vitalTexts, vitalMenus, vitalChoices = {}, {}, {}
+      local reading = false
+      local function row(checked)
+        local x0, y0, x1, y1 = ui.GetItemRect()
+        return {(x0 + x1) / 2, (y0 + y1) / 2, checked = checked}
+      end
+      ui.DrawText = function(x, y, red, green, blue, a, text, ...)
+        vitalTexts[text] = true
+        return drawText(x, y, red, green, blue, a, text, ...)
+      end
+      ui.BeginMenu = function(label, ...)
+        local opened = beginMenu(label, ...)
+        if label == 'Member HP' or label == 'Member Mana' or label == 'Member Endurance' or label == 'Pet HP' then
+          vitalMenus[label] = row()
+          reading = opened
+        end
+        return opened
+      end
+      ui.EndMenu = function()
+        reading = false
+        endMenu()
+      end
+      ui.MenuItem = function(label, checked, ...)
+        local clicked = menuItem(label, checked, ...)
+        if reading then vitalChoices[label] = row(checked) end
+        return clicked
+      end
+      return true
+    )lua") == "true");
+    REQUIRE(r.lua->set_setting("test.pos.GroupWindow", "100,100"));
+    REQUIRE(r.lua->set_setting("test.pos.PetInfoWindow", "600,100"));
+    auto& conn = r.t.conn;
+    net::GameConnectionTestAccess::state(conn) = net::ConnectionState::InZone;
+    conn.world_for_test().player_id = 10;
+    r.group("Leader");
+
+    net::Spawn member;
+    member.spawn_id = 20;
+    member.name = "Member";
+    member.class_ = 2;
+    member.race = 1;
+    member.hp_percent = 78;
+    member.targetable = true;
+    conn.receive_zone_packet_for_test(net::encode(member));
+    net::Spawn member_pet = member;
+    member_pet.spawn_id = 21;
+    member_pet.name = "MemberPet";
+    member_pet.npc = 1;
+    member_pet.is_pet = true;
+    member_pet.pet_owner_id = member.spawn_id;
+    member_pet.hp_percent = 50;
+    conn.receive_zone_packet_for_test(net::encode(member_pet));
+    net::Spawn own_pet = member_pet;
+    own_pet.spawn_id = 22;
+    own_pet.name = "OwnPet";
+    own_pet.pet_owner_id = conn.world().player_id;
+    own_pet.hp_percent = 90;
+    conn.receive_zone_packet_for_test(net::encode(own_pet));
+    conn.receive_zone_packet_for_test(net::encode_mob_percent(net::Op::MobManaUpdate, {20, 62}));
+    conn.receive_zone_packet_for_test(net::encode_mob_percent(net::Op::MobEnduranceUpdate, {20, 35}));
+    REQUIRE(conn.pets().focused == own_pet.spawn_id);
+    r.t.api->show("GroupWindow", true);
+    r.t.api->show("PetInfoWindow", true);
+
+    auto& io = ImGui::GetIO();
+    const auto click = [&](ImGuiMouseButton button) {
+        io.AddMouseButtonEvent(button, true);
+        r.frames(1);
+        io.AddMouseButtonEvent(button, false);
+        r.frames(3);
+    };
+    const auto move_to = [&](const std::string& row) {
+        auto* state = r.lua->state();
+        const auto code = "local row = assert(" + row + "); return row[1], row[2]";
+        REQUIRE(luaL_dostring(state, code.c_str()) == LUA_OK);
+        io.AddMousePosEvent(static_cast<float>(lua_tonumber(state, -2)), static_cast<float>(lua_tonumber(state, -1)));
+        lua_pop(state, 2);
+        r.frames(3);
+    };
+    const auto choose = [&](const char* window, const char* menu, const char* selected, const char* choice) {
+        INFO(menu);
+        REQUIRE(r.run("vitalMenus, vitalChoices = {}, {}; return true") == "true");
+        const auto* frame = ImGui::FindWindowByName(window);
+        REQUIRE(frame);
+        io.AddMousePosEvent(frame->Pos.x + 10, frame->Pos.y + 12);
+        r.frames(2);
+        click(ImGuiMouseButton_Right);
+        move_to(std::format("vitalMenus['{}']", menu));
+        CHECK(r.run(std::format("return vitalChoices['{}'].checked == true", selected)) == "true");
+        move_to(std::format("vitalChoices['{}']", choice));
+        click(ImGuiMouseButton_Left);
+    };
+    const auto draw = [&](const char* expected) {
+        REQUIRE(r.run("vitalTexts = {}; return true") == "true");
+        r.frames(2);
+        const auto seen = r.run("local texts = {}; for text in pairs(vitalTexts) do texts[#texts + 1] = text end; "
+                                "table.sort(texts); return table.concat(texts, ', ')");
+        CHECK_MESSAGE(r.run(expected) == "true", "Expected: ", std::string(expected), "\nDrawn: ", seen);
+    };
+    constexpr auto group = "###modern.GroupWindow";
+    constexpr auto pet = "###modern.PetInfoWindow";
+
+    draw("local t = vitalTexts; return t['78%'] and t['90%'] and not (t['62%'] or t['35%'] or t['50%'])");
+    choose(group, "Member Mana", "None", "Percentage");
+    draw("local t = vitalTexts; return t['62%'] and not (t['35%'] or t['50%'] or t['1,250 / 2,000'])");
+
+    choose(group, "Member HP", "Percentage", "Both");
+    choose(group, "Member Mana", "Percentage", "Both");
+    choose(group, "Member Endurance", "None", "Value");
+    choose(group, "Pet HP", "None", "Both");
+    choose(pet, "Pet HP", "Percentage", "Value");
+    draw("local t = vitalTexts; return t['78%'] and t['62%'] and t['50%'] and not (t['35%'] or t['90%'])");
+
+    conn.receive_zone_packet_for_test(net::encode(net::HailstoneSettings{net::kServerGroupVitals}));
+    conn.request_group_vitals();
+    conn.receive_zone_packet_for_test(net::encode_group_vitals({
+        {member.spawn_id, {7800, 10000}, {1250, 2000}, {700, 2000}},
+        {member_pet.spawn_id, {2000, 4000}, {}, {}},
+        {own_pet.spawn_id, {1800, 2000}, {}, {}},
+    }));
+    draw("local t = vitalTexts; return t['7,800 / 10,000'] and t['78%'] and t['1,250 / 2,000'] and t['62%'] "
+         "and t['700 / 2,000'] and not t['35%'] and t['2,000 / 4,000'] and t['50%'] and t['1,800 / 2,000'] and not t['90%']");
+
+    r.lua->set_character_settings(r.scratch.path() / "character.txt"); // flush the pack settings
+    ui::lua::LuaUi saved({}, r.scratch.path() / "pack.txt");
+    CHECK(saved.setting("group.hpDisplay") == "both");
+    CHECK(saved.setting("group.manaDisplay") == "both");
+    CHECK(saved.setting("group.enduranceDisplay") == "value");
+    CHECK(saved.setting("group.petHpDisplay") == "both");
+    CHECK(saved.setting("pet.hpDisplay") == "value");
+}
+
 TEST_CASE("Modern Player: Always show cast bar keeps the cast row and frame height between casts") {
     RolePackRig r("modern", {"player.lua"});
     REQUIRE(r.run(R"lua(
@@ -1234,6 +1371,63 @@ TEST_CASE("Group role UI packs: the modern Player window's name keeps the frame 
     right_click(true);
     CHECK(r.t.host.menus.empty());
     CHECK(r.run("return rolePopups['##hudmenu'] == true") == "true");
+}
+
+TEST_CASE("Gamepad vitals: group and pet readouts use separate interface choices") {
+    RolePackRig r("gamepad", {"hud.lua"});
+    REQUIRE(r.run(R"lua(
+      local draw = ui.DrawText
+      vitalTexts = {}
+      ui.DrawText = function(x, y, red, green, blue, a, text, ...)
+        vitalTexts[text] = true
+        return draw(x, y, red, green, blue, a, text, ...)
+      end
+      local vitals = dofile('lib/vitals.lua')
+      local rows = {}
+      vitals.addOptions(rows)
+      assert(rows[1][2] == 'Percentage' and rows[2][2] == 'None' and rows[5][2] == 'Percentage')
+      rows[2][3](1)
+      rows[5][3](-1)
+      assert(ui.GetSetting('group.manaDisplay') == 'percent' and ui.GetSetting('pet.hpDisplay') == 'none')
+      return true
+    )lua") == "true");
+
+    auto& conn = r.t.conn;
+    net::GameConnectionTestAccess::state(conn) = net::ConnectionState::InZone;
+    conn.world_for_test().player_id = 10;
+    r.group("Leader");
+    net::Spawn member;
+    member.spawn_id = 20;
+    member.name = "Member";
+    member.class_ = 2;
+    member.hp_percent = 78;
+    conn.receive_zone_packet_for_test(net::encode(member));
+    net::Spawn pet = member;
+    pet.spawn_id = 22;
+    pet.name = "OwnPet";
+    pet.npc = 1;
+    pet.is_pet = true;
+    pet.pet_owner_id = conn.world().player_id;
+    pet.hp_percent = 90;
+    conn.receive_zone_packet_for_test(net::encode(pet));
+    conn.receive_zone_packet_for_test(net::encode_mob_percent(net::Op::MobManaUpdate, {20, 0}));
+    conn.receive_zone_packet_for_test(net::encode_mob_percent(net::Op::MobEnduranceUpdate, {20, 35}));
+    r.t.api->show("GroupWindow", true);
+    r.t.api->show("PetInfoWindow", true);
+    r.frames(3);
+    CHECK(r.run("local t = vitalTexts; return t['78%'] and t['0%'] and not (t['90%'] or t['35%'])") == "true");
+
+    REQUIRE(r.lua->set_setting("pet.hpDisplay", "both"));
+    REQUIRE(r.lua->set_setting("group.enduranceDisplay", "value"));
+    conn.receive_zone_packet_for_test(net::encode(net::HailstoneSettings{net::kServerGroupVitals}));
+    conn.request_group_vitals();
+    conn.receive_zone_packet_for_test(net::encode_group_vitals({
+        {member.spawn_id, {7800, 10000}, {0, 2000}, {700, 2000}},
+        {pet.spawn_id, {1800, 2000}, {}, {}},
+    }));
+    REQUIRE(r.run("vitalTexts = {}; return true") == "true");
+    r.frames(2);
+    CHECK(r.run("local t = vitalTexts; return t['1800 / 2000  90%'] and t['700 / 2000'] and not t['35%']") == "true");
 }
 
 TEST_CASE("Group role UI packs: the gamepad HUD player panel takes the mouse only on its name row in a group") {
@@ -2440,7 +2634,7 @@ TEST_CASE("hs.PlaySoundTest: asks the host to play an Individual Sounds option a
 TEST_CASE("Individual Sounds: both packs' volume rules clamp, snap, step, parse typed text and reset") {
     // The values the rules are asked about, and what they must answer (0..100, steps of 5).
     constexpr int kTooHigh = 999, kBelowZero = -20, kOffStep = 37, kOnStep = 35, kNextStepUp = 40, kTopStep = 100;
-    constexpr int kFullVolume = 100, kSoundCount = 9; // the rows: three footsteps, bag, bank bag, money, thunder, equip, creatures
+    constexpr int kFullVolume = 100, kSoundCount = 10; // the rows: three footsteps, bag, bank bag, money, thunder, equip, creatures, beep
     for (const char* pack : {"modern", "gamepad"}) {
         CAPTURE(pack);
         const auto file = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack / "lib" / "sound_volumes.lua";

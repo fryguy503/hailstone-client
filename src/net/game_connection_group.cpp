@@ -353,6 +353,9 @@ void GameConnection::reset_group_for_zone() {
     // A new zone re-sends the group (RefreshGroupFromDB → OP_GroupUpdateB) and
     // the pets (OP_PetList, the pet's spawn); an open invitation lapses.
     group_.clear();
+    group_vitals_offered_ = false;
+    group_vitals_requested_ms_.reset();
+    clear_group_vitals();
     reset_group_leadership();
     reset_raid_leadership_for_zone();
     group_.inviter.clear();
@@ -368,6 +371,52 @@ void GameConnection::reset_group_for_zone() {
     auto_target_xtarget_due_ = false;
     auto_target_prefer_ = 0;
     update_pet_presence();
+}
+
+namespace {
+constexpr std::int64_t kGroupVitalsPollMs = 1000;
+constexpr std::int64_t kGroupVitalsLifetimeMs = 3000;
+} // namespace
+
+const GroupVital* GameConnection::group_vital(std::uint32_t spawn_id) const {
+    if (state_ != ConnectionState::InZone || zone_change_pending_ || !group_vitals_received_ms_ ||
+        session_now_ms() - *group_vitals_received_ms_ >= kGroupVitalsLifetimeMs) return nullptr;
+    const auto it = std::ranges::find(group_vitals_, spawn_id, &GroupVital::spawn_id);
+    return it == group_vitals_.end() ? nullptr : &*it;
+}
+
+void GameConnection::request_group_vitals() {
+    if (!group_vitals_offered_ || state_ != ConnectionState::InZone || zone_change_pending_) return;
+    const auto now = session_now_ms();
+    if (group_vitals_requested_ms_ && now - *group_vitals_requested_ms_ < kGroupVitalsPollMs) return;
+    group_vitals_requested_ms_ = now;
+    group_vitals_waiting_ = true;
+    send_zone(encode_group_vitals_request());
+}
+
+void GameConnection::handle_group_vitals(const AppPacket& p) {
+    if (!group_vitals_offered_ || !group_vitals_waiting_ || !group_vitals_requested_ms_ ||
+        state_ != ConnectionState::InZone || zone_change_pending_) return;
+    const auto now = session_now_ms();
+    if (now - *group_vitals_requested_ms_ >= kGroupVitalsLifetimeMs) return;
+    if (auto v = decode_group_vitals(p)) {
+        std::erase_if(*v, [this](const GroupVital& entry) {
+            return entry.spawn_id == world_.player_id || !world_.spawns.contains(entry.spawn_id);
+        });
+        group_vitals_ = std::move(*v);
+        group_vitals_received_ms_ = now;
+        group_vitals_waiting_ = false;
+    }
+}
+
+void GameConnection::clear_group_vitals() {
+    group_vitals_.clear();
+    group_vitals_received_ms_.reset();
+    group_vitals_waiting_ = false;
+}
+
+void GameConnection::forget_group_vital(std::uint32_t spawn_id) {
+    std::erase_if(group_vitals_, [=](const GroupVital& entry) { return entry.spawn_id == spawn_id; });
 }
 
 void GameConnection::set_pet_list(std::vector<game::PetInfo> list) {
@@ -552,12 +601,15 @@ void GameConnection::handle_group(Op op, const AppPacket& p) {
             group_.clear();
             reset_group_leadership();
         }
+        if (op == Op::GroupUpdate || op == Op::GroupDisbandYou || op == Op::GroupDisbandOther || op == Op::GroupDelete)
+            clear_group_vitals();
         break;
     }
     case Op::GroupUpdateB:
         // Handle_OP_GroupUpdateB @0x578300 → CGroupBase_HandleGroupUpdateB @0x7d6320:
         // creates the group if needed and rebuilds every slot.
         if (auto u = decode_group_update_b(p)) {
+            clear_group_vitals();
             group_.slots = {};
             for (const auto& m : u->members) {
                 if (m.slot >= static_cast<std::uint32_t>(game::kGroupSlots)) continue;
@@ -753,7 +805,11 @@ void GameConnection::group_disband() {
 
 const game::Spawn* GameConnection::group_member_pet(const game::GroupMember& member) const {
     const auto* owner = group_member_spawn(world_, member.name);
-    return owner ? group_pet_of(world_, owner->id) : nullptr;
+    return owner ? group_member_pet(owner->id) : nullptr;
+}
+
+const game::Spawn* GameConnection::group_member_pet(std::uint32_t owner_id) const {
+    return group_pet_of(world_, owner_id);
 }
 
 void GameConnection::target_group_member(std::int32_t n, GroupTargetMode mode) {

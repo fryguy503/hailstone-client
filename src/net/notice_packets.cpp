@@ -148,7 +148,9 @@ std::optional<RezzRequest> decode_rezz_request(const AppPacket& p) {
         r.skip(4);
         v.zone = r.le<std::uint16_t>();
         v.instance = r.le<std::uint16_t>();
-        r.skip(12 + 4 + 64 + 4);
+        r.skip(12 + 4);
+        v.your_name = field(r, 64);
+        r.skip(4);
         v.rezzer = field(r, 64);
         v.spell = r.le<std::uint32_t>();
         v.corpse = field(r, 64);

@@ -56,6 +56,13 @@ passable_ladders = on     ; walking or swimming into a ladder whose polygons are
 ;blocked_message = "This command has been blocked by your server administrator."
                           ; up to 240 UTF-8 bytes. Leave empty for the default message.
 
+[tlos]
+; Advisory policy for TLO lookups in Hailstone. Names are case-insensitive.
+;default = allow         ; all roots are allowed until a policy restricts them
+;allow = Me, Target, Math
+;block = Spawn, SpawnCount, NearestSpawn
+;addon_allow = owner/repo:Spawn   ; exact repository and root grants for verified managed add-ons
+
 [addons]
 ;suggest = owner/repo     ; add-ons of this server's own on GitHub: the login screen suggests each to players who do not
                           ; have it (docs/addons.md "Suggested add-ons")

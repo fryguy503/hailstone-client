@@ -21,6 +21,7 @@
 
 #include "mq/tlo.h"
 #include "plugin/hooks.h"
+#include "plugin/policy.h"
 
 namespace hailstone::mq {
 
@@ -32,6 +33,9 @@ struct CommandEnv {
     MapFilters* map_filters = nullptr; // shared with the map presenter; a private default when a test leaves it null
     std::function<const Context&()> context;
     std::function<void(const std::string& text)> echo;    // a chat line (MQ's WriteChatColor)
+    // A chat line the client writes with MQ's colour codes it means to keep (GameConnection::client_message: /echo's
+    // line after mq::typed_line); null: echo.
+    std::function<void(const std::string& text)> echo_coded;
     std::function<void(const std::string& line)> run;     // a command line through the client (GameConnection)
     std::function<void(std::uint32_t spawn_id)> set_target;
     std::function<void(std::optional<std::uint8_t> door)> set_door_target; // /doortarget; null: none
@@ -78,6 +82,7 @@ private:
     // The last line filter: the line as it finally goes, after the plugins' rewrites.
     void final_check(std::string& line, plugin::Flow& flow);
     void say(const std::string& text) const; // a chat line, unless /squelch is running
+    void say_coded(const std::string& text) const; // the same, its MQ colour codes kept (CommandEnv::echo_coded)
     void map_filter(std::string_view args);
     // /docommand, /noparse and /squelch: the rest of the line run as a command, at most kMaxNestedCommands deep.
     void run_nested(std::string_view args);
@@ -87,6 +92,7 @@ private:
         std::string line;
         std::uint32_t caps = 0;
         std::string caller;
+        std::optional<plugin::WeakTloCaller> tlo_caller;
     };
     std::int64_t now_ms() const;
     void run_timed(); // each pulse: the lines due, in the order they fall due (sent order for the same time)

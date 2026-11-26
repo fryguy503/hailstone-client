@@ -56,8 +56,9 @@ Optional libFuzzer targets (`-DHAILSTONE_LIBFUZZER=ON`, Clang) come from `tests/
 - `fuzz_models`: EQGL layers, PTS, PRT, texture animations, ECO flora, RFD and the old `spells.eff`, byte 0
   choosing.
 
-These are only syntax-checked (no Clang build of the dependencies has been run); the deterministic tests are the
-verified part.
+They were first built with Clang on 2026-11-26 (`fuzz_decoders` lacked four decoders' headers until then), and the
+nightly run (docs/ci.md "Nightly run") builds and runs them all on corpora kept between nights. A first two-minute run
+of each found nothing. The deterministic tests stay the always-on part.
 
 ## Findings and fixes
 
@@ -67,6 +68,7 @@ verified part.
 | `src/assets/pfs.cpp` `inflate_entry` | the directory's file size sized a `std::vector` unchecked: a 12-byte entry could request 4 GB | reject a size above 1032 x the archive size (zlib's maximum expansion) |
 | `src/assets/pfs.cpp` `inflate_entry` | within that ratio, ~4 MB of junk could still declare 4 GB, zero-filled up front | the output grows with what zlib writes (64 KB, then doubling) |
 | `src/assets/eqg_character.cpp` `build_model` | EQGA key times 0 and 0xFFFFFFFF resampled to 21 million poses per bone | a clip is cut at 4096 frames (13.6 minutes at 200 ms) |
+| `src/app/lua_ui.cpp` `UiApi` frame, the code editor's, chat tab bar's and windows' frame marks, `ui.GetFrameCount` | frame numbers held in `int` (UiApi's own `++frame`, ImGui's `FrameCount`): undefined past `INT_MAX`, 2^31 frames (about 25 days at 1000 fps); `UiApi::replaces` subtracts them | one 64-bit frame number (`ui/imgui_frame.h`: ImGui's count widened, wrap-aware) and `std::uint64_t` UiApi frames; sentinels as `std::optional`. ImGui's own `int` stays inside ImGui |
 | `src/assets/eqg_character.cpp` `EqgCharacterStore::part_mesh` | a long Resources/Layers chain recursed once per link (stack overflow) | a layered part follows at most 8 rows to its base |
 | `src/assets/zone_fires.cpp` `merge_fires` | a non-finite or absurdly scaled flame cast NaN to int64 or walked (1e14)^2 grid cells | drop non-finite flames and those over 1000 units; grid cells saturate |
 | `src/assets/eqg.cpp` `light_definition_color` | `*COLOR 1e400` in a light .def cast inf to int64 (UB) | `saturate_cast`; a non-finite `*INTENSITY` is 1 |

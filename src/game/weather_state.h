@@ -103,6 +103,8 @@ RainSnowRequest rain_snow_request(std::int32_t kind, std::int32_t on, std::uint8
 
 class Precipitation : public PrecipitationSink {
 public:
+    // Drop the current weather while keeping the particle pool and its definitions.
+    void reset();
     void create() override { created_ = true; }
     // +0x04 (0x1007f3b0).
     void set_kind(std::int32_t kind) override {
@@ -126,6 +128,7 @@ public:
     // The rest of +0 (0x10081860): the particles, over the same seconds. `frame`'s seconds and intensity are filled
     // in here.
     void update_particles(PrecipitationField::Frame frame);
+    void discard_steps() { steps_.clear(); }
 
     bool created() const { return created_; }
     std::int32_t kind() const { return kind_; }

@@ -11,6 +11,7 @@
 #include <imgui.h>
 
 #include "app/lua_ui_windows.h"
+#include "app/ui_input.h"
 #include "core/saturate.h"
 #include "game/inventory.h"
 #include "game/quantity_dialog.h"
@@ -618,7 +619,7 @@ public:
         sel_item_ = r.item_id;
         // WndNotification 3 on the list: the 0x21ec request with the item's key, ids and the mouse.
         if (right && host.conn) {
-            ImVec2 mp = ImGui::GetIO().MousePos;
+            ImVec2 mp = ui_mouse_pos();
             host.conn->re_request_menu(r.key, r.re, r.item_id, static_cast<std::int32_t>(mp.x), static_cast<std::int32_t>(mp.y),
                                        r.item.id);
         }

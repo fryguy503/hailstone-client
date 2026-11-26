@@ -3,6 +3,7 @@
 #include "app/client_app_internal.h"
 #include "app/nameplate_layer.h"
 #include "app/nameplate_canvas_context.h"
+#include "app/ui_input.h"
 #include "core/ascii_case.h"
 #include "core/ini_file.h"
 #include "ui/lua/lua_host.h"
@@ -436,6 +437,12 @@ void ClientApp::update_ui_host() {
             for (const auto& change : changes) edits.push_back({change.section, change.key, change.value});
             return conn_->save_server_management(token, edits);
         };
+        h.server_management_addon_tlos = [this](std::string_view source, bool request)
+            -> std::optional<ServerManagementAddonTlos> {
+            if (!server_management_ui() || !conn_ || !conn_->server_management_available() ||
+                !conn_->server_management_snapshot() || !addons_) return std::nullopt;
+            return addons_->addon_tlos(source, request);
+        };
         h.server_management = [this](std::uint32_t known_serial,
                                      std::uint32_t known_catalog_serial) -> std::optional<ServerManagementView> {
             if (!server_management_ui() || !conn_ || !conn_->server_management_snapshot()) return std::nullopt;
@@ -447,8 +454,10 @@ void ClientApp::update_ui_host() {
             if (!conn_->server_management_available()) return std::nullopt;
             const auto& snapshot = *conn_->server_management_snapshot();
             const auto* hooks = automation_ ? &automation_->hooks() : nullptr;
+            const auto* registry = automation_ ? &automation_->registry() : nullptr;
             view.serial = conn_->server_management_serial();
-            view.catalog_serial = hooks ? hooks->command_catalog_serial() : 1u;
+            view.catalog_serial = (hooks ? hooks->command_catalog_serial() : 0u) +
+                                  (registry ? registry->tlo_catalog_serial() : 0u);
             view.revision = std::to_string(snapshot.revision);
             constexpr std::string_view marker = "; hailstone-policy-revision = ";
             if (snapshot.text.starts_with(marker)) {
@@ -494,6 +503,15 @@ void ClientApp::update_ui_host() {
             for (auto& command : plugin::command_catalog(registered)) {
                 view.commands.push_back({std::move(command.name), std::move(command.description),
                     std::string(plugin::command_origin_text(command.origin)), std::move(command.aliases), std::move(command.groups)});
+            }
+            if (registry) {
+                for (auto& tlo : registry->tlo_catalog()) {
+                    const bool builtin = tlo.origin == mq::TloOrigin::BuiltIn;
+                    std::string description = !tlo.description.empty() ? std::move(tlo.description)
+                                              : builtin                ? std::string()
+                                                                       : std::string("Provided by an add-on.");
+                    view.tlos.push_back({std::move(tlo.name), std::move(description), builtin ? "builtin" : "addon"});
+                }
             }
             return view;
         };
@@ -639,10 +657,10 @@ void ClientApp::update_ui_host() {
                 p.lua = s.lua;
                 p.bar = bar;
                 p.button = button;
-                const ImGuiIO& io = ImGui::GetIO();
-                p.shift = io.KeyShift;
-                p.ctrl = io.KeyCtrl;
-                p.alt = io.KeyAlt;
+                const UiKeys keys = ui_keys(); // (none without ImGui: a button a script pressed)
+                p.shift = keys.shift;
+                p.ctrl = keys.ctrl;
+                p.alt = keys.alt;
                 automation_->scripts().press_button(p);
             };
             hooks.stop_lua_social = [this](std::int32_t social) {

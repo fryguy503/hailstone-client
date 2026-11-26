@@ -44,7 +44,7 @@ void CommerceUi::draw(net::GameConnection& conn, ui::ItemIconCache* icons) {
     if (act.buy) conn.merchant_buy(act.buy->first, act.buy->second);
     if (act.sell) conn.merchant_sell(act.sell->first, act.sell->second);
     if (act.close_merchant) conn.close_merchant();
-    if (act.trade_drop) conn.trade_drop_cursor();
+    if (act.trade_drop_slot) conn.trade_drop_cursor(*act.trade_drop_slot);
     if (act.trade_drop_coin) conn.trade_drop_cursor_coin();
     if (act.trade_coin) conn.trade_coin(act.trade_coin->first, act.trade_coin->second);
     if (act.trade_accept) conn.trade_accept();

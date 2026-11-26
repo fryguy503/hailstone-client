@@ -206,7 +206,10 @@ void GameConnection::passage_of_time(std::int64_t now) {
     pools.dead = pstatus_.dead;
     // ProcessAllStats' first loop: the worn items' stats-disabled bytes before the sums read them.
     refresh_worn_stats_disabled();
-    const game::mechanics::LiveState live = live_state();
+    game::mechanics::LiveState live = live_state();
+    // OP_ManaUpdate's cap can differ from the local formula. Use it for buff and regen ticks so prediction
+    // does not undo the server's current mana. Keep extension overrides and the separate stats comparison.
+    if (!live.vitals.max_mana) live.vitals.max_mana = reported_max_mana_;
     const auto lookup = game::mechanics::spell_lookup(*spell_table_);
     auto sheet = [&] {
         game::mechanics::CharacterSheet s = game::mechanics::build_sheet(

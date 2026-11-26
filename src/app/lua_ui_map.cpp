@@ -47,6 +47,7 @@
 
 #include "app/lua_ui_map_overlay.h"
 #include "app/lua_ui_windows.h"
+#include "app/ui_input.h"
 #include "core/ascii_case.h"
 #include "core/atomic_file.h"
 #include "core/frame_sections.h"
@@ -962,7 +963,7 @@ public:
         else if (id == "MTW_AddPointButton") { if (me) v.add_point(*me); }
         else if (id == "MTW_RemoveLineButton") v.remove_marked_lines();
         else if (id == "MTW_JoinAtIntersectButton") {
-            if (!v.join_lines_at_intersect(ImGui::GetIO().KeyCtrl)) s.say(h, s.str(h, kEqStrNoJoin));
+            if (!v.join_lines_at_intersect(ui_keys().ctrl)) s.say(h, s.str(h, kEqStrNoJoin));
         } else if (id == "MTW_AddLabelButton") {
             open_label(true, nullptr);
         } else if (id == "MTW_EditLabelButton") {
@@ -1575,7 +1576,7 @@ int DrawMap(lua_State* L) {
     };
 
     // The mouse in the original's pixels; the drag's pan follows it (CMapViewWnd::OnProcessFrame).
-    ImVec2 mouse = ImGui::GetMousePos();
+    ImVec2 mouse = ui_mouse_pos();
     float mx = (mouse.x - x0) / k, my = (mouse.y - y0) / k;
     bool mouse_in = hovered && mx >= 0 && my >= 0 && mx < cw && my < ch;
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) s.panning = s.lasso = false;
@@ -2266,7 +2267,7 @@ int DrawAtlas(lua_State* L) {
     ImGui::Dummy(ImVec2(std::max(pw, 1.0f), std::max(ph, 1.0f)));
     // The links: the last one under the mouse takes it.
     if (ImGui::IsWindowHovered()) {
-        ImVec2 m = ImGui::GetMousePos();
+        ImVec2 m = ui_mouse_pos();
         for (auto it = page.links.rbegin(); it != page.links.rend(); ++it) {
             ImVec2 a = P(static_cast<float>(it->rect.left), static_cast<float>(it->rect.top));
             ImVec2 b = P(static_cast<float>(it->rect.right), static_cast<float>(it->rect.bottom));
@@ -2526,7 +2527,7 @@ int MapZoom(lua_State* L) {
 int MapMouseDown(lua_State* L) {
     MapState& s = *state_of(L);
     if (!drawn_now(s) || s.find_locked(*host_of(L))) return 0;
-    ImVec2 mouse = ImGui::GetMousePos();
+    ImVec2 mouse = ui_mouse_pos();
     float mx = (mouse.x - s.ox) / s.k, my = (mouse.y - s.oy) / s.k;
     bool edit = s.edit_mode();
     // (the hover is still one of the view's: forget_hover; checked here as well, since a pointer kept past its erase
@@ -2537,7 +2538,7 @@ int MapMouseDown(lua_State* L) {
     if (s.hover_line && std::none_of(s.view.lines.begin(), s.view.lines.end(),
                                      [&](const game::MapLine& l) { return &l == s.hover_line; }))
         s.hover_line = nullptr;
-    if (!ImGui::GetIO().KeyCtrl) {
+    if (!ui_keys().ctrl) {
         if (edit) {
             if (s.hover_label) {
                 s.view.marked_label = s.hover_label;
@@ -2574,7 +2575,7 @@ int MapMouseUp(lua_State* L) {
     if (!s.lasso) return 0;
     s.lasso = false;
     if (!drawn_now(s) || !s.edit_mode()) return 0;
-    ImVec2 mouse = ImGui::GetMousePos();
+    ImVec2 mouse = ui_mouse_pos();
     float mx = (mouse.x - s.ox) / s.k, my = (mouse.y - s.oy) / s.k;
     float lx0 = std::min(s.anchor_x, mx), lx1 = std::max(s.anchor_x, mx);
     float ly0 = std::min(s.anchor_y, my), ly1 = std::max(s.anchor_y, my);

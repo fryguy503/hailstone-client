@@ -17,6 +17,12 @@ void append(std::string& entry, std::string_view words) {
 
 } // namespace
 
+std::string_view changelog_heading(std::string_view version) {
+    const std::size_t dash = version.find('-');
+    if (dash != std::string_view::npos && version.substr(dash + 1).starts_with("nightly")) return "Unreleased";
+    return version;
+}
+
 std::vector<std::string> changelog_section(std::string_view text, std::string_view version) {
     std::vector<std::string> out;
     if (version.empty()) return out;

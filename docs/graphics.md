@@ -1264,7 +1264,17 @@ planet, ray-marched (`render/cloud_renderer.h`, `shaders/clouds.comp`), replacin
    within a second. Snow turns the wind on at those times instead.
 
 Each strike plays thunder1 or thunder2 (sounds 0x8f, 0x90) at random with the flash, a second strike the other one.
-The fades count frames, as in the classic client; their fog band is not applied.
+The fades count game updates and continue when the window skips drawing. The fog band is not applied.
+A zero-intensity packet clears the current weather, so a generic EQEmu clear also fades out snow.
+
+This is a deliberate change to RoF2 (a fixed bug), in `game::Weather::update`. Weather_StartEffect @0x5a9cf0 fades
+out with the packet's kind, not the current one. EQEmu's all-zero clear (`Zone::weatherSend` when the weather ends,
+`#weather 0`) during snow therefore turns the weather into fading rain. At the end of that fade `ApplyWeatherState`
+stops only the rain emitter, and the wind loop keeps playing until the zone is left. In RoF2 a repeated clear also
+turns the fade count around again, and the same kind arriving while it fades out changes nothing: the fade ends with
+the sound off while the drops come back. In Hailstone a repeated clear leaves the fade alone, and the same kind
+arriving reverses the fade from its progress (the start message shows again when it is complete). There is no switch:
+it changes only sound and presentation, not a game rule.
 
 #### Weather: precipitation
 

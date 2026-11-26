@@ -1030,6 +1030,9 @@ TEST_CASE("UI HUD frames: the player and group frames follow the game from frame
         INFO(script);
         lua_State* L = luaL_newstate();
         luaL_openlibs(L);
+        const auto vitals = slurp(ui_dir() / "modern" / "lib" / "vitals.lua");
+        REQUIRE(luaL_loadbuffer(L, vitals.data(), vitals.size(), "lib/vitals.lua") == LUA_OK);
+        lua_setglobal(L, "load_vitals");
         const char* stubs = R"lua(
 local any
 local function self() return any end
@@ -1047,6 +1050,10 @@ hs = stub({
   Label = function(n) return labels[n] end,
   -- (1, 3: a gauge such as { 0, nil, -1 } has a hole, and # of a table with one is any border; Lua 5.5 gives 1)
   Gauge = function(n) local g = gauges[n] if g then return table.unpack(g, 1, 3) end return nil, nil, -1 end,
+  GaugeValues = function(n)
+    local g = gauges[n]
+    if g and g[3] >= 0 then return nil, nil, math.floor(g[1] * 100 + 0.5) end
+  end,
   ChildShown = function(_, id) return children[id] == true end,
   ChildState = function() return false end,
   ChildTooltip = function() return "" end,
@@ -1059,6 +1066,7 @@ local T = stub({
   font = stub({}),
   Text = function(_, _, text, color) texts[#texts + 1] = { text = text, color = color } end,
   TextSize = function() return 0, 0 end,
+  Setting = function() end,
   Fit = function(text) return text end,
   Hit = function() return false end,
   Button = function() return false end,
@@ -1081,7 +1089,12 @@ local hud = stub({
     body(0, 0, 300, 140, 1)
   end,
 })
-dofile = function(name) if name == "lib/hud.lua" then return hud end return any end
+dofile = function(name)
+  if name == "lib/hud.lua" then return hud end
+  if name == "lib/theme.lua" then return T end
+  if name == "lib/vitals.lua" then return load_vitals() end
+  return any
+end
 function frame()
   texts, bars, panelGlow = {}, {}, nil
   local _, fn = next(windows)

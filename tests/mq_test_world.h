@@ -25,8 +25,15 @@
 namespace hailstone::net {
 
 struct GameConnectionTestAccess {
+    // State the character sheet is built from: the TLOs' shared character (with_cached_character) is built again
+    // on its next read, as a change the test makes through the reference would not be seen otherwise.
+    template <class T> static T& touch(GameConnection& c, T& state) {
+        c.invalidate_character();
+        return state;
+    }
     // Synthetic eligibility only; callers still provide their own connection state/player actor.
     static void tracking_skill_fixture(GameConnection& c) {
+        c.invalidate_character();
         if (!c.profile_) c.profile_.emplace();
         c.profile_->class_ = 4;
         c.profile_->skills.resize(100); c.profile_->skills[53] = 200;
@@ -44,23 +51,30 @@ struct GameConnectionTestAccess {
     }
     static bool has_tracking_request(const GameConnection& c) { return c.tracking_request_.has_value(); }
     static void replace_spawn(GameConnection& c, const Spawn& spawn) { c.apply_spawn(spawn); }
-    static game::WorldState& world(GameConnection& c) { return c.world_; }
+    static game::WorldState& world(GameConnection& c) { return touch(c, c.world_); }
     static glm::vec3& position(GameConnection& c) { return c.position_; } // the player's own (world coordinates)
-    static PlayerStatus& status(GameConnection& c) { return c.pstatus_; }
-    static game::SpellState& spells(GameConnection& c) { return c.spells_; }
-    static std::int32_t& drunkenness(GameConnection& c) { return c.drunkenness_; }
-    static game::GroupState& group(GameConnection& c) { return c.group_; }
-    static game::RaidState& raid(GameConnection& c) { return c.raid_; }
-    static GameConnection::Leadership& leadership(GameConnection& c) { return c.leadership_; }
+    static PlayerStatus& status(GameConnection& c) { return touch(c, c.pstatus_); }
+    static game::SpellState& spells(GameConnection& c) { return touch(c, c.spells_); }
+    static std::int32_t& drunkenness(GameConnection& c) { return touch(c, c.drunkenness_); }
+    static game::GroupState& group(GameConnection& c) { return touch(c, c.group_); }
+    static game::RaidState& raid(GameConnection& c) { return touch(c, c.raid_); }
+    static GameConnection::Leadership& leadership(GameConnection& c) { return touch(c, c.leadership_); }
     static std::vector<std::pair<std::uint32_t, game::BuffSlot>>& pet_buffs(GameConnection& c) { return c.pet_buffs_; }
     static std::vector<game::BandolierSet>& bandolier(GameConnection& c) { return c.bandolier_; }
-    static game::Inventory& inventory(GameConnection& c) { return c.inventory_; }
+    static game::Inventory& inventory(GameConnection& c) { return touch(c, c.inventory_); }
     static void refresh_instrument_state(GameConnection& c) { c.refresh_instrument_state(); }
     static void move_item(GameConnection& c, const ItemSlot& from, const ItemSlot& to, std::uint32_t count) {
         c.move_item(from, to, count);
     }
     static std::optional<MerchantSession>& merchant(GameConnection& c) { return c.merchant_; }
     static std::optional<BankSession>& bank(GameConnection& c) { return c.bank_; }
+    static std::optional<TradeSession>& trade(GameConnection& c) { return c.trade_; }
+    static bool& spell_book_open(GameConnection& c) { return c.spell_book_open_; }
+    static std::optional<RespawnWindow>& respawn(GameConnection& c) { return c.respawn_; }
+    static std::optional<Confirmation>& confirmation(GameConnection& c) { return c.confirmation_; }
+    static bool& respawn_chosen(GameConnection& c) { return c.respawn_chosen_; }
+    static game::TaskState& tasks(GameConnection& c) { return c.tasks_; }
+    static std::map<std::uint32_t, GameConnection::AltCurrency>& alt_currencies(GameConnection& c) { return c.alt_currencies_; }
     static std::optional<GameConnection::LootSession>& loot(GameConnection& c) { return c.loot_; }
     static GameConnection::Tribute& tribute(GameConnection& c) { return c.tribute_; }
     static game::BankCoins& bank_coins(GameConnection& c) { return c.bank_coins_; }
@@ -80,7 +94,7 @@ struct GameConnectionTestAccess {
     static game::XTargetState& xtargets(GameConnection& c) { return c.xtargets_; }
     static GameConnection::Aggro& aggro(GameConnection& c) { return c.aggro_; }
     static Coins& coins(GameConnection& c) { return c.coins_; }
-    static std::optional<PlayerProfile>& profile(GameConnection& c) { return c.profile_; }
+    static std::optional<PlayerProfile>& profile(GameConnection& c) { return touch(c, c.profile_); }
     static std::string& character(GameConnection& c) { return c.character_; }
     static bool& auto_attack(GameConnection& c) { return c.auto_attack_; }
     static ConnectionState& state(GameConnection& c) { return c.state_; }
@@ -95,7 +109,7 @@ struct GameConnectionTestAccess {
     static std::vector<game::GroundObject>& ground_objects(GameConnection& c) { return c.ground_objects_; }
     static void handle_zone(GameConnection& c, const AppPacket& p) { c.handle_zone(p); }
     static void finish_zone_in(GameConnection& c) { c.finish_zone_in(); }
-    static game::AltAdvState& alt_adv(GameConnection& c) { return c.alt_adv_; }
+    static game::AltAdvState& alt_adv(GameConnection& c) { return touch(c, c.alt_adv_); }
     static void update_usable_gems(GameConnection& c) { c.update_usable_gems(); }
     static void start_scheduled_memorization(GameConnection& c) {
         c.set_mem_.next_time = GameConnection::eq_time() - 1;

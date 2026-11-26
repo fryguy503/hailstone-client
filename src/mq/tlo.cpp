@@ -10,6 +10,8 @@
 #include "core/float_chars.h"
 #include "game/item_links.h"
 #include "mq/calc.h"
+#include "net/game_connection.h"
+#include "plugin/policy.h"
 
 namespace hailstone::mq {
 
@@ -313,18 +315,38 @@ const Type* Registry::find_type(std::string_view name) const {
     return it == types_.end() ? nullptr : it->second.get();
 }
 
-void Registry::add_tlo(std::string name, TloFn fn) { tlos_[std::move(name)] = std::move(fn); }
+void Registry::add_tlo(std::string name, TloFn fn, std::string_view description, TloOrigin origin) {
+    TloRegistration entry{std::move(fn), std::string(description), origin};
+    const auto [it, inserted] = tlos_.try_emplace(std::move(name), std::move(entry));
+    if (inserted) {
+        ++tlo_catalog_serial_;
+    } else {
+        if (it->second.description != description || it->second.origin != origin) ++tlo_catalog_serial_;
+        it->second = std::move(entry);
+    }
+}
 
 void Registry::remove_tlo(std::string_view name) {
     auto it = tlos_.find(name);
-    if (it != tlos_.end()) tlos_.erase(it);
+    if (it != tlos_.end()) {
+        tlos_.erase(it);
+        ++tlo_catalog_serial_;
+    }
 }
 
 bool Registry::has_tlo(std::string_view name) const { return tlos_.find(name) != tlos_.end(); }
 
 std::vector<std::string> Registry::tlos() const {
     std::vector<std::string> out;
-    for (const auto& [name, fn] : tlos_) out.push_back(name);
+    out.reserve(tlos_.size());
+    for (const auto& entry : tlos_) out.push_back(entry.first);
+    return out;
+}
+
+std::vector<TloCatalogEntry> Registry::tlo_catalog() const {
+    std::vector<TloCatalogEntry> out;
+    out.reserve(tlos_.size());
+    for (const auto& [name, entry] : tlos_) out.push_back({name, entry.description, entry.origin});
     return out;
 }
 
@@ -352,10 +374,12 @@ std::vector<std::string> Registry::complete(const Context& ctx, std::string_view
     };
     std::vector<std::string> out;
     if (parts.size() == 1) {
-        for (const auto& [name, fn] : tlos_)
-            if (starts(name)) out.push_back(name);
+        for (const auto& entry : tlos_)
+            if (starts(entry.first) && tlo_allowed(ctx, entry.first)) out.push_back(entry.first);
         return out;
     }
+    // A blocked root does not get the fallback member completion of a temporarily absent object.
+    if (!tlo_allowed(ctx, parts[0].name)) return out;
     Value v = tlo(ctx, parts[0].name, parts[0].index);
     const Type* t = nullptr;
     if (v.is_nil() && parts.size() == 2) {
@@ -388,10 +412,41 @@ std::vector<std::string> Registry::complete(const Context& ctx, std::string_view
     return out;
 }
 
+bool Registry::tlo_allowed(const Context& ctx, std::string_view name) const {
+    if (!ctx.conn) return true;
+    const auto& rules = ctx.conn->server_rules();
+    if (!rules || rules->provisional || rules->tlos.allowed(name)) return true;
+    const auto scoped = plugin::caller_tlo_proof();
+    const auto proof = scoped ? scoped->lock() : plugin::TloCaller{};
+    if (!proof) return false;
+    const auto identity = proof->identity();
+    return rules->tlos.allowed(name, identity) && plugin::addon_allowed(rules->addons, identity);
+}
+
+bool Registry::allow_tlo(const Context& ctx, std::string_view name) const {
+    if (tlo_allowed(ctx, name)) return true;
+    // Only the client's own thread tells (a lent thread's chat line could interleave with it); the notice is what
+    // keeps a blocked root from reading as "no target" in a script that just sees nil.
+    if (!denial_notice_ || !plugin::on_main_thread() || plugin::on_lent_thread()) return false;
+    if (denials_conn_ != ctx.conn || denials_serial_ != ctx.conn->server_rules_serial()) {
+        denials_told_.clear();
+        denials_conn_ = ctx.conn;
+        denials_serial_ = ctx.conn->server_rules_serial();
+    }
+    const auto it = tlos_.find(name);
+    const std::string root(it != tlos_.end() ? std::string_view(it->first) : name);
+    const std::string caller(plugin::caller_name());
+    if (!denials_told_.emplace(caller, root).second) return false;
+    // The command policy's blocked_message is for commands; this one names the root, as a script's author needs it.
+    denial_notice_(caller.empty() ? std::format("[MQ] the server blocks TLO {}", root)
+                                  : std::format("[MQ] {}: the server blocks TLO {}", caller, root));
+    return false;
+}
+
 Value Registry::tlo(const Context& ctx, std::string_view name, std::string_view index) const {
     auto it = tlos_.find(name);
-    if (it == tlos_.end()) return Value::nil();
-    return it->second(ctx, index);
+    if (it == tlos_.end() || !allow_tlo(ctx, it->first)) return Value::nil();
+    return it->second.fn(ctx, index);
 }
 
 Value Registry::member(const Context& ctx, const Value& self, std::string_view name, std::string_view index) const {

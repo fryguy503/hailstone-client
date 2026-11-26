@@ -19,6 +19,7 @@ local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
 local A = dofile("lib/actions.lua")
 local roles = dofile("lib/role_icons.lua")
+local vitals = dofile("lib/vitals.lua")
 local C = T.C
 local ROLE_COLORS = { C.mana, C.accent, C.endurance }
 
@@ -251,12 +252,15 @@ end)
 
 -- ---------------------------------------------------------------- group
 local MEMBER_IDS = {} -- each row's button and the group window's gauge for it
-for i = 1, 5 do MEMBER_IDS[i] = { button = "##member" .. i, gauge = "Gauge" .. i } end
+for i = 1, 5 do
+  MEMBER_IDS[i] = { button = "##member" .. i, gauge = "Gauge" .. i, pet = "PetGauge" .. i }
+end
 local members = {} -- the members shown this frame (records kept from frame to frame)
 
 ui.window("HUD Group", function()
   if not W.shown("GroupWindow") then return end
-  local count = 0
+  local hpMode, manaMode, enduranceMode, petMode = vitals.modes()
+  local count, height = 0, 16
   for i = 1, 5 do
     local frac, name, raw, tr, tg, tb = API.character.Gauge(10 + i)
     -- tr, tg, tb: a special value's tint (-2, not in the zone: full in the game's dark red)
@@ -268,6 +272,22 @@ ui.window("HUD Group", function()
         members[count] = m
       end
       m.i, m.name, m.hp = i, name, frac
+      if raw == -3 then m.hpText = "Dead"
+      elseif raw == -2 then m.hpText = "Away"
+      else m.hpText = vitals.text(hpMode, 10 + i) end
+      local mana, _, manaRaw = API.character.Gauge(30 + i)
+      local endurance, _, enduranceRaw = API.character.Gauge(35 + i)
+      m.mana = manaRaw and manaRaw >= 0 and mana or nil
+      m.endurance = enduranceRaw and enduranceRaw >= 0 and endurance or nil
+      m.manaText = m.mana and vitals.text(manaMode, 30 + i) or ""
+      m.enduranceText = m.endurance and vitals.text(enduranceMode, 35 + i) or ""
+      m.pet, m.petText = nil, ""
+      if petMode ~= "none" then
+        local pf, _, petRaw = API.character.Gauge(16 + i)
+        if petRaw and petRaw >= 0 then m.pet, m.petText = pf, vitals.text(petMode, 16 + i) end
+      end
+      m.rowH = 62 + (m.manaText ~= "" and 23 or 0) + (m.enduranceText ~= "" and 23 or 0) + (m.pet and 23 or 0)
+      height = height + m.rowH + 6
       m.roles = roles.Mask("GroupWindow", i)
       if tr then
         m.tint = m.rgba
@@ -278,43 +298,63 @@ ui.window("HUD Group", function()
     end
   end
   if count == 0 then return end
-  local rowH = 62
-  hud("HUD Group", 32, 214, 400, 16 + count * (rowH + 6), true, function(x0, y0, x1, y1)
+  hud("HUD Group", 32, 214, 400, height, true, function(x0, y0, x1, y1)
     local y = y0
     T.font(18)
     local _, th = ui.CalcTextSize("Ag") -- (once for the rows, in their font)
     T.unfont()
     for k = 1, count do
       local m = members[k]
-      local ry1 = y + T.px(rowH)
+      local ids = MEMBER_IDS[m.i]
+      local ry1 = y + T.px(m.rowH)
       ui.SetCursorPos(0, y - y0)
-      local clicked = ui.InvisibleButton(MEMBER_IDS[m.i].button, x1 - x0, T.px(rowH))
-      if clicked then API.windows.ClickChild("GroupWindow", MEMBER_IDS[m.i].gauge, "left") end -- targets the member (F2..F6)
+      local clicked = ui.InvisibleButton(ids.button, x1 - x0, T.px(m.rowH))
       local hovered = ui.IsItemHovered()
       if hovered and not ui.GetIO().alt and ui.IsMouseClicked(ui.Mouse.Right) then
-        API.windows.ClickChild("GroupWindow", MEMBER_IDS[m.i].gauge, "right")
+        API.windows.ClickChild("GroupWindow", ids.gauge, "right")
       end
       T.panel(x0, y, x1, ry1, hovered and 1 or 0.85, T.px(12))
       local p = T.px(12)
       T.font(18)
       local iconSize, iconGap = T.px(18), T.px(4)
       local iconW = roles.Width(m.roles, iconSize, iconGap)
-      local name = T.fit(m.name:gsub("\n.*", ""), x1 - x0 - 2 * p - T.px(60) - (iconW > 0 and iconW + T.px(6) or 0))
+      local readoutW = ui.CalcTextSize(m.hpText)
+      local name = T.fit(m.name:gsub("\n.*", ""), x1 - x0 - 2 * p - readoutW - T.px(8)
+        - (iconW > 0 and iconW + T.px(6) or 0))
       local nameW = ui.CalcTextSize(name)
       T.draw(x0 + p, y + T.px(6), name)
       roles.Draw(m.roles, x0 + p + nameW + T.px(6), y + T.px(6) + (th - iconSize) / 2,
         iconSize, iconGap, ROLE_COLORS)
-      local pct = API.character.Label(34 + m.i) or ""
-      T.textIn(x0 + p, y + T.px(6), x1 - p, y + T.px(6) + th, pct ~= "" and (pct .. "%") or "", C.dim, 1)
+      T.textIn(x0 + p, y + T.px(6), x1 - p, y + T.px(6) + th, m.hpText, C.dim, 1)
       T.unfont()
       local by = y + T.px(10) + th
       T.bar(x0 + p, by, x1 - p, by + T.px(12), m.hp, m.tint or C.hp)
-      local mana, _, mraw = API.character.Gauge(30 + m.i)
-      local en = API.character.Gauge(35 + m.i)
       local half = (x1 - x0 - 2 * p - T.px(6)) / 2
       by = by + T.px(16)
-      if mraw ~= -1 and mana then T.bar(x0 + p, by, x0 + p + half, by + T.px(7), mana, C.mana) end
-      if en then T.bar(x1 - p - half, by, x1 - p, by + T.px(7), en, C.endurance) end
+      if m.mana and m.manaText == "" then T.bar(x0 + p, by, x0 + p + half, by + T.px(7), m.mana, C.mana) end
+      if m.endurance and m.enduranceText == "" then
+        T.bar(x1 - p - half, by, x1 - p, by + T.px(7), m.endurance, C.endurance)
+      end
+      by = by + T.px(11)
+      local child = ids.gauge
+      if m.rowH > 62 then
+        T.font(16)
+        if m.manaText ~= "" then
+          T.bar(x0 + p, by, x1 - p, by + T.px(19), m.mana, C.mana, "Mana", m.manaText)
+          by = by + T.px(23)
+        end
+        if m.enduranceText ~= "" then
+          T.bar(x0 + p, by, x1 - p, by + T.px(19), m.endurance, C.endurance, "Endurance", m.enduranceText)
+          by = by + T.px(23)
+        end
+        if m.pet then
+          local bottom = by + T.px(19)
+          T.bar(x0 + p, by, x1 - p, bottom, m.pet, C.good, "Pet HP", m.petText)
+          if clicked and ui.IsMouseHoveringRect(x0 + p, by, x1 - p, bottom) then child = ids.pet end
+        end
+        T.unfont()
+      end
+      if clicked then API.windows.ClickChild("GroupWindow", child, "left") end
       y = ry1 + T.px(6)
     end
   end)
@@ -415,9 +455,10 @@ ui.window("HUD Pet", function()
     local p = T.px(12)
     T.font(18)
     local _, th = ui.CalcTextSize("Ag")
-    T.draw(x0 + p, y0 + T.px(6), "Pet: " .. T.fit(name, x1 - x0 - T.px(140)))
-    local pct = API.character.Label(69) or ""
-    T.textIn(x0 + p, y0 + T.px(6), x1 - p, y0 + T.px(6) + th, pct ~= "" and (pct .. "%") or "", C.dim, 1)
+    local readout = vitals.text(vitals.petMode(), 16)
+    local readoutW = ui.CalcTextSize(readout)
+    T.draw(x0 + p, y0 + T.px(6), T.fit("Pet: " .. name, x1 - x0 - 2 * p - T.px(8) - readoutW))
+    T.textIn(x0 + p, y0 + T.px(6), x1 - p, y0 + T.px(6) + th, readout, C.dim, 1)
     T.unfont()
     T.bar(x0 + p, y0 + T.px(12) + th, x1 - p, y0 + T.px(26) + th, frac, C.good)
   end)

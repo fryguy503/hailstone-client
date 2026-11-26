@@ -106,6 +106,13 @@ RainSnowRequest rain_snow_request(std::int32_t kind, std::int32_t on, std::uint8
 
 // ---------------------------------------------------------------------------
 
+void Precipitation::reset() {
+    set_kind(0xff);
+    current_ = target_ = seconds_ = 0.0f;
+    steps_.clear();
+    last_time_.reset();
+}
+
 void Precipitation::wind(const std::uint32_t (&vector)[3]) {
     field_.set_wind(glm::vec3(f(vector[0]), f(vector[1]), f(vector[2])));
 }

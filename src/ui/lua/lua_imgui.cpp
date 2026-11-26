@@ -10,6 +10,7 @@
 
 #include "imgui.h"
 #include "imgui_internal.h" // stack sizes, to refuse pops and ends that ImGui would only assert on
+#include "ui/imgui_frame.h"
 #include "ui/imgui_layer.h"
 #include "ui/layout_profile.h"
 #include "ui/lua/lua_draw_scope.h"
@@ -1077,8 +1078,8 @@ int GetItemID(lua_State *L) { // the last item's ImGui id (unique per window and
 	lua_pushinteger(L, static_cast<lua_Integer>(ImGui::GetItemID()));
 	return 1;
 }
-int GetFrameCount(lua_State *L) { // frames since ImGui started
-	lua_pushinteger(L, ImGui::GetFrameCount());
+int GetFrameCount(lua_State *L) { // the frame number, 64-bit (ui/imgui_frame.h: ImGui's int count widened, never wraps)
+	lua_pushinteger(L, static_cast<lua_Integer>(imgui_frame()));
 	return 1;
 }
 int GetTime(lua_State *L) { // seconds since ImGui started
@@ -1104,7 +1105,7 @@ int IsKeyPressed(lua_State *L) {
 int ReadOnlyWrite(lua_State *L) { return luaL_error(L, "ui.GetIO(): the table is read-only"); }
 int GetIO(lua_State *L) {
 	static const char kView = 0, kReal = 0, kFrame = 0;
-	const int frame = ImGui::GetFrameCount();
+	const auto frame = static_cast<lua_Integer>(imgui_frame());
 	if (lua_rawgetp(L, LUA_REGISTRYINDEX, &kReal) != LUA_TTABLE) {
 		lua_pop(L, 1);
 		lua_createtable(L, 0, 13);

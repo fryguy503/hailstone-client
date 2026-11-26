@@ -53,10 +53,13 @@ hailstone/
 
 The client's own folder and the asset folder's rules are in `docs/layout.md`. The RoF2 install is only read; a server's files are layered over it.
 
-The layers depend only downward: `app` → `game`/`ui`/`render`/`audio` → `assets`/`net`/`web` → `core`/`platform`.
+The layers depend only downward: `app` → `nav`/`plugin`/`mq` → `game`/`ui`/`render`/`audio` → `assets`/`net`/`web` → `core`/`platform`. A folder may include headers of its own row and of any row below.
 
 - `game` does not include Vulkan headers.
 - `nav` (the navigation meshes, `docs/navigation.md`) sits above `game` and `assets` and below `app`. The MQ layer reaches it only through `nav/nav_control.h`.
+- `plugin` and `mq` (compiled plugins and MacroQuest-style scripts) share `nav`'s row: they read the game, the network and the UI, and `app` drives them.
+- `texpack` (built texture packs, for `tools/texpack` only) sits in `game`'s row; nothing in the client includes it.
+- `tools/check_layers.py` (CI, `tools/checks.sh`) fails on an include from a lower row to a higher one. The ones made before it existed are listed in `tools/data/layer_exceptions.txt`, and the list only shrinks: `net` including `game/` (GameConnection and several packet codecs), `net` including `plugin/` (hooks and policy), `assets` including `game/` tables, and `platform/window.cpp` including `game/mouse_look.h` (docs/todo.md "Code health").
 - `render` and `ui` read game state through narrow interfaces, so the zone viewer and tests can run without a network connection.
 
 The main loop runs simulation and movement at a fixed step and renders with interpolation. The network session has its own service thread, which hands complete packets to the game thread under the session's lock (`net/session.h`). Asset loading runs on worker threads behind a loading screen.

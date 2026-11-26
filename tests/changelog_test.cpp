@@ -9,6 +9,7 @@
 #include "core/build_info.h"
 #include "core/changelog.h"
 
+using hailstone::changelog_heading;
 using hailstone::changelog_section;
 
 TEST_CASE("changelog_section takes the version's entries") {
@@ -47,7 +48,16 @@ TEST_CASE("changelog_section: the repository's CHANGELOG.md has this release's s
     REQUIRE(in);
     std::ostringstream text;
     text << in.rdbuf();
-    CHECK_FALSE(changelog_section(text.str(), hailstone::release_version()).empty());
+    CHECK_FALSE(changelog_section(text.str(), changelog_heading(hailstone::release_version())).empty());
+}
+
+TEST_CASE("changelog_heading: a nightly reads the unreleased section, a release its own") {
+    CHECK(changelog_heading("0.7.3-beta") == "0.7.3-beta");
+    CHECK(changelog_heading("1.0.0") == "1.0.0");
+    CHECK(changelog_heading("0.7.3-nightly.20261126") == "Unreleased");
+    CHECK(changelog_heading("0.7.3-beta.nightly") == "0.7.3-beta.nightly");
+    const char* text = "## Unreleased\n- new\n## 0.7.3-beta (2026-11-23)\n- old\n";
+    CHECK(changelog_section(text, changelog_heading("0.7.3-nightly.20261126")) == std::vector<std::string>{"new"});
 }
 
 TEST_CASE("changelog_section: random and cut-off input reads without a crash") {

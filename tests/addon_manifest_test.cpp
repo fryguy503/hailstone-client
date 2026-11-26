@@ -192,6 +192,8 @@ TEST_CASE("addon_manifest: a script's manifest reads") {
     CHECK(m->description == "Loots what you tell it to.");
     CHECK(m->caps == std::vector<std::string>{"read", "events", "actions"});
     CHECK(m->notes == "https://github.com/o/r/releases/tag/v1.3.0");
+    CHECK_FALSE(m->required_tlos);
+    CHECK_FALSE(m->suggested_tlos);
     REQUIRE(m->packages.size() == 1);
     CHECK(m->packages[0].platform == "any");
     CHECK(m->packages[0].size == 41233);
@@ -214,6 +216,30 @@ TEST_CASE("addon_manifest: a plugin's packages, each for a platform") {
     CHECK(m->min_client_text == "0.2.0");
     CHECK(m->packages.size() == 2);
     CHECK(addon_package_for(*m, "windows-x64")->file.starts_with("https://github.com/"));
+}
+
+TEST_CASE("addon_manifest: signed TLO declarations use exact case-insensitive roots") {
+    std::string why;
+    auto signed_manifest = Keys().sign(script_manifest("required_tlos Me,me,_hud-1\nsuggested_tlos ME,Target,target\n"));
+    const auto manifest = parse_addon_manifest(signed_manifest, &why);
+    REQUIRE_MESSAGE(manifest, why);
+    CHECK(manifest->required_tlos == std::vector<std::string>{"Me", "_hud-1"});
+    CHECK(manifest->suggested_tlos == std::vector<std::string>{"Target"});
+    signed_manifest.replace(signed_manifest.find("Target"), 6, "Switch");
+    CHECK_FALSE(parse_addon_manifest(signed_manifest, &why));
+    CHECK(why.find("signature does not match") != std::string::npos);
+
+    const auto none = parse_addon_manifest(script_manifest("required_tlos none\nsuggested_tlos None\n"));
+    REQUIRE(none);
+    CHECK(none->required_tlos == std::vector<std::string>{});
+    CHECK(none->suggested_tlos == std::vector<std::string>{});
+    for (const auto& extra : {std::string{"required_tlos\n"}, std::string{"suggested_tlos Target.Name\n"},
+                              std::string{"required_tlos Spawn[1]\n"}, std::string{"required_tlos none,Target\n"},
+                              std::string{"required_tlos none\nrequired_tlos Me\n"},
+                              "required_tlos " + std::string(8193, 'a') + "\n"}) {
+        CAPTURE(extra);
+        CHECK_FALSE(parse_addon_manifest(script_manifest(extra)));
+    }
 }
 
 TEST_CASE("addon_manifest: what is refused") {

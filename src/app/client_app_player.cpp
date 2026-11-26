@@ -186,8 +186,6 @@ void ClientApp::update_mouse_look() {
 
 // Riding (game/mounts.h): the link asks the models and the room; a change of the controlled spawn moves the
 // controls to the mount or back (the body keeps the spawn z: update_player's AvatarHeight follow-up).
-bool ClientApp::MountAnswers::new_models_loaded() { return true; }
-
 bool ClientApp::MountAnswers::mount_point(const game::Spawn& rider, const game::Spawn& mount) {
     if (!app->actor_renderer_) return true;
     auto r = app->actor_renderer_->choose_model(rider).model;

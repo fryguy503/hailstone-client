@@ -831,4 +831,69 @@ GaugeValue ui_gauge(const UiHost& host, int type, bool mark_invisibility) {
     return g;
 }
 
+GaugeVitals ui_group_gauge_vitals(const UiHost& host, int type, int pet_index, bool request_exact) {
+    if (!host.conn || !host.in_game) return {};
+    auto& c = *host.conn;
+    enum class Resource { Hp, Mana, Endurance };
+    Resource resource = Resource::Hp;
+    const auto group_spawn = [&](int index) -> const game::Spawn* {
+        const auto* member = nth_other_member(c, index);
+        if (!member || member->offline) return nullptr;
+        const auto* entity = spawn_by_name(c.world(), member->name);
+        // Bots are serialized as players. Some group updates omit mercenary metadata, but the spawn still carries it.
+        if (!entity || entity->is_corpse || entity->id == c.world().player_id ||
+            (entity->is_npc && !entity->mercenary) || (member->merc && !entity->mercenary)) return nullptr;
+        return entity;
+    };
+    const game::Spawn* entity = nullptr;
+    if (type == 16) {
+        if (pet_index == 1) {
+            entity = spawn(c.world(), c.pets().focused);
+        } else if (pet_index == 2 || pet_index == 3) {
+            const auto pets = c.pet_window_extra_pets();
+            const auto index = static_cast<std::size_t>(pet_index - 2);
+            if (index < pets.size()) entity = spawn(c.world(), pets[index]);
+        }
+    } else if (type >= 17 && type <= 21) {
+        if (const auto* owner = group_spawn(type - 17)) entity = c.group_member_pet(owner->id);
+    } else {
+        if (type >= 11 && type <= 15) {
+            entity = group_spawn(type - 11);
+        } else if (type >= 31 && type <= 40) {
+            resource = type <= 35 ? Resource::Mana : Resource::Endurance;
+            entity = group_spawn(type - (resource == Resource::Mana ? 31 : 36));
+        }
+    }
+    if (!entity || entity->is_corpse) return {};
+
+    GaugeVitals out;
+    const net::VitalPoints* points = nullptr;
+    if (request_exact) c.request_group_vitals();
+    const auto* exact = c.group_vital(entity->id);
+    switch (resource) {
+    case Resource::Hp:
+        if (entity->hp_known) out.percent = entity->hp_percent;
+        if (exact) points = &exact->hp;
+        break;
+    case Resource::Mana:
+    case Resource::Endurance: {
+        const bool mana = resource == Resource::Mana;
+        const auto& table = mana ? c.group().mana_percent : c.group().endurance_percent;
+        if (const auto it = table.find(entity->id); it != table.end() && it->second <= 100 &&
+            (!mana || is_spellcaster(entity->class_id))) out.percent = it->second;
+        if (exact) points = mana ? &exact->mana : &exact->endurance;
+        break;
+    }
+    }
+    if (points && points->maximum > 0) {
+        out.current = points->current;
+        out.maximum = points->maximum;
+        if (!out.percent) {
+            const auto current = static_cast<std::uint64_t>(std::max<std::int64_t>(points->current, 0));
+            out.percent = vitality_fill(current, static_cast<std::uint64_t>(points->maximum)) / 10;
+        }
+    }
+    return out;
+}
+
 } // namespace hailstone::app

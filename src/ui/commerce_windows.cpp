@@ -200,7 +200,7 @@ CommerceWindowsActions commerce_windows(CommerceWindowsState& st, const Commerce
             for (std::int16_t n = 0; n < static_cast<std::int16_t>(t->slots()); ++n) {
                 if (n % 4) ImGui::SameLine();
                 const Item* mine = in.inventory ? in.inventory->at({net::kInvTrade, n, -1, -1, 0, 0}) : nullptr;
-                if (slot(std::format("m{}", n).c_str(), mine, icons, cell) && held) act.trade_drop = true;
+                if (slot(std::format("m{}", n).c_str(), mine, icons, cell) && held) act.trade_drop_slot = n;
             }
             coins_line("Your coin:", t->my_coins);
             if (in.holding_coin && ImGui::Button("Offer held coin")) act.trade_drop_coin = true;

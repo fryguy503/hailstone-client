@@ -51,6 +51,9 @@ The steps are in `docs/plan.md` "Road to 1.0". This section maps items to steps;
 
 - [ ] **Write the checklist.**
   - Its own doc, played on the stock PEQ test server, both packs, a physical controller.
+  - What a GM character can script goes in `tests/live/*.quest`, run by `tools/live_smoke.sh` (docs/ci.md "Live smoke
+    tests"): zoning, items and NPCs so far. Loot All, merchants, trades with players and the UCS reconnect need new
+    `tools/quest_probe.h` steps first.
   - Built from the live items of "Combat and spells", "Movement", "Items and commerce", "Social and friends", "Navigation", "Item comparison", "Isometric camera" and "Check live".
 - [ ] Play it and fix what it finds.
 - [ ] Shadow step (SPA 379): the zone collision `land_spell` needs ("Combat and spells").
@@ -78,7 +81,8 @@ The steps are in `docs/plan.md` "Road to 1.0". This section maps items to steps;
 
 ### 1.0 RC
 
-- [ ] Bug fixes only; a known-issues page from what is left in `docs/unknowns.md`; the wiki and changelog.
+- [ ] Bug fixes only; a known-issues page from what is left in `docs/unknowns.md` (its `player` rows: each entry
+  there is tagged `player`, `server` or `trace`); the wiki and changelog.
 
 ### After 1.0
 
@@ -91,7 +95,6 @@ Not blocking 1.0:
 - Frame generation's pacing and 3x/4x.
 - FSR's water mask.
 - Zone flora rules.
-- An allocator of the client's own.
 - Shared GPU textures on Linux and past 16 clients.
 - The MacroQuest alert lists and `/target next`.
 - The "trace the original" rows that change nothing a player sees.
@@ -345,6 +348,7 @@ Server-dependent systems stock EQEmu never sends keep their live checks open pas
 - [x] **World tradeskill station distance closure** in recipe, Experiment and hidden modes, with out-of-reach and busy replies and world-only quantity/mold/batch cleanup. Carried tradeskill bags stay when only the station closes.
 - [x] **The service windows' ranges and timers checked against the original** (docs/mechanics.md "Leaving an NPC interaction"). Open: the mercenary liaison's check cadence (docs/unknowns.md) and walking away from each service live.
 - [x] **Trades with players cancel out of range:** beyond the partner's avatar height + 20, on the same 500 ms check as hand-ins; outstanding items and coin return through the server. Checked: CTradeWnd::OnProcessFrame @0x780b50.
+- [ ] **Trades with players: a click on an empty trade slot** puts the cursor item in that slot, as CInvSlot::HandleLButtonUp @0x695670 does for player trades and NPC hand-ins alike. Hailstone does that for NPC Give slots only; player trades still merge into a matching stack or take the first free slot (docs/protocol/rof2-packets.md, TradeRequestAck).
 - [ ] **Trades with players: the merchant page-handler-2 exception** (docs/mechanics.md "Leaving an NPC interaction"). Live separation checked 2026-11-18: walking or teleporting out of reach cancels, items and coin intact.
 - [x] Partial-stack looting asks the quantity (EQEmu ignores it); Link All; the loot music (entry 5 has no asset).
 - [x] **Loot All keeps an active queue on repeated activation.** An individual request in flight does not block it; it keeps the first NO DROP question when a later confirmation aborts the queue (docs/mechanics.md "Loot All").
@@ -467,7 +471,7 @@ Server-dependent systems stock EQEmu never sends keep their live checks open pas
   - 0x27..0x29 play nothing while sitting.
   - An actor not standing plays nothing for P03, P08, O01, O02 or 0xc..0xf (0x4b1b97).
 - [ ] **Animation fields not traced** (docs/unknowns.md "Characters and models"). At their defaults until their readers are traced: the mount fields beyond GetMount's motion, +0x1229, the spell book's slot 0x94, +0x1198, and the jump / fall fields (+0x10, +0x163, +0x180).
-- [x] **Riding while illusioned** (Hailstone's own, switchable: `game.illusion_mounts`, on by default). The rider's model no longer refuses the mount; the mount's seat dag must still exist (docs/mechanics.md "Riding while illusioned"). Seen live 2026-11-18.
+- [x] **Riding while illusioned** (Hailstone's own, switchable: `game.illusion_mounts`, on by default). The rider's model no longer refuses the mount; the mount's seat dag must still exist (docs/mechanics.md "Riding with classic models and illusions"). Seen live 2026-11-18.
 - [x] Mounted form changes unseat before rebuilding the actor and re-seat against the saved mount identity; departure and id-reuse covered.
 - [x] **Ladders placed in the zone** (objects.wld LADDER* actors, type 6). Walking into one climbs it (CollidingType 6 from the sweep's hit); a click from the top mounts it. Seen live 2026-11-18.
 - [x] **Passable ladders** (Cabilis's LADDERCB101, every polygon passable). Clickable from the top as in the original; climbed by walking or swimming into them by Hailstone's own rule, switched by `hailstone.cfg` `[movement] passable_ladders`. Seen live 2026-11-18.
@@ -593,7 +597,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [x] An update's approval holds only for the capabilities and version the player saw.
 - [x] **The player's word wins over a check under way:** an add-on removed meanwhile is not installed again; auto-update switched off meanwhile is not overridden; an update keeps the switch as it is at install time.
 - [x] Scripts started by a script or plugin get no more than their starter; `scripts/config/` never runs as code.
-- [x] **Permanent actions asked by code other than a shipped pack's own** (a character's delete, a bulk destroy, from a script, a plugin window or an add-on interface) are asked in the client's own window (`UiHost::client_confirm`), which no Lua code sees or answers. A script's stock-window click on ConfirmationDialogBox's Yes is refused while that box asks a destroy's question (an item's destroy, a guild's disband).
+- [x] **Permanent actions asked by code other than a shipped pack's own** (a character's delete, a bulk destroy, from a script, a plugin window or an add-on interface) are asked in the client's own window (`UiHost::client_confirm`), which no Lua code sees or answers. A script's stock-window click, `/notify` or `Window[...].Child[...].LeftMouseUp` on ConfirmationDialogBox's Yes is refused while that box asks a destroy's question (an item's destroy, a guild's disband).
 - [x] **A server's compiled plugins load only once the player allowed their bytes for that server** (`servers/<profile>/plugin_approvals.txt`). The prompt in both packs and the client's own; changed from the add-on list.
 - [x] A module runs only in a script it may do as much as: an add-on's module is refused in a script that may do more.
 - [x] **Binding a command needs 'commands'.** Scripts and plugins cannot shadow the game's or the client's own commands (`Hooks::new_guest`, `reserved_command`).
@@ -611,7 +615,12 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [x] `mq.TLO` values' metatable locked, so a script cannot swap in a `__gc`.
 - [x] **MQ's `Math` TLO (its Calculate arithmetic), `If` and `Range`,** and the rest of MQ's int, float and string members with MQ's edge cases (`mq/calc.h`).
 - [x] The TLO members E3 reads on `Me`, items, spells, `Target`, spawns and `Group` (aggro, AAs, disciplines, gem and cast timers, augments, item links, the client's own stacking rules for `StacksWith` / `WillLand`). Unit tests only; not tried with E3.
-- [ ] `Spell.StacksWithDiscs` (its spell column is not decoded) and other MQ plugins' TLOs (`DanNet`, `NetBots`, `MoveUtils`) and `Defined` and window controls (`Window.Child`, `/invoke`), which E3 also reads.
+- [x] MQ's `FindItemBank`, `FindItemBankCount` (the bank and shared bank, bags included, by name or id) and the top-level `AltAbility` (any AA the table holds; a name's rank: docs/unknowns.md). Unit tests only.
+- [ ] `Spell.StacksWithDiscs` (its spell column is not decoded) and other MQ plugins' TLOs (`DanNet`, `NetBots`, `MoveUtils.Stuck`) and `Defined`, which E3 also reads. (`MoveUtils.GM` is not needed.)
+- [x] `Window[name].Open` from the connection's state for the windows that mirror it (casting, spell book, loot, merchant, bank, trade, give, dialogs, `pack1`..`pack10`), with no UI needed. Unit tests only.
+- [x] **E3's /notify, UI-independent.** `/notify` (leftmouseup, rightmouseup, listselect, tabselect, newvalue) with MQ's child names (game/window_notify.h). What E3 presses runs from the client's state, UI or none, and the stock windows read the same state: the confirmation's question (`answer_confirmation_question`), the task offer and respawn option picked (`TaskOffers::selected`, `respawn_selected_option`), the merchant's item and Show All (`MerchantSession::considered`, `merchant_show_all`), the Alt. Currency pick and Display Missing, the quantity dialog's slider and box (`UiHost::quantity_entry`). Unit tests only; not tried with E3 or in game.
+- [x] **E3's window reads, UI-independent.** `Window.Child[name]` (`Text`, `Enabled`, `Value`, `List`, `Open`, `Name`) from the stock windows' own state (`UiApi::window_child`: the answers they draw with, nothing drawn needed), the methods `DoOpen`, `DoClose`, `LeftMouseUp` and `RightMouseUp` acting as they are read (a click as `/notify` sends it), and `/invoke`. Unit tests with no ImGui context or Lua; not tried with E3 or in game.
+- [ ] **A headless client's UiHost.** /notify's state and the scripts' Window reads live in UiHost and the stock windows (UiApi), which need no drawing: `update_ui_host` now runs every frame whether or not a Lua UI is loaded, and the windows' key, mouse, frame and screen reads answer "none" without an ImGui context (app/ui_input.h). Left for a client that draws nothing: create UiApi without the Lua UI and renderer (it is made in the same start-up block today), and skip UiApi::begin_frame's cursor handling, which reads the mouse.
 - [x] MQ's `Raid` and `Corpse` TLOs, and `Me.Invulnerable`, `Mount`, `CurrentFavor`, `TributeActive`, `SpellShieldBonus`, `SpellDamageBonus`, `PetBuff`, and the spells' `CounterType` and `CounterNumber`. Unit tests only.
 - [x] **Spawn searches follow MacroQuest's words and matching rules** (`mq/spawn_search.h`): spawn types, pets, 3D radius, named test, group, raid, guild, xtarget, light, player state.
 - [x] **The alerts key** (CMD_HISTORIC_ALERTS, __ExecuteCmd case 168) toggles AlertHistoryWnd in both packs; listed with its Shift+H default. Seen live in the Modern pack.
@@ -830,15 +839,16 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
   - Sustained play with zoning; Intel hardware.
 - [ ] Shared GPU textures on Linux (a Unix socket passing opaque FDs) and more than 16 clients (docs/research/shared-gpu-memory.md).
 
-- [ ] **The layer order does not hold for `net` and `assets`: they include `game/` headers.**
+- [ ] **The layer order does not hold for `net`, `assets` and `platform`: they include headers from above.**
   - The documented order: `app` -> `game` / ... -> `assets` / `net` / `web` -> `core` / `platform` (docs/plan.md and AGENTS.md).
   - In `net`: every `game_connection*.cpp` (GameConnection keeps the game state); the packet codecs `zone_packets.cpp` (`game/mechanics/remote_spawns.h`: the bit-packed positions), `spell_packets.h` (`game::mechanics::cast::Packet`), `task_packets.h` (`game::Task`), `training_packets.h` (`game::kTrainSkills`, `kTrainLanguages`), `aa_packets.h` (`game/alt_adv.h`) and `ability_packets.h` (`game/mechanics/abilities.h`).
   - In `assets`: `wld_zone.cpp` (`game/zone_names.h`), `model_points.cpp` (`game/sine_table.h`); `eqg_character.cpp` (`game/mechanics/anim_select.h`, `game/race_models.h`); `character.cpp`, `character_parts.cpp` and `character_dress.cpp` (`game/appearance*.h`, `game/actor_look.h`, `game/race_models.h`).
-  - All of it builds into the one `hailstone_engine` library, so nothing fails to link, and no check enforces the order.
+  - `net` also includes `plugin/` (`plugin/hooks.h` in `game_connection.cpp` and `game_connection_social.cpp`, `plugin/policy.h` in `game_connection.h` and `server_files.*`), and `platform/window.cpp` includes `game/mouse_look.h`.
+  - All of it builds into the one `hailstone_engine` library, so nothing fails to link.
+  - [x] A check: `tools/check_layers.py` (CI's `layers` job) fails on any new upward include and on a listed one that is fixed. The 235 above are listed in `tools/data/layer_exceptions.txt`; remove each line as it is fixed.
   - Fix, one of:
     - move the shared pieces down: the position unpacking, race and appearance tables, zone names and the sine table into `core/` or the layer that reads them, and the packet structs out of `game::` types;
     - or write the real order into docs/plan.md and AGENTS.md: GameConnection above `game`; the tables `assets` reads as a lower part of `game`.
-  - Then add a check (a CI grep like the NMS one) so it stays true.
 - [ ] Far shadow cascades are redrawn every frame; reusing them needs per-cascade tracking of moving casters first.
 - [ ] Session-long caches (`ModelArchiveStore` libraries' dress and model caches, `EqgCharacterStore`) never evict.
 - [ ] `tlo_index` makes a finalized userdata holding a `std::string` and a `Value` for every `.Member` step; it could keep the name as a Lua string.
@@ -847,7 +857,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [ ] The client's own plugin consent prompt (app/automation.cpp) has no arming delay; the packs' wait a second before Allow and Don't allow work.
 - [ ] Plugin windows' memory: plugin code may use 3/4 of the UI state's limit (a reserve for the pack), not a budget per folder.
 - [ ] The Lua review fixes (vendored lstrlib match check, longjmp paths in lua_host/lua_imgui/lua_mq) have not been built with MSVC under Wine.
-- [ ] Windows: about 260 `path::string()` calls rely on `cmake/utf8.manifest` making UTF-8 the ANSI code page. Sweep them to `core/path_utf8.h`, or record that the manifest is required.
+- [ ] Windows: 279 `path::string()` and `generic_string()` calls (in 65 files) rely on `cmake/utf8.manifest` making UTF-8 the ANSI code page. Sweep them to `core/path_utf8.h`, or record that the manifest is required. `tools/check_path_strings.py` (CI's `layers` job) keeps each file's count from growing (`tools/data/path_string_counts.txt`).
 - [ ] Tests for /camera, /mousespeed and /copylayout through ClientApp itself (their helpers are tested), and for the gamepad pack's browser change.
 - [ ] `net::server_file_destination` still accepts versioned shared libraries (`.so.N`) in scripts and plugins as data, while `tools/make_addon.py` refuses them.
 - [ ] Updates: `kept-<time>/` folders left by a rollback are never cleaned up; offer to remove them.
@@ -868,12 +878,18 @@ Voice macros and audio triggers; the commercial-service windows (the marketplace
   - Next:
     - measure fresh and repeated-zone memory and decode counts with the retained set, and pick its budget from that;
     - compare Windows private commit with resident checkpoints and model animation/geometry subtotals after shared/compacted animation keys;
-    - attribute name tables, parsed EQG source data and allocator retention before further cache policies.
+    - attribute name tables and parsed EQG source data before further cache policies (allocator retention is
+      small: see the allocator item below).
 - [ ] **The base cost.**
   - About 492 MB before any zone is loaded: the sound library's index over the 17 `snd*.pfs` at 119 MB, the spell particle definitions, the sky colour maps, the hero's forge tags, the fonts.
   - About 200 MB of shadow maps at the defaults (six 2048² cascades and the point-light cubes).
   - The split has not been measured one by one; nor has the transient above the end-of-zone figure.
-- [ ] An allocator of the client's own (mimalloc or jemalloc): the client uses the system allocator throughout, so the memory it asks for is not the memory it holds.
+- [x] An allocator of the client's own: measured, not worth it. On 2026-11-26 a client linked with mimalloc v3.6.1 in
+  place of glibc's allocator (Linux, the same source, the same live login to Qeynos Hills on the stock PEQ test server)
+  was resident 25-135 MiB higher at every startup and zone-load checkpoint and 200-300 MiB higher once settled in the
+  zone; with `MIMALLOC_PURGE_DELAY=0` still 50-100 MiB higher. Two runs with the system allocator differed by at most
+  about 100 MiB, at the end. So glibc does not hold much the client freed: the character archives' cost above is data,
+  not allocator retention. jemalloc was not tried.
 
 ### Server add-on host services
 

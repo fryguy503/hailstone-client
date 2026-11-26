@@ -1,6 +1,8 @@
 // mq/tlo.h, mq/spawn_search.h and mq/parse.h: MacroQuest's TLOs over a small world (tests/mq_test_world.h).
 #include <doctest/doctest.h>
 
+#include <algorithm>
+
 #include "core/build_info.h"
 #include "manual_clock.h"
 #include "game/doors.h"
@@ -32,6 +34,85 @@ struct Fixture {
 };
 
 } // namespace
+
+TEST_CASE("TLO policy denies resolved names before running providers and leaves their catalog visible") {
+    Fixture f;
+    int calls = 0;
+    const auto before = f.reg.tlo_catalog_serial();
+    auto provider = [&](const mq::Context&, std::string_view index) {
+        ++calls;
+        return Value::string(std::string(index));
+    };
+    f.reg.add_tlo("AddonNotes", provider, {}, mq::TloOrigin::Addon);
+    CHECK(f.reg.tlo_catalog_serial() != before);
+    CHECK(f.p("${aDdOnNoTeS[before]}") == "before");
+    CHECK(calls == 1);
+
+    auto rules = plugin::parse_server_cfg("[tlos]\ndefault = allow\nblock = AddonNotes, SpawnCount, Target\n");
+    rules.provisional = true;
+    net::GameConnectionTestAccess::set_server_rules(*f.world.conn, rules);
+    CHECK(f.p("${AddonNotes[cached]}") == "cached");
+    CHECK(calls == 2);
+    rules.provisional = false;
+    net::GameConnectionTestAccess::set_server_rules(*f.world.conn, rules);
+    CHECK(f.reg.tlo(f.ctx, "addonnotes", "direct").is_nil());
+    CHECK(f.p("${aDdOnNoTeS[blocked].Length} ${sPaWnCoUnT[npc]} ${Math.Calc[2+3]}") == "NULL NULL 5.00");
+    CHECK(f.p("${${String[AddonNotes]}[nested]}") == "NULL");
+    CHECK(calls == 2);
+    CHECK(f.reg.complete(f.ctx, "Addon").empty());
+    CHECK(f.reg.complete(f.ctx, "Target.Na").empty());
+    const auto me_members = f.reg.complete(f.ctx, "Me.Na");
+    CHECK(std::find(me_members.begin(), me_members.end(), "Name") != me_members.end());
+    CHECK(f.reg.has_tlo("AddonNotes"));
+
+    const auto catalog = f.reg.tlo_catalog();
+    const auto addon = std::find_if(catalog.begin(), catalog.end(), [](const auto& row) { return row.name == "AddonNotes"; });
+    REQUIRE(addon != catalog.end());
+    CHECK(addon->origin == mq::TloOrigin::Addon);
+    CHECK(std::count_if(catalog.begin(), catalog.end(), [](const auto& row) { return row.origin == mq::TloOrigin::Addon; }) == 1);
+    const auto me = std::find_if(catalog.begin(), catalog.end(), [](const auto& row) { return row.name == "Me"; });
+    REQUIRE(me != catalog.end());
+    CHECK(me->origin == mq::TloOrigin::BuiltIn);
+
+    const auto registered = f.reg.tlo_catalog_serial();
+    f.reg.add_tlo("addonnotes", provider, {}, mq::TloOrigin::Addon);
+    CHECK(f.reg.tlo_catalog_serial() == registered);
+    // A built-in without a description is still built in: the origin is its own field.
+    f.reg.add_tlo("addonnotes", provider);
+    CHECK(f.reg.tlo_catalog_serial() != registered);
+    const auto relabelled = f.reg.tlo_catalog();
+    CHECK(std::find_if(relabelled.begin(), relabelled.end(), [](const auto& row) {
+              return row.name == "AddonNotes";
+          })->origin == mq::TloOrigin::BuiltIn);
+    f.reg.remove_tlo("ADDONNOTES");
+    CHECK(f.reg.tlo_catalog_serial() != registered);
+    CHECK_FALSE(f.reg.has_tlo("AddonNotes"));
+    net::GameConnectionTestAccess::set_server_rules(*f.world.conn, std::nullopt);
+    CHECK(f.p("${Me.Name}") == "Tester");
+}
+
+TEST_CASE("TLO policy tells the player once per caller and root when it blocks a lookup") {
+    Fixture f;
+    std::vector<std::string> told;
+    f.reg.set_denial_notice([&](const std::string& text) { told.push_back(text); });
+    net::GameConnectionTestAccess::set_server_rules(*f.world.conn, plugin::parse_server_cfg("[tlos]\nblock = Target\n"));
+    CHECK(f.p("${target.Name} ${Target.Level} ${Me.Name}") == "NULL NULL Tester");
+    CHECK(f.reg.complete(f.ctx, "Targ").empty()); // completion is not a lookup: it tells nothing
+    REQUIRE(told.size() == 1);
+    CHECK(told[0] == "[MQ] the server blocks TLO Target");
+    {
+        plugin::CallerScope script(plugin::kCapAll, "demo");
+        CHECK(f.p("${Target.Name}") == "NULL");
+        CHECK(f.p("${TARGET.Name}") == "NULL");
+    }
+    REQUIRE(told.size() == 2);
+    CHECK(told[1] == "[MQ] demo: the server blocks TLO Target");
+    // New rules (a re-sync on zoning) tell again.
+    net::GameConnectionTestAccess::set_server_rules(*f.world.conn, plugin::parse_server_cfg("[tlos]\nblock = Target\n"));
+    CHECK(f.p("${Target.Name}") == "NULL");
+    REQUIRE(told.size() == 3);
+    CHECK(told[2] == told[0]);
+}
 
 // A server extension's zone_display_name changes the label the HUD and map show, not the zone's name: Zone and
 // Zone.Name stay the zone's long name, as scripts store and compare it.
@@ -490,11 +571,16 @@ TEST_CASE("TLO: Group, items, Zone and the rest") {
     CHECK(f.p("${FindItem[=Healing Potion].Stack}") == "5");
     CHECK(f.p("${FindItem[=Potion]}") == "NULL");
     CHECK(f.p("${FindItemCount[healing potion]}") == "7"); // 5 loose + 2 in the bag
+    // A number is the item's id, as in MQ (not a name holding those digits); an empty index is NULL.
+    CHECK(f.p("${FindItem[5001]} ${FindItemCount[5001]}") == "Healing Potion 7");
+    CHECK(f.p("${FindItemCount[500]} ${FindItem[]} ${FindItemCount[]}") == "0 NULL NULL");
     CHECK(f.p("${Me.Inventory[pack2].Container}") == "4");
     CHECK(f.p("${Me.Inventory[pack2].Item[1]}") == "Healing Potion");
     CHECK(f.p("${Me.FreeInventory}") == "11"); // 8 empty general slots + 3 in the bag
     CHECK(f.p("${Cursor}") == "NULL");
     CHECK(f.p("${Window[InventoryWindow].Open} ${Window[BankWnd].Open}") == "TRUE FALSE");
+    // pack1..10: TRUE while the slot holds a bag (its slots work with the window closed).
+    CHECK(f.p("${Window[pack2].Open} ${Window[pack1].Open} ${Window[pack11].Open}") == "TRUE FALSE FALSE");
     CHECK(f.p("${EverQuest.GameState} ${EverQuest.Server}") == "INGAME TestServer");
     // MacroQuest.Path[config] is the scripts' settings folder; MQ's other names stay NULL until settled.
     CHECK(f.p("${MacroQuest.Path[config]}") == "NULL"); // no folder given
@@ -945,6 +1031,65 @@ TEST_CASE("TLO: Me.AltAbility by name or ability id, with its rank, reuse and sp
     CHECK(f.p("${Me.AltAbility[Mystical Shielding]} ${Me.AltAbility[6]}") == "NULL NULL"); // not owned
 }
 
+// MQ's AltAbility TLO: any ability the AA table holds, owned or not (Me.AltAbility answers only the player's).
+TEST_CASE("TLO: AltAbility finds an ability the table holds by name or group id, owned or not") {
+    Fixture f;
+    auto& aa = net::GameConnectionTestAccess::alt_adv(*f.world.conn);
+    game::AltAbility r1;
+    r1.id = 2001;
+    r1.group = 6;
+    r1.rank = 1;
+    r1.max_rank = 2;
+    r1.title_sid = 9002; // Mystical Shielding
+    r1.spell = 11;       // Holy Armor
+    game::AltAbility r2 = r1;
+    r2.id = 2002;
+    r2.rank = 2;
+    r2.spell = 200; // Minor Healing
+    aa.add(r1);
+    aa.add(r2);
+    // Not owned: the first rank the table holds, by name (any case) or group id.
+    CHECK(f.p("${AltAbility[Mystical Shielding]} ${AltAbility[mystical shielding].Rank}") == "6 1");
+    CHECK(f.p("${AltAbility[6].Rank} ${AltAbility[6].Spell} ${AltAbility[6].Spell.ID}") == "1 Holy Armor 11");
+    // E3's check before it reads the spell's id.
+    CHECK(f.p("${Bool[${AltAbility[Mystical Shielding].Spell}]}") == "TRUE");
+    CHECK(f.p("${Me.AltAbility[Mystical Shielding]}") == "NULL");
+    // Owned: the player's rank, by name.
+    aa.owned = {{2002, 2, 0}};
+    CHECK(f.p("${AltAbility[Mystical Shielding].Rank} ${AltAbility[Mystical Shielding].Spell.ID}") == "2 200");
+    // Nothing of that name or group; an empty index.
+    CHECK(f.p("${AltAbility[Innate Strength]} ${AltAbility[99]} ${AltAbility[]}") == "NULL NULL NULL");
+}
+
+// MQ's FindItemBank and FindItemBankCount: the bank, then the shared bank, bags included; a number is an item id.
+TEST_CASE("TLO: FindItemBank and FindItemBankCount search the bank and the shared bank") {
+    Fixture f;
+    using A = net::GameConnectionTestAccess;
+    auto& inv = A::inventory(*f.world.conn);
+    auto make = [](std::uint32_t id, const char* name, std::uint32_t count) {
+        net::Item it;
+        it.id = id;
+        it.name = name;
+        it.stack_count = count;
+        return it;
+    };
+    net::Item bag = make(17005, "Large Sack", 0);
+    bag.item_class = 1;
+    bag.bag_slots = 4;
+    REQUIRE(inv.put(net::ItemSlot{net::kInvBank, 3, -1, -1, 0, 0}, bag));
+    REQUIRE(inv.put(net::ItemSlot{net::kInvBank, 3, 1, -1, 0, 0}, make(13073, "Bone Chips", 20)));
+    REQUIRE(inv.put(net::ItemSlot{net::kInvBank, 7, -1, -1, 0, 0}, make(13073, "Bone Chips", 5)));
+    REQUIRE(inv.put(net::ItemSlot{net::kInvSharedBank, 0, -1, -1, 0, 0}, make(13074, "Zombie Skin", 2)));
+    // Carried items are not the bank's.
+    REQUIRE(inv.put(net::ItemSlot::possessions(net::kSlotGeneral1), make(13075, "Bone Chips of the Ages", 1)));
+    CHECK(f.p("${FindItemBankCount[=Bone Chips]} ${FindItemBankCount[bone]} ${FindItemBankCount[13073]}") == "25 25 25");
+    CHECK(f.p("${FindItemBankCount[=Zombie Skin]} ${FindItemBankCount[=Rusty Dagger]}") == "2 0");
+    // The first found: the bank before the shared bank, a bag's contents after the bag.
+    CHECK(f.p("${FindItemBank[=Bone Chips]} ${FindItemBank[=Bone Chips].ItemSlot}") == "Bone Chips 3");
+    CHECK(f.p("${FindItemBank[skin]} ${FindItemBank[13074].ID}") == "Zombie Skin 13074");
+    CHECK(f.p("${Bool[${FindItemBank[=Bone Chips of the Ages]}]} ${FindItemBank[]}") == "FALSE NULL");
+}
+
 TEST_CASE("TLO: item members E3 reads (ItemReady, Timer, Clicky, stacks, worn slots, augments, links)") {
     Fixture f;
     using A = net::GameConnectionTestAccess;
@@ -1106,6 +1251,46 @@ TEST_CASE("TLO: Corpse, the loot window's corpse and its items") {
     CHECK(f.p("${Corpse.Open} ${Corpse.Item[1]} ${Corpse.ID}") == "FALSE NULL NULL");
 }
 
+// The stacking and stats reads a script asks many times a frame (E3's StacksWith over each of a target's buffs) share
+// one sheet (GameConnection::with_cached_character), built again after update(), a packet sent or a local change.
+TEST_CASE("TLO: spell stacking and stats reads share one character until the state may have changed") {
+    Fixture f;
+    using A = net::GameConnectionTestAccess;
+    auto& c = *f.world.conn;
+    const std::uint32_t start = c.character_builds_for_test();
+    const std::string first = f.p("${Spell[Holy Armor].WillLand} ${Spell[Holy Armor].StacksWith[Holy Armor]} "
+                                  "${Spell[Holy Armor].WillLandPet} ${Spell[Holy Armor].Duration} "
+                                  "${Spell[Minor Healing].MyRange} ${Me.SpellShieldBonus} ${Me.SpellDamageBonus}");
+    for (int i = 0; i < 5; ++i) CHECK(f.p("${Spell[Holy Armor].StacksWith[Holy Armor]}") == "TRUE");
+    CHECK(c.character_builds_for_test() == start + 1);
+    // The same answers from a new build.
+    c.invalidate_character();
+    CHECK(f.p("${Spell[Holy Armor].WillLand} ${Spell[Holy Armor].StacksWith[Holy Armor]} "
+              "${Spell[Holy Armor].WillLandPet} ${Spell[Holy Armor].Duration} "
+              "${Spell[Minor Healing].MyRange} ${Me.SpellShieldBonus} ${Me.SpellDamageBonus}") == first);
+    CHECK(c.character_builds_for_test() == start + 2);
+    // A frame, a packet the client sends (an action), a buff the client drops itself: built again.
+    c.update();
+    f.p("${Spell[Holy Armor].WillLand}");
+    CHECK(c.character_builds_for_test() == start + 3);
+    c.send_zone_packet(net::AppPacket{});
+    f.p("${Spell[Holy Armor].WillLand}");
+    CHECK(c.character_builds_for_test() == start + 4);
+    c.clear_buff_locally(40); // an empty slot: only that it was dropped locally matters here
+    f.p("${Spell[Holy Armor].WillLand}");
+    CHECK(c.character_builds_for_test() == start + 5);
+    // An item worn changes the stats read after it (the test's accessor stands for the change).
+    net::Item robe;
+    robe.name = "Shielding Robe";
+    robe.id = 7001;
+    robe.equip_slots = 1u << net::kSlotChest;
+    robe.races = 0xffffffffu;
+    robe.classes = 0xffff;
+    robe.spell_shield = 12;
+    A::inventory(c).put(net::ItemSlot::possessions(net::kSlotChest), robe);
+    CHECK(f.p("${Me.SpellShieldBonus}") == "12");
+}
+
 TEST_CASE("TLO: Me's Invulnerable, Mount, favour, tribute, spell bonuses, PetBuff; spells' counters") {
     Fixture f;
     using A = net::GameConnectionTestAccess;
@@ -1194,6 +1379,9 @@ TEST_CASE("TLO: Me.Pet and Pet read the pet window's buffs, targeted or not") {
     // Targeted, with no target buffs from the server: still the pet window's.
     A::world(*f.world.conn).target_id = 14;
     CHECK(f.p("${Me.Pet.Buff[1]} ${Target.Buff[Test Plague]}") == "Test Plague Test Plague");
+
+    A::set_server_rules(*f.world.conn, plugin::parse_server_cfg("[tlos]\nblock = Pet\n"));
+    CHECK(f.p("${Pet.ID} ${Me.Pet.ID} ${Debuff[pet].Count}") == "NULL 14 4");
 }
 
 TEST_CASE("TLO: Me.Bank, the bank's coin, and InvSlot") {
@@ -1271,6 +1459,32 @@ TEST_CASE("TLO: Merchant, its stock and ItemsReceived") {
     CHECK(f.p("${Merchant.ID} ${Merchant.CleanName}") == "11 Fippy Darkpaw");
     m->open = false;
     CHECK(f.p("${Merchant.Open} ${Merchant.ItemsReceived} ${Merchant.Item[1]}") == "FALSE FALSE NULL");
+}
+
+TEST_CASE("TLO: Window.Open from the connection's state, with no UI") {
+    Fixture f;
+    using A = net::GameConnectionTestAccess;
+    auto& c = *f.world.conn;
+    // The fixture's UI shows InventoryWindow alone: these windows answer from the connection, not from it.
+    CHECK(f.p("${Window[MerchantWnd].Open} ${Window[BigBankWnd]} ${Window[LootWnd].Open} ${Window[TradeWnd].Open}") ==
+          "FALSE FALSE FALSE FALSE");
+    CHECK(f.p("${Window[SpellBookWnd].Open} ${Window[CastingWindow].Open} ${Window[ConfirmationDialogBox].Open}") ==
+          "FALSE FALSE FALSE");
+    A::merchant(c).emplace().open = true;
+    A::bank(c).emplace().slots = 24;
+    A::spell_book_open(c) = true;
+    CHECK(f.p("${Window[merchantwnd].Open} ${Window[BigBankWnd].Open} ${Window[BankWnd].Open} ${Window[SpellBookWnd]}") ==
+          "TRUE TRUE FALSE TRUE");
+    A::bank(c)->slots = 16; // CBankWnd from BankWnd for a 16-slot bank
+    CHECK(f.p("${Window[BigBankWnd].Open} ${Window[BankWnd].Open}") == "FALSE TRUE");
+    auto& t = A::trade(c).emplace();
+    t.open = true;
+    t.with_npc = true;
+    CHECK(f.p("${Window[GiveWnd].Open} ${Window[TradeWnd].Open}") == "TRUE FALSE");
+    t.with_npc = false;
+    CHECK(f.p("${Window[GiveWnd].Open} ${Window[TradeWnd].Open}") == "FALSE TRUE");
+    // A window the connection knows nothing of asks the UI.
+    CHECK(f.p("${Window[InventoryWindow].Open} ${Window[FriendsWindow].Open}") == "TRUE FALSE");
 }
 
 TEST_CASE("TLO: /doortarget and DoorTarget") {

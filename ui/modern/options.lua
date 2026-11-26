@@ -968,9 +968,11 @@ local SOUND_TEST_TIP = "Plays this sound once at the volume set here."
 local soundsOpen = false
 local soundText = {} -- name -> what is being typed in its box (only while the box is active)
 
+local beepLists
 local function closeSounds()
   soundsOpen = false
   soundText = {}
+  if beepLists then beepLists.choices, beepLists.filter = nil, "" end -- read again when the window opens
 end
 
 -- The number box of one row. A number typed is applied at once, brought into 0..100 (lib/sound_volumes.lua parse),
@@ -1018,6 +1020,55 @@ local function soundRow(entry)
   tip(SOUND_TEST_TIP)
 end
 
+-- The Beep sound (lib/sound_volumes.lua BEEP_SOUND), a row of its own under the Beep volume: the tone and the short
+-- list, then a search over every other sound file of the game folder (thousands: only the first matches are listed).
+-- A saved one this game folder lacks shows as such until another is picked. The lists are read once while the
+-- window is open.
+local BEEP_SEARCH_SHOWN = 100
+beepLists = { choices = nil, featured = 0, filter = "" }
+local function beepChoices()
+  if not beepLists.choices then
+    beepLists.choices = API.settings.OptionChoices(V.BEEP_SOUND) or {}
+    beepLists.featured = 1 + #(API.settings.OptionChoices(V.BEEP_SOUND_FEATURED) or {})
+  end
+  return beepLists.choices, beepLists.featured
+end
+
+local function beepSoundRow()
+  local v = API.settings.Option(V.BEEP_SOUND)
+  if v == nil then return end
+  local choices, featured = beepChoices()
+  ui.TableNextRow()
+  ui.TableNextColumn()
+  ui.Text(V.BEEP_SOUND_LABEL)
+  tip(V.BEEP_SOUND_TIP)
+  ui.TableNextColumn()
+  ui.TableNextColumn()
+  ui.SetNextItemWidth(FILL_WIDTH)
+  if ui.BeginCombo("##beepsound", choices[v + 1] or "(not in this game folder)", ui.ComboFlags.HeightLarge) then
+    local function pick(i)
+      if ui.Selectable(choices[i] .. "##beep" .. i, i - 1 == v) then API.settings.SetOption(V.BEEP_SOUND, i - 1) end
+    end
+    for i = 1, math.min(featured, #choices) do pick(i) end
+    if #choices > featured then
+      ui.Separator()
+      ui.SetNextItemWidth(FILL_WIDTH)
+      beepLists.filter = ui.InputTextWithHint("##beepsearch", "Search all sounds", beepLists.filter, 64)
+      local needle, matched = beepLists.filter:lower(), 0
+      for i = featured + 1, #choices do
+        if needle == "" or choices[i]:lower():find(needle, 1, true) then
+          matched = matched + 1
+          if matched <= BEEP_SEARCH_SHOWN then pick(i) end
+        end
+      end
+      if matched > BEEP_SEARCH_SHOWN then ui.TextDisabled((matched - BEEP_SEARCH_SHOWN) .. " more: type to narrow") end
+    end
+    ui.EndCombo()
+  end
+  tip(V.BEEP_SOUND_TIP)
+  ui.TableNextColumn()
+end
+
 local function soundsBody()
   ui.PushTextWrapPos(0)
   ui.TextDisabled("Each volume is on top of Sound Effects. 100 % leaves a sound as it is, 0 % silences it.")
@@ -1028,7 +1079,10 @@ local function soundsBody()
     ui.TableSetupColumn("box", ui.TableColumnFlags.WidthFixed, SOUND_BOX_W * U)
     ui.TableSetupColumn("slider", ui.TableColumnFlags.WidthStretch, AUTO_SIZE)
     ui.TableSetupColumn("test", ui.TableColumnFlags.WidthFixed, SOUND_TEST_W * U)
-    for _, entry in ipairs(V.SOUNDS) do soundRow(entry) end
+    for _, entry in ipairs(V.SOUNDS) do
+      soundRow(entry)
+      if entry[1] == "beep" then beepSoundRow() end
+    end
     ui.EndTable()
   end
   ui.Spacing()
@@ -1070,7 +1124,7 @@ local function audioTab()
     slider("npc_hits", "NPC Hit Sounds", 0, 100, pct,
       "NPCs being hit, blocking and dodging, on top of Sound Effects (a Hailstone option).")
     if API.settings.Option("own_footsteps") ~= nil then
-      row("Individual Sounds", "A volume for each of a few tiresome sounds: footsteps, bags, money, thunder and equipping (Hailstone options).",
+      row("Individual Sounds", "A volume for each of a few tiresome sounds: footsteps, bags, money, thunder, equipping and /beep, and the sound /beep plays (Hailstone options).",
         function() if ui.Button("Individual Sounds...", FILL_WIDTH, AUTO_SIZE) then soundsOpen = true end end)
     end
   end)

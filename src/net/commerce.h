@@ -28,6 +28,9 @@ struct MerchantSession {
     bool trader = false;         // a player trader in the bazaar (OP_TraderShop): items keyed by arrival, see Item::serial
     std::map<std::uint32_t, Item> items; // the stock, by merchant slot
     std::optional<ItemSlot> selected; // an inventory item picked for selling
+    // The merchant's item picked in its list (CMerchantWnd's selection; Hailstone keeps it here so a script's Buy
+    // takes what the window shows, or what /notify listselect picked with no UI).
+    std::optional<std::uint32_t> considered;
     int pending = 0;             // EverQuestinfo::IsItemPending: a buy or sell awaiting its answer
     // EQEmu's parcels waiting at a parcel merchant (tabs & 4), by parcel slot; `claiming`: the slots Claim all is still
     // to take (one request out at a time, `parcel_pending`).

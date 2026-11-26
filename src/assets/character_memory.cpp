@@ -80,11 +80,15 @@ CharacterModel::MemoryBreakdown CharacterModel::memory_breakdown(AnimationTrack:
                       vector_bytes(emitters) + emitter_bytes(clouds, shared_clouds ? *shared_clouds : local_clouds,
                                       shared_animations ? *shared_animations : local_animations);
     for (const auto& e : emitters) out.other_bytes += e.point.size();
-    for (const auto& [name, clip] : clips) {
-        out.animation_bytes += sizeof(decltype(clips)::value_type) + name.size() + vector_bytes(clip.tracks) +
-                               vector_bytes(clip.frame_times_ms);
+    auto count_clip_payload = [&](const AnimationClip& clip) {
+        out.animation_bytes += vector_bytes(clip.tracks) + vector_bytes(clip.frame_times_ms);
         for (const auto& track : clip.tracks) out.animation_bytes += track.storage_bytes(seen);
+    };
+    for (const auto& [name, clip] : clips) {
+        out.animation_bytes += sizeof(decltype(clips)::value_type) + name.size();
+        count_clip_payload(clip);
     }
+    if (classic_riding_pose) count_clip_payload(*classic_riding_pose);
     for (const auto& [name, alias] : clip_aliases)
         out.animation_bytes += sizeof(decltype(clip_aliases)::value_type) + name.size() + alias.size();
     for (const auto& [name, alias] : held_aliases)

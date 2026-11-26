@@ -9,7 +9,7 @@
 //   say TEXT            says TEXT (a GM command too: "say #level 100")
 //   wait SECONDS
 //   goto X Y Z          #goto, then waits for the move
-//   zone SHORTNAME      #zone, then waits for the new zone
+//   zone SHORTNAME      #zone, then waits for the new zone (passes at once when already there)
 //   near NAME           moves to the nearest living spawn whose name contains NAME (or one of a|b|c) and targets it
 //   hail NAME           near NAME, then hails it
 //   ask NAME TEXT       near NAME, then says TEXT to it
@@ -168,7 +168,12 @@ private:
                 pause(now, 1000);
             }
         } else if (cmd == "zone") {
-            if (phase_ == 0) {
+            if (phase_ == 0 && w.zone_short_name == rest) {
+                // #zone to the zone we are in moves us to its safe point without a zone-in, so there is nothing to
+                // wait for; a script starts from a known zone with it whatever zone it began in.
+                check(true, "already in " + rest);
+                next();
+            } else if (phase_ == 0) {
                 zoned_ = false;
                 conn.say("#zone " + rest);
                 phase_ = 1;
