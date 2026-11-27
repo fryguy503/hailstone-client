@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Native add-ons can read an inspected item's base value in copper, including items opened from links and previews.
 - Custom builds can set a display version shown at login and in the in-game Help window.
 - Inventory add-ons can read quest flags and bag types and preview which empty slots accept the item on the cursor.
 - Mana regeneration now uses the server's reported maximum, fixing mana bars that stopped short of full when the client's calculated maximum was lower.

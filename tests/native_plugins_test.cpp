@@ -556,12 +556,19 @@ TEST_CASE("native plugins: received item decode commits both outputs only for an
     item.item.id = 7001;
     item.item.name = "Decoder fixture";
     item.item.slot = net::ItemSlot::possessions(net::kSlotGeneral1, 2);
+    item.item.value = 1234;
+    item.item.price = 9876;
     auto packet = net::encode_item_packet(false, item);
     REQUIRE(h.hooks.packet(plugin::Stream::Zone, plugin::Direction::In, packet) == plugin::Flow::Continue);
     h.run("/probedecode 3");
     CHECK(h.printed_line("[Probe] decode 0 slot_unchanged 1 item_unchanged 1 id 1515870810"));
     h.run("/probedecode");
     CHECK(h.printed_line("[Probe] decode 1 slot_unchanged 0 item_unchanged 0 id 7001"));
+    CHECK(h.printed_line("[Probe] decode base value 1234"));
+    h.printed.clear();
+    h.run("/probedecode " + std::to_string(offsetof(HailstoneItem, base_value_copper)));
+    CHECK(h.printed_line("[Probe] decode 1 slot_unchanged 0 item_unchanged 0 id 7001"));
+    CHECK(h.printed_line("[Probe] decode base value 1515870810"));
     h.approve(plugin::kCapAll & ~plugin::kCapRead); h.plugins->policy_changed({});
     h.printed.clear();
     h.run("/probedecode");
@@ -572,6 +579,21 @@ TEST_CASE("native plugins: received item decode commits both outputs only for an
     h.printed.clear();
     h.run("/probedecode");
     CHECK(h.printed_line("[Probe] decode 0 slot_unchanged 1 item_unchanged 1 id 1515870810"));
+}
+
+TEST_CASE("native plugins: item descriptions receive the base copper value for the displayed item") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll);
+    REQUIRE(h.plugins->load("HostProbe"));
+    const auto& connection = *h.world.conn;
+    net::Item item;
+    item.id = 7002;
+    item.value = 1234;
+    item.price = 9876;
+    item.stack_count = 20;
+    REQUIRE(connection.server_ext().item_description_append(connection, item) == "Base value 1234");
+    item.value = 0;
+    CHECK(connection.server_ext().item_description_append(connection, item) == "Base value 0");
 }
 
 TEST_CASE("native plugins: a raid member is targeted by spawn id and incarnation, a reused id refused") {

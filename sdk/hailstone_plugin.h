@@ -741,6 +741,7 @@ typedef struct HailstoneItem {
     uint32_t instance_id;
     uint32_t augment_ids[6]; /* zero for known empty sockets; bags never report their contents as augments */
     uint32_t configuration_complete; /* zero when installed configuration cannot be represented */
+    uint32_t base_value_copper; /* the item template's base value in copper */
 } HailstoneItem;
 
 typedef struct HailstoneBuff {

@@ -619,6 +619,14 @@ void probe_decode(void*, const char* arguments) {
     WriteChatf("[Probe] decode %d slot_unchanged %d item_unchanged %d id %u", result,
         std::memcmp(old_slot.data(), &slot, sizeof(slot)) == 0,
         std::memcmp(old_item.data(), &item, sizeof(item)) == 0, item.id);
+    if (result) WriteChatf("[Probe] decode base value %u", item.base_value_copper);
+}
+
+const char* probe_item_description(const HailstoneItem* item) {
+    if (item->size < offsetof(HailstoneItem, base_value_copper) + sizeof(item->base_value_copper)) return nullptr;
+    static std::string text;
+    text = "Base value " + std::to_string(item->base_value_copper);
+    return text.c_str();
 }
 
 HailstoneSpawn saved_spawn{};
@@ -1361,5 +1369,6 @@ HAILSTONE_API const HailstoneHooks* hailstone_plugin_hooks(void) {
     static HailstoneHooks hooks{};
     hooks.size = sizeof(hooks);
     hooks.map_policy = map_policy;
+    hooks.item_description_append = probe_item_description;
     return &hooks;
 }

@@ -2736,6 +2736,10 @@ The roster is read with `get_raid_data_bulk` ("Buff, spawn, extended target, abi
 - `inspect_item_packet` (`read` and `ui`) shows that copied item without inventory change or a link request.
 - `HailstoneItem.serial`, `instance_id`, `augment_ids` and `configuration_complete` distinguish received instances and
   installed configurations. Bag contents are never reported as augment IDs.
+- `HailstoneItem.base_value_copper` gives the template's base value for one item, in copper. Merchant quotes depend on
+  the merchant session. Before reading the field in a callback, check that the supplied `size` reaches its end.
+  For records you pass to `get_item` or `decode_item_packet`, initialize the new field to zero before calling. The
+  host preserves the caller's `size` and older hosts leave the new field as supplied.
 - `item_flags`, `item_description_append`, `item_presentation_revision` and `loot_confirmation` let an active
   extension supply plain text metadata and an extra loot question. They do not suppress the stock no-drop
   confirmation.
