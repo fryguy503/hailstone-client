@@ -29,6 +29,42 @@
 #endif
 
 namespace hailstone::platform {
+
+bool ordinary_path(const std::filesystem::path& path, [[maybe_unused]] bool local_drive) {
+    if (!path.is_absolute()) return false;
+#if defined(_WIN32)
+    if (local_drive) {
+        const auto drive = path.root_name().native();
+        if (drive.size() != 2 || drive[1] != L':') return false;
+        const UINT type = ::GetDriveTypeW(path.root_path().c_str());
+        if (type != DRIVE_FIXED && type != DRIVE_REMOVABLE) return false;
+    }
+#endif
+    auto entry = path.root_path();
+    for (const auto& part : path.relative_path()) {
+        if (part == "..") return false;
+        entry /= part;
+#if defined(_WIN32)
+        if (part.native().find(L':') != std::wstring::npos) return false;
+        const DWORD attrs = ::GetFileAttributesW(entry.c_str());
+        if (attrs == INVALID_FILE_ATTRIBUTES) {
+            const DWORD error = ::GetLastError();
+            if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) return false;
+        } else if ((attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+            return false;
+        }
+#else
+        std::error_code ec;
+        const auto status = std::filesystem::symlink_status(entry, ec);
+        if (ec && ec != std::errc::no_such_file_or_directory) return false;
+        if (std::filesystem::is_symlink(status) ||
+            (std::filesystem::exists(status) && !std::filesystem::is_regular_file(status) &&
+             !std::filesystem::is_directory(status))) return false;
+#endif
+    }
+    return true;
+}
+
 namespace {
 
 void close_file(std::intptr_t file) noexcept {

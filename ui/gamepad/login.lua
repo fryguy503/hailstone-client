@@ -642,7 +642,7 @@ local function morePage(v, x0, y, x1, w)
         current = i == 1, disabled = not f.usable,
         fn = function() if i > 1 then API.pregame.LoginDo("gameFolder", i) end end }
     end
-    items[#items + 1] = { label = "Browse...", sub = "Pick another EverQuest folder", fn = function() API.pregame.LoginDo("browse") end }
+    items[#items + 1] = { label = "Browse...", sub = "Pick another folder containing your game files", fn = function() API.pregame.LoginDo("browse") end }
     openPick("Game files", items, "##game", "In use")
   end
   y = y + px(76) + gap

@@ -18,6 +18,9 @@ std::vector<std::string> changelog_section(std::string_view text, std::string_vi
 // starting "nightly", tools/nightly.sh), whose changes since the last release are that section's.
 std::string_view changelog_heading(std::string_view version);
 
+// Downstream builds may use the upstream Unreleased notes until they add their own version heading.
+std::vector<std::string> build_changelog(std::string_view text, std::string_view version, bool downstream);
+
 // The file's name in the Hailstone folder.
 inline constexpr std::string_view kChangelogName = "CHANGELOG.md";
 

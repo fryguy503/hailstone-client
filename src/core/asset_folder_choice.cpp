@@ -84,7 +84,7 @@ static AssetFolderResolution resolve_saved_asset_folder(const std::filesystem::p
         out.source = AssetFolderSource::Config;
         return out;
     }
-    out.reason = c.is_directory ? "The saved asset folder cannot be used: it is not a complete EverQuest installation (RoF2 or live)."
+    out.reason = c.is_directory ? "The saved folder is missing compatible game files."
                                 : "The saved asset folder is not there any more.";
     out.check = std::move(c);
     return out;
@@ -126,11 +126,11 @@ std::string data_folder_conflict(const std::filesystem::path& asset_folder, cons
     if (allow_subfolder)
         return "Hailstone keeps its own files in " + data_folder.string() +
                ", inside this folder, and would write into the installation, which it only reads. Inside the "
-               "EverQuest folder only a folder named \"" + std::string(GameDir::kOwnFolder) +
+               "game folder only a folder named \"" + std::string(GameDir::kOwnFolder) +
                "\" directly in it may hold Hailstone (or set HAILSTONE_DATA_DIR); move it and start it again.";
     return "Hailstone keeps its own files in " + data_folder.string() +
            ", inside this folder, and would write into the installation, which it only reads. Move Hailstone out of "
-           "the EverQuest folder (or set HAILSTONE_DATA_DIR) and start it again.";
+           "the game folder (or set HAILSTONE_DATA_DIR) and start it again.";
 }
 
 bool same_folder(const std::filesystem::path& a, const std::filesystem::path& b) {

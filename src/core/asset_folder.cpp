@@ -174,7 +174,7 @@ std::string describe(const AssetFolderCheck& check) {
     std::string out;
     if (!check.missing.empty()) out = "missing " + join(check.missing);
     if (!check.missing_rof2.empty())
-        out += (out.empty() ? "" : "; ") + std::string("not RoF2 or a current EverQuest install (missing ") + join(check.missing_rof2) + ")";
+        out += (out.empty() ? "" : "; ") + std::string("missing files required for compatibility (") + join(check.missing_rof2) + ")";
     return out;
 }
 

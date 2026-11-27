@@ -42,8 +42,10 @@ bool update_installs_at_quit(const UpdateSettings& s, bool asked);
 // hex; nullopt when the build has none, and then there are no updates).
 std::string default_update_feed();
 std::optional<Ed25519PublicKey> update_release_key();
-// The add-on index's address (CMake HAILSTONE_ADDON_INDEX, core/addon_index.h; "" none), signed with the release key.
+bool launcher_manages_updates();
+// The add-on index's address and its independent trust key (core/addon_index.h).
 std::string default_addon_index();
+std::optional<Ed25519PublicKey> addon_index_key();
 // Hailstone's page (CMake HAILSTONE_PROJECT_PAGE), which the login screen links to.
 std::string default_project_page();
 
@@ -70,8 +72,11 @@ struct UpdaterEnv {
     std::string feed;           // the manifest's address
     std::string version;        // this build's (release_version())
     std::string platform;       // update_platform()
+    std::string channel;        // expected signed promotion channel ("" for the upstream feed)
     Ed25519PublicKey key{};
     bool auto_download = false;
+    bool remember_feed = true;
+    bool reuse_staged = true;
     std::string skip;           // a version not to offer
     UpdateFetch fetch;          // http_get, or the tests' own
     // Tests: called on the worker once a check shows Available, before it starts a download of its own.
@@ -100,6 +105,8 @@ struct UpdateStatus {
     bool has_package = false;   // Available: this platform has a package (else the player downloads it by hand)
     bool skipped = false;       // Available: the player chose to skip this release (update.skip)
     std::uint64_t done = 0, total = 0; // Downloading: bytes so far, all of them (0 unknown)
+    std::vector<UpdatePackage> verified_packages; // packages selected from this check's signed manifest, when Ready
+    std::optional<Sha256Digest> runtime_sha256; // a promoted Windows executable's signed digest
 };
 
 class Updater {
@@ -117,6 +124,7 @@ public:
     // The player chose not to take this release: it is offered again only when a newer one comes.
     void skip();
     UpdateStatus status() const;
+    bool in_progress() const { return busy_.load(); }
     // Waits for the worker (tests).
     void wait();
 

@@ -113,8 +113,7 @@ AssetPickerAction asset_picker_screen(AssetPickerView& view, bool dialog_open) {
     ImGui::TextColored(kDimColor, "asset folder");
     ImGui::Separator();
     ImGui::Spacing();
-    ImGui::TextWrapped("Hailstone plays with the files of an EverQuest installation (Rain of Fear 2). "
-                       "Choose its folder; Hailstone only reads it and never changes it.");
+    ImGui::TextWrapped("Choose the folder containing your game files. Hailstone reads those files in place.");
     if (!view.reason.empty()) {
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
@@ -128,7 +127,7 @@ AssetPickerAction asset_picker_screen(AssetPickerView& view, bool dialog_open) {
     float browse_w = ImGui::CalcTextSize(browse).x + ImGui::GetStyle().FramePadding.x * 2.0f;
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - browse_w - ImGui::GetStyle().ItemSpacing.x);
     std::string typed = view.folder;
-    if (ImGui::InputTextWithHint("##folder", "Folder of the EverQuest installation (RoF2 or live)", &typed,
+    if (ImGui::InputTextWithHint("##folder", "Folder containing your game files", &typed,
                                  ImGuiInputTextFlags_EnterReturnsTrue))
         set_picker_folder(view, typed);
     else if (typed != view.folder) {
@@ -153,17 +152,17 @@ AssetPickerAction asset_picker_screen(AssetPickerView& view, bool dialog_open) {
         } else if (c.ok) {
             if (c.live) {
                 ImGui::PushStyleColor(ImGuiCol_Text, kGoodColor);
-                ImGui::TextWrapped("This is a current EverQuest folder. A RoF2 server's spells, strings and the old "
-                                   "versions of revamped zones then come from that server's assets folder.");
+                ImGui::TextWrapped("This folder contains current game files. Spells, game text and earlier versions "
+                                   "of updated zones can come from your server's asset folder.");
                 ImGui::PopStyleColor();
             } else {
-                ImGui::TextColored(kGoodColor, "This is a RoF2 asset folder.");
+                ImGui::TextColored(kGoodColor, "This folder contains compatible game files.");
             }
         } else {
             if (!c.missing.empty())
-                files_line("Not an EverQuest asset folder. Missing:", c.missing, kErrorColor);
+                files_line("Missing game files:", c.missing, kErrorColor);
             if (!c.missing_rof2.empty())
-                files_line("Not Rain of Fear 2 or a current EverQuest (an older client, or not complete). Missing:", c.missing_rof2, kErrorColor);
+                files_line("Missing files required for compatibility:", c.missing_rof2, kErrorColor);
         }
         if (c.is_directory && !c.warnings.empty())
             files_line("Not found, but not needed to play:", c.warnings, kDimColor);

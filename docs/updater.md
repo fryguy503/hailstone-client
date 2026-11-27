@@ -57,6 +57,43 @@ Updates are off, whatever the settings say, in these cases (the log says why):
 - **No HTTPS on the system:** on Linux and macOS, the system's libcurl could not be loaded.
 - **Test runs:** `--frames` or `--screenshot`.
 
+## Launcher-managed Windows updates
+
+`HAILSTONE_MANAGED_UPDATES=ON` lets the launcher check and install core updates before play. The client keeps its
+startup health check, running lock and add-on manager. `HAILSTONE_RELEASE_VERSION_OVERRIDE` sets the build's actual
+release version. `HAILSTONE_ADDON_INDEX_KEY` allows a separate public key for the suggested add-on index. A managed
+build defaults to the upstream index key from `update-key.pub` while its core packages use `HAILSTONE_UPDATE_KEY`.
+
+The launcher ships `hailstone_update.exe` with its runtime dependencies. Invoke it as follows.
+
+```text
+hailstone_update <check|apply|prepare> <install-dir> <data-dir> <feed-url> <public-key-hex> <installed-release>
+```
+
+- `check` verifies a Windows x64 release without writing the install or player data. It reports `available` or
+  `current`. The feed's HTTPS URL ends in `/preview/hailstone-update.txt` or `/stable/hailstone-update.txt`, and its
+  signed `bastion-channel` record must match. Each channel can promote the same ZIP with its own signature. For an
+  existing installation supplied with version `0.0.0`, `check` reports `recognized` only if `hailstone.exe` matches
+  the current manifest's signed `bastion-runtime-sha256` record.
+- `apply` checks the feed again and downloads the selected package from beside the feed. It verifies the signature,
+  package size and hashes of the package and extracted executable before changing files. It returns `installed`,
+  `current` or `busy`. Installation defers while a
+  client from this folder is running or a previous update is still pending startup confirmation.
+- `prepare` uses local state to recover an interrupted install or a release that repeatedly failed to start.
+  The native inventory takes precedence over an older launcher receipt. The result is `ready`, `rolled_back` or
+  `busy`. Call it once before requesting a one-use ticket. The real client counts an attempt at process startup and
+  confirms it on the login screen. While a Hailstone process already holds the running lock, another window does
+  not count a separate attempt.
+
+The helper emits `status`, `version`, `current_version`, optional `message` and optional `progress` as `key=value`
+lines. `version` is the offered release on `available`, and `current_version` is the effective installed release.
+A `ready` result includes `pending=1` if the installed release still needs a successful start before another update.
+Process exit code 1 means `status=error`. The launcher supplies the selected channel and its pinned public trust key.
+Keep both directories outside the game files. The launcher can pass `0.0.0` for a new install. Profile folders,
+add-ons and `cfg/` stay in place. A failed start leaves or restores the previous runtime through the native journal.
+Use the launcher for version changes after it starts managing a folder. An in-place manual Setup can leave the
+launcher-managed version inventory and rollback journal from a previous release in that folder.
+
 ## The release feed
 
 The feed is the newest GitHub release's `hailstone-update.txt`: CMake's `HAILSTONE_UPDATE_FEED`, by default
@@ -182,7 +219,7 @@ and the plugins are gone):
    paths, and a plugin package with files outside `plugins/<name>/`. The player's paths (`is_player_path`, and
    `tools/make_update.py`'s copy of it) are:
    - the files `hailstone.ini`, `hailstone-windows.ini` and `notes.txt`;
-   - the folders `update/`, `servers/`, `logs/`, `cache/`, `screenshots/`, `bug-reports/`, `maps/`, `scripts/`,
+   - the folders `update/`, `servers/`, `logs/`, `cache/`, `screenshots/`, `bug-reports/`, `maps/`, `scripts/`, `cfg/`,
      `textures/`, `web/`, `addons/`, `tools/` and `upscalers/` (the last three the add-ons', docs/addons.md), and
      `ui-data/` and `ui-addons/` (the player's interface data and the UI add-ons). So every add-on kind's folder but
      a plugin's is out of an update's reach, whatever its name (an upscaler add-on named `example` included);

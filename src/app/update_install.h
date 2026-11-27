@@ -40,8 +40,10 @@ std::filesystem::path update_dir(const std::filesystem::path& install_dir);
 
 // Whether the file at `path` has this size and SHA-256 (a downloaded package).
 bool package_file_matches(const std::filesystem::path& path, std::uint64_t size, const Sha256Digest& sha256);
+bool runtime_file_matches(const std::filesystem::path& path, const Sha256Digest& sha256);
 
 struct InstalledUpdate {
+    std::string version; // release recorded by the last successful runtime change, or empty for older inventories
     std::map<std::string, Sha256Digest> components;              // component -> its package's hash
     std::map<std::string, std::vector<std::string>> files;       // component -> the files it put in
 };
@@ -64,14 +66,21 @@ std::string failed_update_version(const std::filesystem::path& install_dir);
 
 struct InstallResult {
     bool ok = false;
+    bool busy = false;
     std::string version; // the version installed
     std::string error;
+};
+struct VerifiedUpdate {
+    std::string version;
+    std::vector<UpdatePackage> packages;
+    Sha256Digest runtime_sha256{};
 };
 // Installs the staged update over the folder; `running` is this build's version. On any failure the folder is put
 // back as it was. `progress` (may be empty) gets 0..1. Nothing is installed (an error) while another Hailstone runs
 // from the folder (running.lock): the caller lets go of its own claim (claim_running) first.
 InstallResult install_staged_update(const std::filesystem::path& install_dir, const std::string& running,
-                                    const std::function<void(float)>& progress = {});
+                                    const std::function<void(float)>& progress = {},
+                                    const VerifiedUpdate* verified = nullptr);
 
 // This process's claim on the folder (a shared lock on update/running.lock), held while it runs from the folder's
 // files: no other Hailstone installs or rolls back an update under it. nullopt when it cannot be had (a folder that
@@ -80,6 +89,11 @@ std::optional<platform::ScopedFileLock> claim_running(const std::filesystem::pat
 
 struct StartNote {
     std::string message; // for the player and the log ("" nothing happened)
+    std::string version; // release effective after recovery, for an external launcher
+    bool busy = false;
+    bool rolled_back = false;
+    bool error = false;
+    bool pending = false; // an installed release still needs an actual healthy start
     bool restart = false; // the folder now holds another version than this one: start it and quit
     // This process's claim (claim_running), taken before the install lock is let go so that no other start counts
     // or rolls back between the two. Kept for as long as the process runs.
@@ -90,6 +104,12 @@ struct StartNote {
 // While another one runs, none of that happens (its start was counted, and it runs from these files). Another version
 // than the pending one (the player put one in by hand) ends the pending state.
 StartNote update_at_start(const std::filesystem::path& install_dir, const std::string& running);
+// Launcher preparation without running the client or creating a ticket. Uses native inventory when a launcher
+// receipt was interrupted. A startup is counted by the client itself after the launcher obtains a ticket.
+StartNote prepare_managed_launch(const std::filesystem::path& install_dir, const std::string& running);
+// A ticketed managed client is already starting. Take its running claim and count the attempt without restarting
+// or rolling back under a live ticket. On failure, the client stops before sending the ticket.
+StartNote record_managed_start(const std::filesystem::path& install_dir, const std::string& running);
 // The login screen is up: a pending update of this version started fine, and previous/ goes. False (nothing done)
 // while another process holds the install lock: call it again later.
 bool update_started_fine(const std::filesystem::path& install_dir, const std::string& running);

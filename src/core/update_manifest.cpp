@@ -135,6 +135,15 @@ std::optional<UpdateManifest> parse_update_manifest(std::string_view text, const
         } else if (f[0] == "notes") {
             if (f.size() != 2 || !web_address(f[1])) return fail(error, where + " has a bad notes address");
             m.notes = std::string(f[1]);
+        } else if (f[0] == "bastion-channel") {
+            if (f.size() != 2 || (f[1] != "preview" && f[1] != "stable") || !m.bastion_channel.empty())
+                return fail(error, where + " has a bad release channel");
+            m.bastion_channel = f[1];
+        } else if (f[0] == "bastion-runtime-sha256") {
+            const auto digest = f.size() == 2 ? parse_sha256(f[1]) : std::nullopt;
+            if (!digest || m.bastion_runtime_sha256)
+                return fail(error, where + " has a bad runtime digest");
+            m.bastion_runtime_sha256 = digest;
         } else if (f[0] == "package") {
             if (f.size() != 6 && f.size() != 7) return fail(error, where + " is not a package");
             UpdatePackage p;

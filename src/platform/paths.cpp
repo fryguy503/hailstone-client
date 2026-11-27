@@ -128,7 +128,7 @@ std::string given_data_dir_problem(const std::filesystem::path& dir) {
     } catch (const std::exception&) {
         folder = "the folder given";
     }
-    return "Hailstone's data folder (" + folder + ") is an EverQuest folder, which Hailstone only reads. Name a "
+    return "Hailstone's data folder (" + folder + ") contains your game files. Choose a "
            "folder of its own (HAILSTONE_DATA_DIR) and start it again.";
 }
 
@@ -148,8 +148,8 @@ DataDirChoice choose_data_dir(const std::filesystem::path& install, const std::f
     // Unpacked into the EverQuest folder: that is the asset folder, which Hailstone never writes (not even the probe
     // file of the write test).
     if (has_any_file(install, {"eqgame.exe", "spells_us.txt", "eqclient.ini"}))
-        return {install, "portable", "Hailstone is in an EverQuest folder (" + folder +
-                                         "), which it only reads. Move the Hailstone folder somewhere of its own, "
+        return {install, "portable", "Hailstone is in your game folder (" + folder +
+                                         "). Move the Hailstone folder somewhere of its own, "
                                          "for example your Documents or Games folder, and start it again."};
     if (!is_writable_dir(install))
         return {install, "portable", "Hailstone keeps all its settings in its own folder, and it cannot write to " +

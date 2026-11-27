@@ -22,8 +22,8 @@
 1 src/app/lua_ui_scripts.cpp
 8 src/app/main.cpp
 2 src/app/model_viewer.cpp
-16 src/app/update_install.cpp
-3 src/app/updater.cpp
+14 src/app/update_install.cpp
+1 src/app/updater.cpp
 1 src/app/window_icon.cpp
 4 src/assets/model_overrides.cpp
 6 src/assets/pfs.cpp

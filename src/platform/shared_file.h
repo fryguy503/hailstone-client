@@ -88,6 +88,10 @@ private:
 // The cache leaf must be current-user owned and private already. Never repairs permissions on an existing directory.
 bool prepare_private_cache_directory(const std::filesystem::path& path);
 
+// An absolute path whose existing entries are ordinary directories/files. Refuses symlinks and Windows reparse
+// points, including in ancestors. Missing entries are permitted. A launcher can also require a local drive.
+bool ordinary_path(const std::filesystem::path& path, bool local_drive = false);
+
 struct FileStamp {
     std::uint64_t size = 0;
     // File identity plus modification/change timestamps, from the open handle rather than a second path lookup.

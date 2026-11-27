@@ -222,7 +222,7 @@ TEST_CASE("hs.LoginSet and hs.LoginDo: the fields change, and the buttons ask th
 
     // The game files: the one in use is not picked again.
     v.game_folders = {{"/games/rof2", false, true}, {"/games/live", true, true}, {"/games/gone", false, false}};
-    CHECK(ui("return hs.LoginScreen().gameFolders[2].label") == "Live: live");
+    CHECK(ui("return hs.LoginScreen().gameFolders[2].label") == "Current: live");
     CHECK(ui("return hs.LoginDo('gameFolder', 1)") == "false");
     CHECK(ui("return hs.LoginDo('gameFolder', 3)") == "false"); // not usable
     CHECK(ui("return hs.LoginDo('gameFolder', 2)") == "true");

@@ -20,7 +20,7 @@ void ClientApp::start_updater() {
     const std::filesystem::path install = platform::install_dir();
     // What's new: this release's part of the CHANGELOG.md shipped with it (a nightly's: the unreleased part).
     if (auto text = read_text_file(install / std::string(kChangelogName)))
-        login_view_.release_notes = changelog_section(*text, changelog_heading(release_version()));
+        login_view_.release_notes = build_changelog(*text, release_version(), launcher_manages_updates());
     login_view_.project_page = default_project_page();
     n.check = "off";
     if (!opts_.updates) {
@@ -28,6 +28,10 @@ void ClientApp::start_updater() {
         return;
     }
     n.message = opts_.update_note;
+    if (launcher_manages_updates()) {
+        n.off_reason = "Managed by the launcher";
+        return;
+    }
     update_settings_ = update_settings(config_);
     if (!update_settings_.check) {
         log::info("Updates: not checked (hailstone.ini update.check=0)");

@@ -778,7 +778,7 @@ LoginAction login_screen(LoginView& view) {
                 ImGui::EndCombo();
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("The EverQuest files to play with, RoF2 or live: %s\nA server's own files go over them.",
+                ImGui::SetTooltip("Your game files are in %s\nYour server can provide additional files.",
                                   current.path.c_str());
         }
     }
@@ -1154,7 +1154,7 @@ LoginAction login_screen(LoginView& view) {
 std::string game_folder_label(const GameFolder& folder) {
     std::filesystem::path p(folder.path);
     std::string name = (p.has_filename() ? p.filename() : p.parent_path().filename()).string();
-    const char* kind = !folder.usable ? "Not usable" : folder.live ? "Live" : "RoF2";
+    const char* kind = !folder.usable ? "Not usable" : folder.live ? "Current" : "Legacy";
     return std::string(kind) + ": " + (name.empty() ? folder.path : name);
 }
 

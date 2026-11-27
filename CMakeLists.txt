@@ -7,6 +7,7 @@ project(hailstone VERSION 0.7.3 LANGUAGES C CXX)
 # updater compares against a release's manifest (core/version.h, docs/updater.md), so change both with each release.
 set(HAILSTONE_VERSION_LABEL "beta")
 set(HAILSTONE_DISPLAY_VERSION "" CACHE STRING "Optional display version using this release's numeric prefix")
+set(HAILSTONE_RELEASE_VERSION_OVERRIDE "" CACHE STRING "Exact release version for downstream packages")
 # A nightly build's label in place of the release's ("nightly.20261126", tools/nightly.sh). SemVer ranks it above a
 # "beta" label of the same version, so the updater offers a nightly the next release, not this one. Release builds reset
 # it (tools/docker/release_options.sh).
@@ -18,6 +19,9 @@ if(HAILSTONE_VERSION_LABEL STREQUAL "")
   set(HAILSTONE_RELEASE_VERSION ${PROJECT_VERSION})
 else()
   set(HAILSTONE_RELEASE_VERSION ${PROJECT_VERSION}-${HAILSTONE_VERSION_LABEL})
+endif()
+if(NOT HAILSTONE_RELEASE_VERSION_OVERRIDE STREQUAL "")
+  set(HAILSTONE_RELEASE_VERSION "${HAILSTONE_RELEASE_VERSION_OVERRIDE}")
 endif()
 
 # Portable RoF2-compatible client. Plan: docs/plan.md
@@ -813,15 +817,27 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/update-key.pub)
   file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/update-key.pub HAILSTONE_UPDATE_KEY_DEFAULT REGEX "^[0-9a-fA-F]+$" LIMIT_COUNT 1)
 endif()
 set(HAILSTONE_UPDATE_KEY "${HAILSTONE_UPDATE_KEY_DEFAULT}" CACHE STRING "The release key's public half (hex); empty: no updates")
+option(HAILSTONE_MANAGED_UPDATES "Let an external launcher manage Hailstone core updates" OFF)
+if(HAILSTONE_MANAGED_UPDATES)
+  set(HAILSTONE_ADDON_INDEX_KEY_DEFAULT "${HAILSTONE_UPDATE_KEY_DEFAULT}")
+else()
+  set(HAILSTONE_ADDON_INDEX_KEY_DEFAULT "${HAILSTONE_UPDATE_KEY}")
+endif()
+set(HAILSTONE_ADDON_INDEX_KEY "default" CACHE STRING "The suggested add-on index key (hex or default)")
+if(HAILSTONE_ADDON_INDEX_KEY STREQUAL "default")
+  set(HAILSTONE_ADDON_INDEX_KEY "${HAILSTONE_ADDON_INDEX_KEY_DEFAULT}")
+endif()
 # The cache keeps the key of the build folder's first configure (or a -D given since): said at every configure, so a
 # folder that holds another key than update-key.pub's is noticed. Release builds name it each time
 # (tools/docker/release_options.sh), and tools/make_update.py refuses a binary without update-key.pub's.
-if(NOT HAILSTONE_UPDATE_KEY STREQUAL HAILSTONE_UPDATE_KEY_DEFAULT)
+if(NOT HAILSTONE_MANAGED_UPDATES AND NOT HAILSTONE_UPDATE_KEY STREQUAL HAILSTONE_UPDATE_KEY_DEFAULT)
   message(WARNING "HAILSTONE_UPDATE_KEY is not update-key.pub's key: this build takes no update signed with the "
                   "release key (configure with -DHAILSTONE_UPDATE_KEY=<update-key.pub's line> to change it)")
 endif()
 set_property(SOURCE src/app/updater.cpp APPEND PROPERTY COMPILE_DEFINITIONS
              HAILSTONE_UPDATE_FEED="${HAILSTONE_UPDATE_FEED}" HAILSTONE_UPDATE_KEY="${HAILSTONE_UPDATE_KEY}"
+             HAILSTONE_MANAGED_UPDATES=$<BOOL:${HAILSTONE_MANAGED_UPDATES}>
+             HAILSTONE_ADDON_INDEX_KEY="${HAILSTONE_ADDON_INDEX_KEY}"
              HAILSTONE_ADDON_INDEX="${HAILSTONE_ADDON_INDEX}" HAILSTONE_PROJECT_PAGE="${HAILSTONE_PROJECT_PAGE}")
 target_link_libraries(hailstone_engine PUBLIC SDL3::SDL3 Vulkan::Headers volk::volk_headers GPUOpen::VulkanMemoryAllocator glm::glm ZLIB::ZLIB)
 if(WIN32)
@@ -1064,7 +1080,7 @@ if(HAILSTONE_BROWSER)
 endif()
 
 # Command-line tools.
-set(HAILSTONE_TOOLS pfsdump texdump texpack wlddump florascan chrdump netprobe playprobe eqgdump audiodump hailstone_check hailstone_sign world_geometry_probe)
+set(HAILSTONE_TOOLS pfsdump texdump texpack wlddump florascan chrdump netprobe playprobe eqgdump audiodump hailstone_check hailstone_sign hailstone_update world_geometry_probe)
 foreach(tool ${HAILSTONE_TOOLS})
   add_executable(${tool} tools/${tool}.cpp ${HAILSTONE_WIN_MANIFEST})
   target_compile_options(${tool} PRIVATE ${HAILSTONE_WARNINGS})

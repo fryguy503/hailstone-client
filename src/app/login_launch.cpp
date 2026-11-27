@@ -43,7 +43,7 @@ bool consume_login_launch_arg(LoginLaunch& launch, std::span<const std::string_v
         if (valid && !too_long) launch.ticket.assign(ticket);
         if (from_env) core::wipe(*from_env);
         if (too_long)
-            throw std::runtime_error("RoF2-style /ticket: accepts at most 63 bytes; use --ticket for a larger ticket.");
+            throw std::runtime_error("/ticket: accepts at most 63 bytes. Use --ticket for a larger ticket.");
         if (!valid) throw std::runtime_error("Login ticket is empty, contains a NUL, or exceeds the supported size.");
         return true;
     }
@@ -109,7 +109,7 @@ ServerProfile token_login_profile(std::string_view saved_name, const ServerProfi
         profile.name = profile.host;
     } else if (!eqhost_trusted)
         throw std::runtime_error("A login ticket needs its server named for this run: --server, --host, or --game-dir "
-                                 "(whose eqhost.txt names it), or Hailstone installed in the EverQuest folder.");
+                                 "(whose eqhost.txt names it), or Hailstone installed beside your game files.");
     else if (eqhost) profile = *eqhost;
     else throw std::runtime_error("A login ticket needs --server, --host, or an eqhost.txt in the game folder.");
     if (!host.empty()) profile.host = host;

@@ -42,6 +42,8 @@ struct UpdateManifest {
     std::string version_text; // as written
     std::string notes;        // the release's page (http or https; "" none)
     std::vector<UpdatePackage> packages;
+    std::string bastion_channel; // a signed downstream promotion record ("" for upstream releases)
+    std::optional<Sha256Digest> bastion_runtime_sha256;
 };
 
 // The manifest in `text` when its signature is `key`'s and it parses; nullopt with *error why not.

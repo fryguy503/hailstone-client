@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Launcher-managed Windows builds support signed channel updates and pre-launch recovery while retaining client
+  startup confirmation, profiles and add-ons.
 - UI add-on artwork uses UTF-8 paths for its texture cache on Windows.
 - Custom builds can set a display version shown at login and in the in-game Help window.
 - Inventory add-ons can read quest flags and bag types and preview which empty slots accept the item on the cursor.

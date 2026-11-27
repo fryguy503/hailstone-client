@@ -290,7 +290,7 @@ local function gameFiles(view, s)
       if ui.Selectable("Browse...") then API.pregame.LoginDo("browse") end
       ui.EndCombo()
     end
-    P.Tip("The EverQuest files to play with, RoF2 or live: " .. current.path .. "\nA server's own files go over them.")
+    P.Tip("Your game files are in " .. current.path .. "\nYour server can provide additional files.")
   end) end
   texturePack(s)
   ui.EndTable()

@@ -184,9 +184,9 @@ void usage() {
     std::printf(
         "usage: hailstone [options]\n"
         "Without --zone or --ui-demo, runs the client: log in, pick a server and a character, play.\n"
-        "  --game-dir DIR     EverQuest installation, RoF2 or live (default: $EQ_GAME_DIR; the client:\n"
+        "  --game-dir DIR     folder containing your game files (default: $EQ_GAME_DIR; the client:\n"
         "                     else the folder chosen in its asset-folder picker, hailstone.ini assets.path)\n"
-        "  --classic-dir DIR  another install (EverQuest Legends) for the classic zones a live one lacks\n"
+        "  --classic-dir DIR  another game folder for classic zones missing from the current files\n"
         "                     (the client: else hailstone.ini assets.classic)\n"
         "  --user U --password P --character C\n"
         "                     log in and enter the world without clicks (testing: the password shows in\n"
@@ -887,6 +887,13 @@ int main(int argc, char** argv) {
                     return 0;
                 }
                 c.update_note = note.message;
+                running_claim = std::move(note.running_claim);
+            } else if (c.updates && app::launcher_manages_updates()) {
+                app::StartNote note = app::record_managed_start(platform::install_dir(), release_version());
+                if (!note.running_claim) {
+                    log::error("{}", note.message);
+                    return 1;
+                }
                 running_claim = std::move(note.running_claim);
             } else if (c.updates || c.box_child) {
                 running_claim = app::claim_running(platform::install_dir());

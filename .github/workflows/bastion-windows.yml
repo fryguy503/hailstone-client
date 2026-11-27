@@ -1,0 +1,45 @@
+name: Bastion Windows candidate
+
+on:
+  push:
+    tags:
+      - 'bastion-v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bastion-candidate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-x64:
+    if: github.repository == 'fryguy503/hailstone-client'
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build, test, and package the exact release tag
+        shell: pwsh
+        env:
+          BASTION_HAILSTONE_UPDATE_PUBLIC_KEY: ${{ vars.BASTION_HAILSTONE_UPDATE_PUBLIC_KEY }}
+        run: |
+          $checkoutCommit = git rev-parse HEAD
+          $eventCommit = git rev-parse --verify "${env:GITHUB_SHA}^{commit}"
+          if ($LASTEXITCODE -ne 0 -or $checkoutCommit -cne $eventCommit) {
+            throw 'The checked-out release tag changed after this workflow was triggered.'
+          }
+          ./packaging/bastion/Build-WindowsRelease.ps1 `
+            -ReleaseTag $env:GITHUB_REF_NAME -ExpectedCommit $eventCommit `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP 'bastion-windows') `
+            -PublicKey $env:BASTION_HAILSTONE_UPDATE_PUBLIC_KEY -ProvisionInno -TestInstaller
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: bastion-windows-${{ github.ref_name }}
+          path: ${{ runner.temp }}/bastion-windows/release/*
+          if-no-files-found: error
+          retention-days: 30

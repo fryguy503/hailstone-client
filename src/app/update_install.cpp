@@ -12,6 +12,7 @@
 #include "app/addon_install.h"
 #include "core/atomic_file.h"
 #include "core/log.h"
+#include "core/path_utf8.h"
 #include "core/zip_read.h"
 #include "platform/durable_file.h"
 #include "platform/shared_file.h"
@@ -66,15 +67,10 @@ std::vector<std::string_view> words(std::string_view s) {
     return out;
 }
 
-struct Staged {
-    std::string version;
-    std::vector<UpdatePackage> packages;
-};
-
-std::optional<Staged> read_staged(const fs::path& install_dir) {
+std::optional<VerifiedUpdate> read_staged(const fs::path& install_dir) {
     auto text = read_text_file(update_dir(install_dir) / "ready.txt");
     if (!text) return std::nullopt;
-    Staged s;
+    VerifiedUpdate s;
     for (const auto& line : lines_of(*text)) {
         const auto w = words(line);
         if (w.size() == 2 && w[0] == "version") {
@@ -135,10 +131,14 @@ void remove_quietly(const fs::path& path) {
 // deleted. The rename is on the disk when it returns (platform/durable_file.h), so a power cut after state.txt says
 // "pending" cannot leave a file the journal says moved where it was.
 bool move_file(const fs::path& from, const fs::path& to, std::string* error) {
+    if (!platform::ordinary_path(from) || !platform::ordinary_path(to)) {
+        if (error) *error = "an update file passes through a link or an invalid path";
+        return false;
+    }
     std::error_code ec;
     fs::create_directories(to.parent_path(), ec);
     platform::replace_file_synced(from, to, ec);
-    if (ec && error) *error = "cannot move " + from.string() + " to " + to.string() + ": " + ec.message();
+    if (ec && error) *error = "cannot move " + path_utf8(from) + " to " + path_utf8(to) + ": " + ec.message();
     return !ec;
 }
 
@@ -159,12 +159,13 @@ bool owned_by_addon(const fs::path& install_dir, std::string_view name) {
 
 // Moves a file out of the way into update/trash/ (removed at the next start, when nothing has it open). Never a
 // folder: an update moves files only, and a folder in the way holds files it did not put there.
-void trash(const fs::path& install_dir, const fs::path& file) {
+bool trash(const fs::path& install_dir, const fs::path& file) {
+    if (!platform::ordinary_path(file)) return false;
     std::error_code ec;
-    if (!fs::exists(fs::symlink_status(file, ec))) return;
+    if (!fs::exists(fs::symlink_status(file, ec))) return !ec || ec == std::errc::no_such_file_or_directory;
     if (is_directory_entry(file)) {
         log::warn("Update: rolling back: {} is a folder, not a file the update moved; it stays", file.string());
-        return;
+        return false;
     }
     // A name of its own each time: an earlier run's trash may still be there, held open by a program still running.
     static int n = 0;
@@ -172,7 +173,9 @@ void trash(const fs::path& install_dir, const fs::path& file) {
     const fs::path to =
         update_dir(install_dir) / "trash" / (std::to_string(stamp) + "-" + std::to_string(++n)) / file.filename();
     std::string why;
-    if (!move_file(file, to, &why)) log::warn("Update: {}", why);
+    if (move_file(file, to, &why)) return true;
+    log::warn("Update: {}", why);
+    return false;
 }
 
 // The journal's lines that were written whole: a line is written before its move, so one cut off by a crash (no
@@ -205,7 +208,7 @@ bool holds_a_file(const fs::path& folder) {
 }
 
 // Undoes the moves the journal lists, last first, and puts installed.txt back.
-void roll_back(const fs::path& install_dir) {
+bool roll_back(const fs::path& install_dir, bool managed = false) {
     const fs::path dir = update_dir(install_dir);
     auto text = read_text_file(dir / "journal.txt");
     auto lines = text ? journal_lines(*text) : std::vector<std::pair<std::string, std::string>>{};
@@ -217,24 +220,31 @@ void roll_back(const fs::path& install_dir) {
             // `target` is still the original, so it stays.
             const fs::path saved = dir / "previous" / rel(name);
             std::error_code ec;
+            if (managed && (!platform::ordinary_path(saved) || !platform::ordinary_path(target)))
+                return false;
             if (!fs::exists(fs::symlink_status(saved, ec)) || is_directory_entry(saved)) continue;
             if (is_directory_entry(target)) {
                 log::warn("Update: rolling back: {} is a folder now; its old file is not put back", target.string());
+                if (managed) return false;
                 continue;
             }
-            trash(install_dir, target);
+            if (!trash(install_dir, target) && managed) return false;
             std::string why;
-            if (!move_file(saved, target, &why)) log::warn("Update: rolling back: {}", why);
+            if (!move_file(saved, target, &why)) {
+                log::warn("Update: rolling back: {}", why);
+                if (managed) return false;
+            }
         } else {
-            trash(install_dir, target);
+            if (!trash(install_dir, target) && managed) return false;
         }
     }
     std::error_code ec;
     if (fs::exists(dir / "installed.prev.txt", ec)) {
-        fs::rename(dir / "installed.prev.txt", dir / "installed.txt", ec);
+        platform::replace_file_synced(dir / "installed.prev.txt", dir / "installed.txt", ec);
     } else {
         fs::remove(dir / "installed.txt", ec);
     }
+    if (ec && managed) return false;
     remove_quietly(dir / "journal.txt");
     // After the undo previous/ holds no file: each went back. One still there is a copy the journal does not name (a
     // journal the disk lost, damaged, or a move back that failed), possibly the only copy of a replaced file, so it
@@ -256,6 +266,7 @@ void roll_back(const fs::path& install_dir) {
     }
     remove_quietly(dir / "new");
     remove_quietly(dir / "state.txt");
+    return true;
 }
 
 void end_pending(const fs::path& install_dir) {
@@ -268,6 +279,7 @@ void end_pending(const fs::path& install_dir) {
 
 bool write_installed(const fs::path& install_dir, const InstalledUpdate& in) {
     std::string text = "# The files Hailstone's updates installed (docs/updater.md).\n";
+    if (!in.version.empty()) text += "version " + in.version + "\n";
     for (const auto& [component, digest] : in.components) text += "component " + component + " " + to_hex(digest) + "\n";
     for (const auto& [component, files] : in.files)
         for (const auto& f : files) text += "file " + component + " " + f + "\n";
@@ -294,12 +306,23 @@ bool package_file_matches(const fs::path& path, std::uint64_t size, const Sha256
     return h.finish() == sha256;
 }
 
+bool runtime_file_matches(const fs::path& path, const Sha256Digest& sha256) {
+    if (!platform::ordinary_path(path)) return false;
+    std::error_code ec;
+    const auto size = fs::file_size(path, ec);
+    return !ec && package_file_matches(path, size, sha256);
+}
+
 InstalledUpdate read_installed_update(const fs::path& install_dir) {
     InstalledUpdate out;
     auto text = read_text_file(update_dir(install_dir) / "installed.txt");
     if (!text) return out;
     for (const auto& line : lines_of(*text)) {
         auto [what, rest] = split(line);
+        if (what == "version" && parse_version(rest)) {
+            out.version = rest;
+            continue;
+        }
         auto [component, value] = split(rest);
         if (component.empty() || value.empty()) continue;
         if (what == "component") {
@@ -313,11 +336,11 @@ InstalledUpdate read_installed_update(const fs::path& install_dir) {
 
 bool is_player_path(std::string_view path) {
     const std::string p = lower(path);
-    if (p == "ui-data" || p == "ui-addons") return true;
+    if (p == "ui-data" || p == "ui-addons" || p == "cfg") return true;
     const std::string_view first = std::string_view(p).substr(0, p.find('/'));
     static const std::set<std::string_view> folders = {"update", "servers", "logs",  "cache", "screenshots",
                                                        "bug-reports", "maps", "scripts", "textures", "web",
-                                                       "addons", "tools", "upscalers", "ui-data", "ui-addons"};
+                                                       "addons", "tools", "upscalers", "ui-data", "ui-addons", "cfg"};
     static const std::set<std::string_view> files = {"hailstone.ini", "hailstone-windows.ini", "notes.txt"};
     if (first.size() < p.size() && folders.count(first)) return true;
     if (files.count(p)) return true;
@@ -365,6 +388,7 @@ namespace {
 // with the process, so a crash never leaves it held.
 std::optional<platform::ScopedFileLock> lock_install(const fs::path& install_dir) {
     const fs::path dir = update_dir(install_dir);
+    if (!platform::ordinary_path(dir)) return std::nullopt;
     std::error_code ec;
     fs::create_directories(dir, ec);
     return platform::ScopedFileLock::try_acquire(dir / "install.lock", platform::FileLockMode::Exclusive,
@@ -377,6 +401,7 @@ std::optional<platform::ScopedFileLock> lock_install(const fs::path& install_dir
 // install lock never fails on another process's passing check.
 std::optional<platform::ScopedFileLock> lock_running(const fs::path& install_dir, platform::FileLockMode mode) {
     const fs::path dir = update_dir(install_dir);
+    if (!platform::ordinary_path(dir)) return std::nullopt;
     std::error_code ec;
     fs::create_directories(dir, ec);
     return platform::ScopedFileLock::try_acquire(dir / "running.lock", mode, platform::LockFolder::Ordinary);
@@ -399,11 +424,12 @@ std::optional<platform::ScopedFileLock> claim_running(const fs::path& install_di
 }
 
 InstallResult install_staged_update(const fs::path& install_dir, const std::string& running,
-                                    const std::function<void(float)>& progress) {
+                                    const std::function<void(float)>& progress, const VerifiedUpdate* verified) {
     InstallResult r;
     const fs::path dir = update_dir(install_dir);
     const auto lock = lock_install(install_dir);
     if (!lock) {
+        r.busy = true;
         r.error = "another Hailstone is installing or rolling back an update in this folder";
         log::warn("Update: {}; this one leaves it to that one", r.error);
         return r;
@@ -412,11 +438,23 @@ InstallResult install_staged_update(const fs::path& install_dir, const std::stri
     // them replaced under it: the update stays staged for a later quit.
     const auto alone = lock_running(install_dir, platform::FileLockMode::Exclusive);
     if (!alone) {
+        r.busy = true;
         r.error = "another Hailstone is running from this folder; the update is installed at a later quit";
         log::info("Update: {}", r.error);
         return r;
     }
-    auto staged = read_staged(install_dir);
+    if (verified && !read_state(install_dir).kind.empty()) {
+        r.busy = true;
+        r.error = "The previous Hailstone update needs to finish starting before another can be installed.";
+        return r;
+    }
+    const InstalledUpdate old = read_installed_update(install_dir);
+    if (verified && !old.version.empty() && old.version != running) {
+        r.busy = true;
+        r.error = "Hailstone changed during the update check. Check for updates again.";
+        return r;
+    }
+    auto staged = verified ? std::optional(*verified) : read_staged(install_dir);
     if (!staged) {
         r.error = "no update is staged";
         return r;
@@ -475,6 +513,8 @@ InstallResult install_staged_update(const fs::path& install_dir, const std::stri
                 continue;
             }
             // An update replaces files only: a folder where a file goes holds what the update did not put there.
+            if (!platform::ordinary_path(install_dir / rel(e.name)))
+                return refuse("An update file passes through a link or an invalid path.");
             if (is_directory_entry(install_dir / rel(e.name)))
                 return refuse(p.file + " holds " + e.name + ", but that is a folder in the Hailstone folder");
             if (!reader.extract_to_file(e, dir / "new" / rel(e.name))) {
@@ -485,10 +525,11 @@ InstallResult install_staged_update(const fs::path& install_dir, const std::stri
             files.push_back(e.name);
         }
     }
+    if (verified && !runtime_file_matches(dir / "new" / "hailstone.exe", verified->runtime_sha256))
+        return refuse("The packaged Hailstone executable does not match its signed manifest.");
     report(0.5f);
 
     // 2. Move the old files into previous/ and the new ones into place, each move written to the journal first.
-    const InstalledUpdate old = read_installed_update(install_dir);
     remove_quietly(dir / "previous");
     remove_quietly(dir / "journal.txt");
     std::error_code ec;
@@ -513,7 +554,7 @@ InstallResult install_staged_update(const fs::path& install_dir, const std::stri
         return platform::append_file_synced(journal, std::string(what) + " " + std::string(name) + "\n");
     };
     auto fail = [&](std::string why) {
-        roll_back(install_dir);
+        roll_back(install_dir, verified != nullptr);
         r.error = std::move(why);
         log::warn("Update: {}; the folder was put back as it was", r.error);
         return r;
@@ -558,6 +599,7 @@ InstallResult install_staged_update(const fs::path& install_dir, const std::stri
     }
 
     InstalledUpdate now = old;
+    now.version = staged->version;
     for (const auto& p : staged->packages) {
         if (skipped.count(p.component)) continue;
         now.components[p.component] = p.sha256;
@@ -574,14 +616,17 @@ InstallResult install_staged_update(const fs::path& install_dir, const std::stri
     return r;
 }
 
-StartNote update_at_start(const fs::path& install_dir, const std::string& running) {
+namespace {
+StartNote prepare_start(const fs::path& install_dir, std::string running, bool managed) {
     StartNote note;
+    note.version = running;
     const fs::path dir = update_dir(install_dir);
     // Another Hailstone is installing (its state reads "installing") or rolling back: not this one's to undo.
     const auto lock = lock_install(install_dir);
     if (!lock) {
         log::warn("Update: another Hailstone is installing or rolling back in this folder; leaving it to that one");
-        note.running_claim = take_claim(install_dir);
+        note.busy = true;
+        if (!managed) note.running_claim = take_claim(install_dir);
         return note;
     }
     // Whether another Hailstone runs from the folder now: then its files are in use, and its start (of the same
@@ -594,13 +639,32 @@ StartNote update_at_start(const fs::path& install_dir, const std::string& runnin
         remove_quietly(dir / "note.txt");
     }
     const State st = read_state(install_dir);
+    if (managed) {
+        if (st.kind == "pending") {
+            // The inventory and the pending journal are written before the launcher receives the apply result.
+            // A launcher crash must not cause its older receipt to discard the rollback backup.
+            running = st.new_version;
+            note.pending = true;
+        } else if (st.kind.empty()) {
+            const auto installed = read_installed_update(install_dir);
+            if (!installed.version.empty()) running = installed.version;
+        }
+        note.version = running;
+    }
     if (st.kind == "installing" && !alone) {
+        note.busy = true;
         // Not under another one running from these files; the next start while none does puts the folder back.
         log::warn("Update: the update to Hailstone {} was cut off, but another Hailstone runs from this folder; it is "
                   "put back at a start while none does",
                   st.new_version);
     } else if (st.kind == "installing") {
-        roll_back(install_dir);
+        if (!roll_back(install_dir, managed)) {
+            note.error = true;
+            note.message = "Hailstone could not restore its previous files. The update backup is still available.";
+            return note;
+        }
+        note.rolled_back = true;
+        note.version = st.old_version;
         note.message = "The update to Hailstone " + st.new_version + " was cut off, so " + st.old_version +
                        " was put back.";
         note.restart = running != st.old_version;
@@ -613,12 +677,19 @@ StartNote update_at_start(const fs::path& install_dir, const std::string& runnin
             // every window would roll back an update that runs, from under the windows that run it.
             log::info("Update: this start of {} is not counted: another Hailstone runs from this folder", running);
         } else if (st.starts >= 2) {
-            roll_back(install_dir);
+            if (!roll_back(install_dir, managed)) {
+                note.error = true;
+                note.message = "Hailstone could not restore its previous files. The update backup is still available.";
+                return note;
+            }
             write_file_atomic(update_dir(install_dir) / "failed.txt", st.new_version + "\n");
+            note.rolled_back = true;
+            note.version = st.old_version;
+            note.pending = false;
             note.message = "Hailstone " + st.new_version + " did not start properly, so " + st.old_version +
                            " was put back.";
             note.restart = true;
-        } else {
+        } else if (!managed) {
             State next = st;
             ++next.starts;
             write_state(install_dir, next);
@@ -629,7 +700,47 @@ StartNote update_at_start(const fs::path& install_dir, const std::string& runnin
         write_file_atomic(dir / "note.txt", note.message + "\n");
     }
     alone.reset();
-    note.running_claim = take_claim(install_dir); // still under the install lock
+    if (!managed) note.running_claim = take_claim(install_dir); // still under the install lock
+    return note;
+}
+} // namespace
+
+StartNote update_at_start(const fs::path& install_dir, const std::string& running) {
+    return prepare_start(install_dir, running, false);
+}
+
+StartNote prepare_managed_launch(const fs::path& install_dir, const std::string& running) {
+    return prepare_start(install_dir, running, true);
+}
+
+StartNote record_managed_start(const fs::path& install_dir, const std::string& running) {
+    StartNote note;
+    const auto lock = lock_install(install_dir);
+    if (!lock) {
+        note.message = "Hailstone is finishing an update. Try launching again.";
+        return note;
+    }
+    const State st = read_state(install_dir);
+    auto alone = lock_running(install_dir, platform::FileLockMode::Exclusive);
+    if (st.kind == "installing" || (st.kind == "pending" && st.new_version != running)) {
+        note.message = "Open the launcher to recover the Hailstone installation.";
+        return note;
+    }
+    if (alone && st.kind == "pending") {
+        if (st.starts >= 2) {
+            note.message = "Open the launcher to restore the previous Hailstone release.";
+            return note;
+        }
+        State next = st;
+        ++next.starts;
+        if (!write_state(install_dir, next)) {
+            note.message = "Hailstone could not record its startup.";
+            return note;
+        }
+    }
+    alone.reset();
+    note.running_claim = take_claim(install_dir);
+    if (!note.running_claim) note.message = "Hailstone could not hold its installation open. Try launching again.";
     return note;
 }
 

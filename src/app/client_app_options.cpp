@@ -224,7 +224,7 @@ bool ClientApp::choose_asset_folder() {
     asset_source_ = r.source;
     log::info("asset folder {}{}", folder->string(),
               r.source == AssetFolderSource::Override ? " (--game-dir / EQ_GAME_DIR)"
-              : r.source == AssetFolderSource::Found  ? " (the EverQuest folder Hailstone is in)"
+              : r.source == AssetFolderSource::Found  ? " (the game files beside Hailstone)"
                                                       : "");
     return true;
 }

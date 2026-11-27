@@ -217,6 +217,91 @@ TEST_CASE("update install: the player's files are never an update's") {
         CHECK_MESSAGE(!is_player_path(p), p);
 }
 
+TEST_CASE("managed update: checking verifies the signed promotion channel without writing runtime state") {
+    test::ScratchDir dir("managed_update_check");
+    const auto inst = dir.path() / "client";
+    const auto data = dir.path() / "profile";
+    const Keys key;
+    Feed feed;
+    const auto zip = zip_of({{"hailstone.exe", "promoted"}});
+    const std::string package = package_line("core", "p.zip", zip);
+    const std::string digest = "bastion-runtime-sha256 " + to_hex(sha256("promoted")) + "\n";
+    auto check = [&] {
+        auto env = env_for(inst, feed, key);
+        env.data_dir = data;
+        env.channel = "stable";
+        env.remember_feed = false;
+        env.reuse_staged = false;
+        env.auto_download = false;
+        Updater updater(std::move(env));
+        updater.check();
+        updater.wait();
+        return updater.status();
+    };
+    const std::string body = "hailstone-update 1\nversion 0.2.0\n";
+    feed.files[kFeed] = sign(key, body + package);
+    CHECK(check().state == UpdateState::Failed);
+    feed.files[kFeed] = sign(key, body + "bastion-channel preview\n" + digest + package);
+    CHECK(check().state == UpdateState::Failed);
+    feed.files[kFeed] = sign(key, body + "bastion-channel preview\nbastion-channel stable\n" + package);
+    CHECK(check().state == UpdateState::Failed);
+    feed.files[kFeed] = sign(key, body + "bastion-channel stable\n" + package);
+    CHECK(check().state == UpdateState::Failed);
+    feed.files[kFeed] = sign(key, body + "bastion-channel stable\n" + digest + digest + package);
+    CHECK(check().state == UpdateState::Failed);
+    feed.files[kFeed] = sign(key, body + "bastion-channel stable\n" + digest + package);
+    CHECK(check().state == UpdateState::Available);
+    CHECK(check().runtime_sha256 == sha256("promoted"));
+    CHECK_FALSE(fs::exists(inst));
+    CHECK_FALSE(fs::exists(data));
+}
+
+TEST_CASE("managed update: a stale launcher receipt keeps native rollback until the client starts") {
+    test::ScratchDir dir("managed_update_launch");
+    const auto inst = dir.path();
+    put(inst / "hailstone.exe", "old");
+    put(inst / "cfg/character.cfg", "player commands");
+    const auto zip = zip_of({{"hailstone.exe", "new"}});
+    put(inst / "update/download/p.zip", zip);
+    UpdatePackage package;
+    package.component = "core";
+    package.file = "p.zip";
+    package.size = zip.size();
+    package.sha256 = sha256(zip);
+    const VerifiedUpdate invalid{"0.2.0", {package}, sha256("wrong runtime")};
+    CHECK_FALSE(install_staged_update(inst, "0.1.0", {}, &invalid).ok);
+    CHECK(get(inst / "hailstone.exe") == "old");
+    CHECK_FALSE(runtime_file_matches(inst / "hailstone.exe", sha256("new")));
+    const VerifiedUpdate verified{"0.2.0", {package}, sha256("new")};
+    REQUIRE(stage_update(inst, "0.9.0", {}, nullptr)); // a different local staged record cannot select the package
+    REQUIRE(install_staged_update(inst, "0.1.0", {}, &verified).ok);
+    CHECK(runtime_file_matches(inst / "hailstone.exe", sha256("new")));
+    CHECK(read_installed_update(inst).version == "0.2.0");
+    CHECK(install_staged_update(inst, "0.1.0", {}, &verified).busy);
+    CHECK(prepare_managed_launch(inst, "0.1.0").version == "0.2.0");
+    CHECK(prepare_managed_launch(inst, "0.1.0").pending);
+    CHECK(prepare_managed_launch(inst, "0.1.0").version == "0.2.0");
+    CHECK(prepare_managed_launch(inst, "0.1.0").version == "0.2.0"); // no real start yet
+    CHECK(record_managed_start(inst, "0.2.0").running_claim);
+    CHECK(record_managed_start(inst, "0.2.0").running_claim);
+    CHECK(get(inst / "update/previous/hailstone.exe") == "old");
+    {
+        auto active = claim_running(inst);
+        REQUIRE(active);
+        const auto second_window = prepare_managed_launch(inst, "0.1.0");
+        CHECK_FALSE(second_window.busy);
+        CHECK_FALSE(second_window.rolled_back);
+        CHECK(second_window.version == "0.2.0");
+    }
+    const auto prepared = prepare_managed_launch(inst, "0.1.0");
+    CHECK(prepared.rolled_back);
+    CHECK_FALSE(prepared.pending);
+    CHECK(prepared.version == "0.1.0");
+    CHECK(get(inst / "hailstone.exe") == "old");
+    CHECK(get(inst / "cfg/character.cfg") == "player commands");
+    CHECK(is_player_path("cfg/character.cfg"));
+}
+
 TEST_CASE("update install: every add-on kind's folder but a plugin's is the player's") {
     // A plugin folder an add-on installed into is left out by addon_owns_folder; every other kind of add-on has a
     // folder of its own that no update writes or removes, whatever its name (upscalers/example/ included).

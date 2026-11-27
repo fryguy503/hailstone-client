@@ -32,13 +32,13 @@ VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(0|[1-9]\d*|\d
 WORD = re.compile(r"^[a-z0-9_-]{1,64}$")
 # What an update may never write (app/update_install.cpp is_player_path); kept out of packages here too.
 PLAYER_FOLDERS = {"update", "servers", "logs", "cache", "screenshots", "bug-reports", "maps", "scripts", "textures",
-                  "web", "addons", "tools", "upscalers", "ui-data", "ui-addons"}
+                  "web", "addons", "tools", "upscalers", "ui-data", "ui-addons", "cfg"}
 PLAYER_FILES = {"hailstone.ini", "hailstone-windows.ini", "notes.txt"}
 
 
 def is_player_path(name):
     p = name.lower()
-    if p in ("ui-data", "ui-addons"):
+    if p in ("ui-data", "ui-addons", "cfg"):
         return True
     first = p.split("/", 1)[0]
     return ("/" in p and first in PLAYER_FOLDERS) or p in PLAYER_FILES or \

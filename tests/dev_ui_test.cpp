@@ -702,8 +702,8 @@ TEST_CASE("Folder URLs for the file manager") {
 }
 
 TEST_CASE("Login: the Game files row names a folder RoF2, Live or not usable") {
-    CHECK(hailstone::ui::game_folder_label({"/games/EQ RoF2", false, true}) == "RoF2: EQ RoF2");
-    CHECK(hailstone::ui::game_folder_label({"/games/EverQuest/", true, true}) == "Live: EverQuest");
+    CHECK(hailstone::ui::game_folder_label({"/games/Older files", false, true}) == "Legacy: Older files");
+    CHECK(hailstone::ui::game_folder_label({"/games/Game files/", true, true}) == "Current: Game files");
     CHECK(hailstone::ui::game_folder_label({"/mnt/old", true, false}) == "Not usable: old");
 }
 

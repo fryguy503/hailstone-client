@@ -296,8 +296,7 @@ void ClientApp::login_action(ui::LoginAction action) {
         } else if (std::string why = data_folder_conflict(folder, platform::data_dir()); !why.empty()) {
             login_view_.status = {why, true};
         } else if (switch_asset_folder(folder)) {
-            login_view_.status = {std::string("Playing with the ") + (check.live ? "live" : "RoF2") + " files in " +
-                                      folder.string() + ".",
+            login_view_.status = {"Using the game files in " + folder.string() + ".",
                                   false};
         } else {
             login_view_.status = {"Could not switch to " + folder.string() + ".", true};
@@ -363,8 +362,8 @@ void ClientApp::apply_server_profile(const ServerProfile& profile) {
     if (auto missing = missing_server_files(game_); !missing.empty()) {
         std::string list;
         for (const auto& f : missing) list += (list.empty() ? "" : ", ") + f;
-        log::warn("this server's assets folder lacks {}: the live game files' own are used, which do not quite match "
-                  "a RoF2 server (spells, messages, skill caps)",
+        log::warn("this server's asset folder lacks {}. Current game files supply spells, messages and skill caps, "
+                  "which may differ from what this server expects.",
                   list);
     }
     if (changed) reload_server_files();

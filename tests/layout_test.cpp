@@ -134,7 +134,7 @@ TEST_CASE("Layout: the data folder is the Hailstone folder, or a problem to repo
     const fs::path hs = tmp.path / "game-assets";
     write(hs / "eqgame.exe", "exe");
     CHECK(choose(hs).dir == hs);
-    CHECK(choose(hs).problem.find("EverQuest folder") != std::string::npos);
+    CHECK(choose(hs).problem.find("game folder") != std::string::npos);
     CHECK_FALSE(fs::exists(hs / ".hailstone-write-test"));
     const fs::path ui2 = tmp.path / "RoF2b";
     write(ui2 / "Spells_US.txt", "spells");
@@ -492,7 +492,7 @@ TEST_CASE("Layout: the asset-folder check") {
     auto older = validate_asset_folder(dir);
     CHECK(older.missing.empty());
     CHECK_FALSE(older.ok);
-    CHECK(describe(older).starts_with("not RoF2 or a current EverQuest install (missing Resources/OnDemandResources.txt"));
+    CHECK(describe(older).starts_with("missing files required for compatibility (Resources/OnDemandResources.txt"));
 
     for (const auto& f : asset_folder_rof2_files()) write(dir / f, "x");
     auto good = validate_asset_folder(dir);
@@ -625,11 +625,11 @@ TEST_CASE("Layout: a data folder given for the run is never an EverQuest folder"
     CHECK(platform::given_data_dir_problem(tmp.path / "not-made-yet").empty());
     const fs::path eq = tmp.path / "EverQuest";
     write(eq / "EQClient.ini", "[Defaults]\n");
-    CHECK(platform::given_data_dir_problem(eq).find("EverQuest folder") != std::string::npos);
+    CHECK(platform::given_data_dir_problem(eq).find("your game files") != std::string::npos);
 
     platform::use_data_dir(eq, "a test");
     CHECK(platform::data_dir() == fs::absolute(eq));
-    CHECK(platform::data_dir_problem().find("EverQuest folder") != std::string::npos);
+    CHECK(platform::data_dir_problem().find("your game files") != std::string::npos);
     platform::use_data_dir(own, "a test");
     CHECK(platform::data_dir_problem().empty());
     platform::set_data_dir_for_tests({});

@@ -12,14 +12,22 @@
 #include "core/atomic_file.h"
 #include "core/config.h"
 #include "core/log.h"
+#include "core/path_utf8.h"
 #include "core/version.h"
 #include "platform/crash_log.h"
+#include "platform/durable_file.h"
 
 #ifndef HAILSTONE_UPDATE_FEED
 #define HAILSTONE_UPDATE_FEED ""
 #endif
 #ifndef HAILSTONE_UPDATE_KEY
 #define HAILSTONE_UPDATE_KEY ""
+#endif
+#ifndef HAILSTONE_MANAGED_UPDATES
+#define HAILSTONE_MANAGED_UPDATES 0
+#endif
+#ifndef HAILSTONE_ADDON_INDEX_KEY
+#define HAILSTONE_ADDON_INDEX_KEY HAILSTONE_UPDATE_KEY
 #endif
 
 namespace hailstone::app {
@@ -86,7 +94,11 @@ std::string default_update_feed() { return HAILSTONE_UPDATE_FEED; }
 
 std::optional<Ed25519PublicKey> update_release_key() { return hex_decode<32>(HAILSTONE_UPDATE_KEY); }
 
+bool launcher_manages_updates() { return HAILSTONE_MANAGED_UPDATES != 0; }
+
 std::string default_addon_index() { return HAILSTONE_ADDON_INDEX; }
+
+std::optional<Ed25519PublicKey> addon_index_key() { return hex_decode<32>(HAILSTONE_ADDON_INDEX_KEY); }
 
 std::string default_project_page() { return HAILSTONE_PROJECT_PAGE; }
 
@@ -197,6 +209,13 @@ void Updater::run_check() {
         set(s);
         return;
     }
+    if (!env_.channel.empty() && (m->bastion_channel != env_.channel || !m->bastion_runtime_sha256)) {
+        s.state = UpdateState::Failed;
+        s.error = "the update manifest does not identify a runtime for this release channel";
+        set(s);
+        return;
+    }
+    s.runtime_sha256 = m->bastion_runtime_sha256;
     // A feed that went back: a signed manifest older than one it showed before (an old release's manifest served
     // again). newer() would refuse it anyway; what this adds is that the corner does not say "Up to date".
     if (const std::string seen = newest_seen_release(env_.data_dir, env_.feed); newer(seen, m->version_text)) {
@@ -209,7 +228,7 @@ void Updater::run_check() {
         set(s);
         return;
     }
-    remember_seen_release(env_.data_dir, env_.feed, m->version_text);
+    if (env_.remember_feed) remember_seen_release(env_.data_dir, env_.feed, m->version_text);
     if (!newer(m->version_text, env_.version)) {
         log::info("Update check: {} is the newest release", env_.version);
         s.state = UpdateState::UpToDate;
@@ -229,7 +248,7 @@ void Updater::run_check() {
     }
     log::info("Update check: {} is out (this is {}){}", s.version, env_.version,
               s.has_package ? "" : ", with no package for " + env_.platform);
-    if (s.has_package && staged_update_version(env_.install_dir) == s.version &&
+    if (env_.reuse_staged && s.has_package && staged_update_version(env_.install_dir) == s.version &&
         staged_update_ok(env_.install_dir)) {
         s.state = UpdateState::Ready;
         set(s);
@@ -286,10 +305,12 @@ void Updater::run_download() {
         const fs::path file = dir / p.file;
         if (!package_file_ok(file, p)) {
             const fs::path part = dir / (p.file + ".part");
+            // Replacing scrubbed names instead of truncating an old partial also avoids following a hard link.
+            fs::remove(part, ec);
             std::ofstream out(part, std::ios::binary | std::ios::trunc);
             if (!out) {
                 s.state = UpdateState::Failed;
-                s.error = "cannot write " + part.string();
+                s.error = "cannot write " + path_utf8(part);
                 set(s);
                 return;
             }
@@ -329,10 +350,10 @@ void Updater::run_download() {
                 set(s);
                 return;
             }
-            fs::rename(part, file, ec);
+            platform::replace_file_synced(part, file, ec);
             if (ec) {
                 s.state = UpdateState::Failed;
-                s.error = "cannot keep " + file.string() + ": " + ec.message();
+                s.error = "cannot keep " + path_utf8(file) + ": " + ec.message();
                 set(s);
                 return;
             }
@@ -349,6 +370,7 @@ void Updater::run_download() {
     log::info("Update: {} is downloaded; it is installed when Hailstone quits", m->version_text);
     s.state = UpdateState::Ready;
     s.done = s.total;
+    s.verified_packages = std::move(wanted);
     set(s);
 }
 

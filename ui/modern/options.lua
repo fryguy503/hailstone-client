@@ -742,8 +742,7 @@ local function displayTab()
   local pick = API.settings.Option("asset_folder_pick")
   if pick ~= nil then
     section("Game Files", function()
-      row("Asset Folder", "The EverQuest (Rain of Fear 2) installation the game reads its files from. "
-        .. "Hailstone never changes it.", function()
+      row("Asset Folder", "Hailstone reads your game files from this folder.", function()
         ui.TextWrapped(API.settings.OptionChoices("asset_folder")[1] or "?")
       end)
       if search == "" then

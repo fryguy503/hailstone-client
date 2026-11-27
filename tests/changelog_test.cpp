@@ -6,6 +6,7 @@
 #include <random>
 #include <sstream>
 
+#include "app/updater.h"
 #include "core/build_info.h"
 #include "core/changelog.h"
 
@@ -48,7 +49,8 @@ TEST_CASE("changelog_section: the repository's CHANGELOG.md has this release's s
     REQUIRE(in);
     std::ostringstream text;
     text << in.rdbuf();
-    CHECK_FALSE(changelog_section(text.str(), changelog_heading(hailstone::release_version())).empty());
+    CHECK_FALSE(hailstone::build_changelog(text.str(), hailstone::release_version(),
+                                          hailstone::app::launcher_manages_updates()).empty());
 }
 
 TEST_CASE("changelog_heading: a nightly reads the unreleased section, a release its own") {
@@ -58,6 +60,9 @@ TEST_CASE("changelog_heading: a nightly reads the unreleased section, a release 
     CHECK(changelog_heading("0.7.3-beta.nightly") == "0.7.3-beta.nightly");
     const char* text = "## Unreleased\n- new\n## 0.7.3-beta (2026-11-23)\n- old\n";
     CHECK(changelog_section(text, changelog_heading("0.7.3-nightly.20261126")) == std::vector<std::string>{"new"});
+    CHECK(hailstone::build_changelog(text, "0.7.4-bastion.1", true) == std::vector<std::string>{"new"});
+    CHECK(hailstone::build_changelog(text, "0.7.3-beta", true) == std::vector<std::string>{"old"});
+    CHECK(hailstone::build_changelog(text, "0.7.4-bastion.1", false).empty());
 }
 
 TEST_CASE("changelog_section: random and cut-off input reads without a crash") {

@@ -242,7 +242,7 @@ void ClientApp::start_addons() {
     // The add-on index (docs/addons.md), signed with the release key: the store lists it, and the suggestions come
     // from it (hailstone.ini addons.suggest = 0 turns those off). addons.index names another index (on GitHub).
     env.index_url = config_.get_string("addons.index", default_addon_index());
-    env.index_key = update_release_key();
+    env.index_key = addon_index_key();
     const std::string agent = std::string("Hailstone/") + release_version();
     env.fetch = [agent](const std::string& url, const std::function<bool(std::string_view)>& allow_url,
                         const std::function<bool(std::span<const std::byte>)>& sink,

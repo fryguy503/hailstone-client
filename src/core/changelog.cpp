@@ -56,4 +56,10 @@ std::vector<std::string> changelog_section(std::string_view text, std::string_vi
     return out;
 }
 
+std::vector<std::string> build_changelog(std::string_view text, std::string_view version, bool downstream) {
+    auto notes = changelog_section(text, changelog_heading(version));
+    if (notes.empty() && downstream) return changelog_section(text, "Unreleased");
+    return notes;
+}
+
 } // namespace hailstone
