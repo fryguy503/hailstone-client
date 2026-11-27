@@ -17,6 +17,7 @@
 #include "assets/texture.h"
 #include "core/game_dir.h"
 #include "core/log.h"
+#include "core/path_utf8.h"
 #include "render/gpu.h"
 #include "render/vk_context.h"
 #include "render/vk_util.h"
@@ -344,7 +345,7 @@ const UiTextures::Texture* UiTextures::interface_file(const std::filesystem::pat
     const auto written = std::filesystem::last_write_time(file, ec);
     if (ec) return nullptr;
     const File::DiskVersion version{size, written};
-    const std::string key = "ui:" + file.generic_string();
+    const std::string key = "ui:" + generic_path_utf8(file);
     ++lookups_;
     if (auto it = files_.find(key); it != files_.end()) {
         if (it->second.disk_version == version) {

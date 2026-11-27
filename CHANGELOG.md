@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- UI add-on artwork uses UTF-8 paths for its texture cache on Windows.
 - Custom builds can set a display version shown at login and in the in-game Help window.
 - Inventory add-ons can read quest flags and bag types and preview which empty slots accept the item on the cursor.
 - Modern Trade keeps coin denominations clear of their exact counts. The coin buttons wrap into rows when the offer is narrow or the amounts are large.
