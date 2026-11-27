@@ -133,7 +133,7 @@ bool GameConnection::option_command(std::string_view h, const std::string& args)
     if (h == "Cmd_stoptracking") {
         // Cmd_stoptracking @0x4e5770: while tracking is the activity (0xddfccc == 0x35), Send_OP_TrackTarget(-1, 0)
         // (OP_TrackTarget {0}, the activity cleared) and OP_TrackTarget {0} again; then the window closes.
-        if (tracking_.tracked != 0 && state_ == ConnectionState::InZone) {
+        if (tracking_.tracked != 0 && tracking_in_zone()) {
             for (int i = 0; i < 2; ++i) {
                 ByteWriter w;
                 w.le<std::uint32_t>(0);

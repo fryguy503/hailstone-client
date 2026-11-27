@@ -215,7 +215,7 @@ int main(int argc, char** argv) {
     login.close();
     std::printf("login ok, world %s:%u\n", ticket.world_host.c_str(), ticket.world_port);
 
-    copts.zone_packet_tap = [&items, &spells, &group, &shop, &bank, &progress, &market, &social, &augment](const net::AppPacket& p) {
+    copts.zone_packet_tap = [&items, &spells, &group, &shop, &bank, &progress, &market, &social, &augment, &quest](const net::AppPacket& p) {
         items.tap(p);
         spells.tap(p);
         group.tap(p);
@@ -225,6 +225,7 @@ int main(int argc, char** argv) {
         market.tap(p);
         social.tap(p);
         augment.tap(p);
+        quest.tap(p);
     };
     // The compiled plugins (plugin/native_plugins.h), every one in the folder loaded with every permission, as a
     // server without a hailstone.cfg lets a player's: the NMS plugin answers an NMS server's client checks.
@@ -609,9 +610,25 @@ int main(int argc, char** argv) {
             quest.step(conn);
             bool walking = (zl_target && !zl_done) || (fight != Fight::Off && fight != Fight::Done) || items.busy() || spells.busy() || group.busy() || shop.busy() || bank.busy() || progress.busy() || market.busy() || social.busy() || augment.busy() || quest.busy();
             // A --quest run camps as soon as its steps are done; --seconds is then only its time limit.
-            if (!walking && (Clock::now() - in_zone_at > std::chrono::seconds(seconds) || quest.active())) conn.camp();
+            if (!walking && quest.active()) {
+                // To the desktop, as /camp desktop: the session ends cleanly and the character is not left link-dead.
+                if (conn.state() == net::ConnectionState::InZone) conn.camp_command("desktop");
+            } else if (!walking && Clock::now() - in_zone_at > std::chrono::seconds(seconds)) {
+                conn.camp();
+            }
         }
         tick();
+    }
+    if (quest.active() && conn.state() == net::ConnectionState::InZone) {
+        // The time limit (--seconds) ran out mid-script: camp out all the same, never leave the character link-dead.
+        std::printf("  QUEST: out of time; camping out\n");
+        conn.set_auto_attack(false);
+        for (auto end = Clock::now() + std::chrono::seconds(45);
+             Clock::now() < end && conn.state() != net::ConnectionState::Disconnected; tick()) {
+            conn.update();
+            if (conn.state() == net::ConnectionState::InZone) conn.camp_command("desktop");
+            while (conn.poll_chat()) {}
+        }
     }
     items.finish(conn);
     spells.finish(conn);

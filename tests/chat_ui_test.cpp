@@ -221,6 +221,8 @@ return true
             CHECK(lua.run_for_test("", std::string("return chatTimestampLine:match('") + pattern + "') ~= nil") ==
                   "true");
         };
+        // A tab with no format of its own follows the pack's old shared setting (a profile from before per-tab
+        // timestamps); picking one in the menu gives the tab its own and leaves the shared setting alone.
         check_selected_timestamp(0); // missing setting
         check_chat_line("^hello$");
         lua.set_setting("chat.timestamps", "0");
@@ -242,7 +244,8 @@ return true
             CHECK(rows[i].enabled);
             REQUIRE(rows[i].act);
             rows[i].act();
-            CHECK(lua.setting("chat.timestamps") == settings[i]);
+            CHECK(lua.setting("chat.timestamps") == "1");
+            CHECK(lua.run_for_test("", "return hs.UI.chat.Timestamps(1)") == settings[i]);
             check_selected_timestamp(i);
             step();
             check_chat_line(patterns[i]);
@@ -334,7 +337,7 @@ return true
     }
     {
         ui::lua::LuaUi saved(dir / "modern", dir / "modern.txt");
-        CHECK(saved.setting("chat.timestamps") == "24h-seconds");
+        CHECK(saved.setting("chat.timestamps") == "1"); // the tabs keep theirs in the UI ini
     }
     ImGui::DestroyContext(ctx);
     fs::remove_all(dir);

@@ -15,6 +15,8 @@ struct ClientOptions {
     std::string classic_dir; // --classic-dir: the classic folder, over hailstone.ini assets.classic
     bool validation = false;
     int frames = 0;          // exit after this many frames (0 = until closed)
+    int bench_frames = 0;    // --bench: time this many frames in the settled zone, log them, quit (app/frame_bench.h)
+    double bench_settle = 10.0; // --bench-settle: seconds in the settled zone before timing
     std::string screenshot;  // with frames: save the last frame as PNG
     bool screenshot_generated = false; // --screenshot-generated: screenshots save frame generation's in-between frame
     float ui_scale = 0.0f;   // > 0 overrides the display scale

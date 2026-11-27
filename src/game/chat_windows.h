@@ -7,6 +7,8 @@
 // Hailstone (a deliberate difference, docs/mechanics.md "Extended chat routing"): channels 57..107 and the user
 // colours 355..408 extend the tables for a server that sends a later client's extended chat colours. Stock EQEmu
 // sends none of them and the client makes none itself, so they change nothing on a stock server.
+// Hailstone (also a difference): channel 108 holds every line a plugin or script wrote, whatever its colour
+// (kChatChannelCode). It starts in the main window, as every channel does, so nothing moves until the player moves it.
 
 #include <cstdint>
 #include <span>
@@ -18,7 +20,10 @@ namespace hailstone::game {
 
 inline constexpr int kChatWindowSlots = 32;
 inline constexpr int kChatChannelCountRoF2 = 57; // ChannelMap's size (SetChannelMap's bound 0x39)
-inline constexpr int kChatChannelCount = 108;    // Hailstone: with the extended channels 57..107
+inline constexpr int kChatChannelCount = 109;    // Hailstone: with the extended channels 57..107 and 108
+// Hailstone: the lines a plugin or script wrote while its code ran (mq.print, /echo, WriteChatf, a command's own reply;
+// net::ChatEvent::from_code), routed here instead of by their colour. Its item is in the Filters menu.
+inline constexpr int kChatChannelCode = 108;
 inline constexpr int kChatUserColorCountRoF2 = 99; // CDisplay's user colours (GetUserDefinedColor's bound 0x62)
 inline constexpr int kChatUserColorCount = 153;    // Hailstone: with the extended colours 355..408 (indices 99..152)
 inline constexpr int kChatChannelOther = 22;  // GetChannelFromColor's answer for any colour it does not list

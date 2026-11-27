@@ -266,7 +266,7 @@ struct Rules {
     // The player's own scripts and plugins: what they may do (0: they do not run).
     std::uint32_t player_script_caps = 0, player_plugin_caps = 0;
     bool player_assets = true; // false: of servers/<profile>/assets, only the server's files and textures count
-    std::vector<std::string> run_scripts; // the server's scripts started at each zone-in ([scripts] run)
+    std::vector<std::string> run_scripts; // the server's scripts started at the zone-in of each login ([scripts] run)
     ButtonMode social_mode = ButtonMode::Press;
     std::uint32_t social_caps = kCapRead | kCapTarget | kCapActions;
     int social_press_commands = 5;

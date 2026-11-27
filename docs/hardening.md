@@ -145,6 +145,79 @@ Mapping stays because:
 A file replaced by rename is picked up the next time the archive is opened (another zone,
 `CharacterArchiveCache::clear()` after an asset-folder or overlay change).
 
+## Crash reports from release builds
+
+A crash writes `logs/crash-<time>.txt`, and on Windows `crash-<time>.dmp` beside it (docs/layout.md "Crash
+reports"). Release and nightly builds ship no debug information, yet their reports can still name functions and
+source lines: the debug information is made at build time and kept aside, never shipped.
+
+### What the build keeps
+
+`-DHAILSTONE_SEPARATE_SYMBOLS=ON` (`cmake/SeparateSymbols.cmake`; off by default, on in every release and nightly
+package build through `tools/docker/release_options.sh`) changes only Release and MinSizeRel builds:
+
+- GCC and Clang compile with line tables only (`-g1`, Clang's `-gline-tables-only`): function names, inlining and
+  source lines, without types or variables. After each link the shipped binaries' debug sections go to
+  `build/symbols/<binary>.debug` (`objcopy --only-keep-debug`, compressed), and the binary keeps a
+  `.gnu_debuglink` to it. The binaries are `hailstone` and `browser/hailstone-web`. A fetched `libSDL3.so` is split
+  the same way when installed, since CMake cannot add a step to another folder's target. The CEF libraries are
+  stripped at install, as before.
+- MSVC compiles with `/Z7` and links with `/DEBUG /OPT:REF /OPT:ICF /INCREMENTAL:NO`: the linker's defaults
+  without `/DEBUG`, so the code is a plain Release's. The PDBs (SDL3's too, when fetched) go to `build/symbols/`
+  with a copy of `hailstone.exe` and `hailstone-web.exe`. The binary names its PDB by file name alone
+  (`/PDBALTPATH:%_PDB%`), not by the build machine's path.
+- Debug information does not change the code GCC, Clang or MSVC generate. The shipped binary differs from a Release
+  without the setting only in its build ID, its debug link (Linux) and its debug directory (Windows). Checked on
+  Linux with GCC 16: the client's `.text` and `.rodata` are byte for byte the same; `hailstone.debug` is about 40 MB
+  (114 MB before compression).
+- Every ELF link has `-Wl,--build-id`, whatever the setting, so every Linux report names its build.
+- `cmake --install` and so the downloads (`tools/make_update.py` zips the install) hold none of the symbol files.
+- macOS: not yet (the setting does nothing there).
+
+`tools/docker/build.sh` copies `build-<platform>/symbols/` to `release-symbols/<version>/<platform>/` after the
+install (`SYMBOLS_DIR` names another folder; `release-symbols/` is ignored by git). The nightly run keeps its own in
+`~/.cache/hailstone-nightly/symbols/` for 90 days. Neither is uploaded. Keep a release's folder for as long as
+players may run that version: without it, its reports name no functions.
+
+### Reading a Linux report
+
+On Linux the report has a `build-id:` line, the program's GNU build ID (`platform::crash_build_id`, read with
+`dl_iterate_phdr` when the handler is installed, so the signal path still only copies a fixed buffer), and a
+`stack:` of glibc's frames (`/opt/hailstone/hailstone(+0x1a2b3) [0x5555...]`).
+
+```sh
+tools/symbolize_crash.py logs/crash-20261126-101500.txt --symbols release-symbols/
+tools/symbolize_crash.py hailstone-crash-20261126-101503.zip --symbols ~/.cache/hailstone-nightly/symbols/
+tools/symbolize_crash.py crash.txt --debug-file build/symbols/hailstone.debug   # no build-id line, or a local build
+```
+
+It finds the `.debug` file whose build ID is the report's (searching the folder through), and names each frame of the
+client's binary with `llvm-symbolizer` (preferred: binutils' `addr2line` names an inlined function after its caller)
+or `addr2line`, the functions inlined into it beneath. Frames of other modules (libc, SDL, the driver, a plugin) are
+printed as they are. A bug report's zip is read as it is (its `crash/crash-*.txt`). A frame's address is a return
+address, so the line looked up is the call's; the frame the signal interrupted (two after the handler's own) is
+looked up at the faulting instruction itself. The tool is tested by `tests/test_symbolize_crash.py` (CI's `ui-api`
+job), which also splits and symbolizes a small program when a C compiler and binutils are installed.
+
+A report from a build without the setting (a self-built Release) has a build ID too, but no symbol file: rebuild
+the same commit with the setting and the same compiler, or use a RelWithDebInfo build's binary as `--debug-file`
+when it is the one that crashed.
+
+### Reading a Windows minidump
+
+The minidump names each module with its PDB's GUID and age, so a debugger matches the archived `hailstone.pdb` by
+itself. Point its symbol path at the version's folder (`release-symbols/<version>/windows-x64`, which holds
+`hailstone.exe` and `hailstone.pdb`):
+
+- WinDbg: File > Open Crash Dump, then `.sympath+ <folder>`, `.reload`, `!analyze -v` and `k` for the stack.
+- cdb: `cdb -z crash-<time>.dmp -y <folder> -c "!analyze -v; k; q"`.
+- Visual Studio: open the `.dmp`, then Debug with Native Only and give the folder when it asks for symbols.
+
+The dump holds no heap and only the pointers of the stacks (docs/layout.md "Crash reports"), so locals' values
+are not in it; the stack, registers and modules are. Nothing here reads one automatically; on Linux, Mozilla's
+`minidump-stackwalk` (rust-minidump) could, with symbol files made from the PDB by `dump_syms`, but neither is among
+the build machine's tools.
+
 ## Windows allocation profiling
 
 The memory checkpoints split resident memory, Windows private commit, GPU allocations and estimated character

@@ -31,13 +31,27 @@ local function paletteColors(id)
   return resolve(byId[id] or byId[PALETTES.default], {})
 end
 
+-- The colour-vision mode's colours (lib/palettes.lua colourVision) for the client option colour_vision, nil for off
+-- or a host without it. A change (Options bumps the global ui_colour_vision_gen) is picked up in T.frame.
+local function colourVision()
+  local settings = API and API.settings
+  local v = settings and settings.Option and settings.Option("colour_vision")
+  local mode = type(v) == "number" and PALETTES.colourVisionModes and PALETTES.colourVisionModes[v + 1]
+  return mode and PALETTES.colourVision and PALETTES.colourVision[mode]
+end
+
 local function applyPalette(id)
-  for k, v in pairs(paletteColors(id)) do
+  local colors = paletteColors(id)
+  for k, v in pairs(colourVision() or {}) do
+    if colors[k] then colors[k] = v end
+  end
+  for k, v in pairs(colors) do
     local c = C[k]
     if not c then c = {} C[k] = c end
     c[1], c[2], c[3], c[4] = v[1], v[2], v[3], v[4] or 1
   end
   T.palette = id
+  T.colourVisionGen = ui_colour_vision_gen
 end
 applyPalette(ui.GetSetting("palette") or PALETTES.default)
 
@@ -67,6 +81,7 @@ function T.frame()
     return
   end
   T.frameDone = frame
+  if T.colourVisionGen ~= ui_colour_vision_gen then applyPalette(T.palette) end
   -- testing: test.palette.cycle=<seconds> in ui/settings/gamepad.txt shows each palette in turn (logged)
   local every = tonumber(ui.GetSetting("test.palette.cycle") or "")
   if every and every > 0 then

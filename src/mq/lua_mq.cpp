@@ -1746,6 +1746,7 @@ bool ScriptHost::run_file(const std::string& name, const std::vector<std::string
     m.say(std::format("[Lua] running {} ({})", key, plugin::caps_text(caps)), zone_policy, "lua:" + key);
     log::info("lua: running {} from {}, sha256 {}, caps {}", key, entry->string(), to_hex(hash), plugin::caps_text(caps));
     m.scripts.push_back(std::move(s));
+    if (m.env.started) m.env.started(key);
     return true;
 }
 

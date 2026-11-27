@@ -2,6 +2,7 @@
 
 #include "app/client_app_internal.h"
 #include "app/ui_visibility.h"
+#include "app/frame_bench.h"
 #include "app/frame_pace.h"
 #include "assets/zone_flora.h"
 #include "platform/precise_sleep.h"
@@ -15,6 +16,11 @@
 namespace hailstone::app {
 
 namespace client_internal {
+
+namespace {
+// How long --bench waits for its /camp desktop (30 s for a player, at once for a GM) before it quits regardless.
+constexpr double kBenchCampSeconds = 60.0;
+} // namespace
 
 int ClientApp::run() {
     if (quit_) return 0; // the asset-folder picker was quit: nothing else was set up
@@ -44,13 +50,17 @@ int ClientApp::run() {
         scene_recorder_ = std::make_unique<render::SceneRecorder>(vk_);
         shadow_recorder_ = std::make_unique<render::SceneRecorder>(vk_, false);
     }
+    // --bench (app/frame_bench.h): frames timed in the settled zone, one log line, then the client leaves as a
+    // closed window does (/camp desktop), so the server holds no link-dead character for the next run's login.
+    FrameBench bench(opts_.bench_frames, opts_.bench_settle);
+    std::optional<double> bench_left_at; // when the bench asked to leave
     for (int frame = 0; !quit_ && window_.poll_events(); ++frame) {
         if (opts_.frames && frame >= opts_.frames) break;
         retired_ui_textures_.reset(); // the last frame, which may have drawn it, is submitted (waits for the GPU)
         perf_ui_.begin_frame();
         // The frame cap (display.max_fps, --max-fps), and display.background_fps while another window has the focus:
-        // below 10 there, the loop runs on at 10 a second and draws only some frames, or none (app/frame_pace.h). A
-        // minimised window runs at 10 a second whatever the settings say: nothing can be drawn.
+        // below 30 there, the loop runs on at 30 a second and draws only some frames, or none (app/frame_pace.h). A
+        // minimised window runs at 30 a second whatever the settings say: nothing can be drawn.
         // Auto: just under the refresh rate of the display the window is on now (auto_frame_cap).
         const int max_fps =
             effective_max_fps(opts_.max_fps, opts_.max_fps == kMaxFpsAuto ? window_.refresh_rate() : 0.0f);
@@ -86,10 +96,23 @@ int ClientApp::run() {
         }
         if (quit_) break;
         auto now = Clock::now();
+        const float frame_ms = std::chrono::duration<float, std::milli>(now - last).count(); // --bench: uncapped
         float dt = std::min(std::chrono::duration<float>(now - last).count(), 0.1f);
         last = now;
         if (dt > 0.0f) fps = fps * 0.95f + (1.0f / dt) * 0.05f;
         double t = std::chrono::duration<double>(now - start).count();
+        if (!bench_left_at && bench.add(screen_ == Screen::InGame && player_ready_ && !zone_settling(), t, frame_ms)) {
+            const std::string zone = conn_ ? conn_->world().zone_short_name : std::string();
+            log::info("{}", bench_line(zone, bench_stats(bench.times()), bench_memory(vk_)));
+            log_memory("bench", true);
+            bench_left_at = t;
+            window_close_request();
+        }
+        if (bench_left_at && screen_ != Screen::InGame) quit_ = true; // camped out to character select
+        if (bench_left_at && t - *bench_left_at > kBenchCampSeconds) {
+            log::warn("--bench: still in game {} s after /camp desktop; quitting", kBenchCampSeconds);
+            break;
+        }
         frame_steps_ = step_clock_.advance(static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(now - start_time_).count()));
         if (conn_) {
@@ -109,6 +132,10 @@ int ClientApp::run() {
         // model is built in the spawns' smoothing (CreatePlayerActor's model choice).
         core::frame_sections::Lap update_lap;
         box_clients_.poll();
+        if (box_refocus_.step(window_.focused(), Clock::now())) {
+            log::info("box: the other windows have opened: this one takes the focus back");
+            window_.raise_focused();
+        }
         update_updater();
         update_addons();
         refresh_ui_packs();
@@ -431,12 +458,17 @@ int ClientApp::run() {
         // OP_CameraEffect's shake (game/camera_shake.h) for the image being drawn: the original adds it to the camera
         // it renders with (@0x796dd0), never to the game camera. It is taken off again before picking.
         const glm::vec3 unshaken_camera = camera_.position;
+        // Hailstone's Screen Effects (game/accessibility.h) scales the shake and the lightning's flash.
+        const int screen_effects = accessibility_.screen_effects;
         if (in_game && conn_)
-            camera_.position = conn_->camera_shake().offset(
-                camera_.position, static_cast<std::uint32_t>(net::GameConnection::now_ms()));
+            camera_.position = game::scaled_shake(
+                camera_.position,
+                conn_->camera_shake().offset(camera_.position, static_cast<std::uint32_t>(net::GameConnection::now_ms())),
+                screen_effects);
         if (in_game) {
             const std::uint16_t zone_id = conn_ ? conn_->zone_id() : std::uint16_t{0};
             weather_look_.update(weather_, dt, zone_id);
+            weather_look_.flash *= game::screen_effect_scale(screen_effects); // (worked out again from the strike's age)
             update_precipitation(dt, sky_hour);
         }
         const int width = static_cast<int>(f->extent.width), height = static_cast<int>(f->extent.height);
@@ -1057,12 +1089,7 @@ int ClientApp::run() {
     save_chat_history(true);
     if (!opts_.window_size_given) {
         // The game window's place for the next start (window_desc); not a --window-size run's.
-        platform::WindowGeometry g = window_.geometry();
-        config_.set_int("window.x", g.x);
-        config_.set_int("window.y", g.y);
-        config_.set_int("window.width", g.width);
-        config_.set_int("window.height", g.height);
-        config_.set_bool("window.maximized", g.maximized);
+        remember_window_geometry();
         config_.set_bool("ui.perf_window", perf_ui_.open());
         config_.set_bool("ui.perf_log_hitches", perf_ui_.log_hitches());
         config_.save(config_path_);

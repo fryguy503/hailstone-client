@@ -83,6 +83,9 @@ struct NativeEnv {
     // (app/spell_ui.h spell_description), for get_spells_data_bulk's spells that are the player's own (spell book,
     // disciplines, owned AAs). Empty: those get dbstr_us.txt's text unfilled, as every other spell does.
     std::function<std::string(const game::SpellData&)> spell_description;
+    // A plugin has loaded (InitializePlugin returned): the client runs its <name>-AutoExec.cfg, as MacroQuest's
+    // LoadMQ2Plugin does (app/autoexec.h). Null: nothing.
+    std::function<void(const std::string& name)> loaded;
     std::vector<std::filesystem::path> dirs; // where plugins are looked for, and one level down (plugins/<name>/)
     std::filesystem::path cache_dir;         // the approved copies
     std::filesystem::path config_dir;        // each plugin's own directory is config_dir / name

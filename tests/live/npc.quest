@@ -10,3 +10,7 @@ give Guard 13005
 expect-chat you can have it back
 expect-item 13005
 kill rat
+# Leave no rations behind: #nukeitem clears every copy from the GM itself (nothing targeted), the cursor too.
+say #nukeitem 13005
+wait 2
+expect-no-item 13005

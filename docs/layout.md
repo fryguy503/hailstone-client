@@ -39,6 +39,8 @@ hailstone/
   plugins/                   compiled plugins: plugins/<name>.so, or plugins/<name>/ with the binary and its settings;
                              plugins/<name>/ui/<pack>/ holds its Lua windows for each UI pack (docs/plugins.md)
   scripts/                   MacroQuest Lua scripts; scripts/config/ is mq.configDir (mq.pickle; config/<script>/ for a script without every capability)
+  cfg/                       MacroQuest's .cfg command files for every server (AutoExec.cfg, InGame.cfg, zoned.cfg ...;
+                             an autoexec/ subfolder first; docs/autoexec.md)
   textures/<pack>/           texture packs; display.texture_folder names one (empty: textures/default/). A pack built
                              by Hailstone Texture Studio or tools/texpack holds by-hash/<hash>[.m|.k|.n|.r].dds and
                              pack.ini (what it was built with)
@@ -53,6 +55,8 @@ hailstone/
     server.ini               [Server] name, host, port, username, remember
     assets/                  the server's own client files, over the asset folder (downloaded, or added by hand)
     hailstone.cfg            the server's rules for plugins, scripts and assets (downloaded; docs/plugins.md)
+    cfg/                     the player's .cfg command files for this server, over <data>/cfg/ (docs/autoexec.md;
+                             never downloaded)
     scripts/, plugins/       the server's own Lua scripts and compiled plugins (downloaded; docs/plugins.md)
     plugin-config/<plugin>/  a plugin's own files for this server (server_config_dir; the NMS plugin's nms.ini)
     plugin_approvals.txt     the player's answers to the server's compiled plugins, by SHA-256 (plugin/consent.h;
@@ -70,6 +74,8 @@ hailstone/
                              chat_history.txt (the chat windows' last lines, each its last 1000, put back at the
                              next entry into the world);
                              hailstone.ini, the client's settings for this character ("A character's settings" below);
+                             cfg/, the character's .cfg command files, over the server's and the global ones
+                             (docs/autoexec.md);
                              kept_items.txt (the items marked Keep in the Advanced Inventory window, one
                              "<item id> <name>" a line; game/kept_items.h);
                              bank.dat (the bank and shared bank as last seen, which the Advanced Inventory lists
@@ -221,11 +227,24 @@ Some keys stay in `hailstone.ini` whoever plays (`Config::is_shared_key`):
 - the client's own: `assets.*`, `addons.*`, `update.*`, `news.*`, `browser.*`, `plugins.*`, `scripts.*`, `mapfilter.*`;
 - the login screen's: `login.*`, `audio.pregame_music`;
 - the window's place and mode: `window.*`, `display.window_mode`, `display.resolution` (one window, so it does not
-  jump when a character enters);
+  jump when a character enters). A box set's other windows (`--box-child`) are the exception: they keep these per
+  character (below);
 - the computer's graphics tier: `display.gpu_tier`;
+- the player's accessibility options: `accessibility.*` (colour vision, con labels, minimum text size, screen effects;
+  docs/dev-ui.md "Accessibility");
 - what is taken only at start: `display.msaa`, `display.upscaler`, `ui.name`, `ui.scale`, `ui.cpp_windows`,
   `ui.dev_windows`, `ui.perf_*`, `game.fixed_step`, `audio.enabled`, `audio.soundfont`, `audio.mix_ahead`,
   `nav.threads`, `nav.prebuild`.
+
+A box set's other windows keep `window.*`, `display.window_mode` and `display.resolution` in the character's file and
+never write them to `hailstone.ini` (`Config::set_display_per_character`):
+
+- they open as `hailstone.ini` says, and once the character enters the window takes the character's own mode, size,
+  place and maximized state, when its file has them;
+- the window's state is kept for the character when it leaves the world and at quit; changes made at the login screen,
+  before a character, go to the character that enters next;
+- a key the character's file lacks is read from `hailstone.ini`. The first window, where the box set was logged in,
+  keeps them in `hailstone.ini` as always.
 
 A shared key still in a character's file moves into `hailstone.ini` when the character enters, if that has none. The
 UI packs' script settings (`ui/settings/<pack>.txt`) are shared too; the window layout is per character
@@ -707,7 +726,9 @@ A crash (a fatal signal on Linux and macOS, an unhandled exception on Windows, o
 
 - the build (`core/build_info.h`: version and commit), the time and what happened;
 - the log's path and its last 16 lines;
-- the stack where glibc has one (`addr2line -e hailstone <+offset>` names a frame of a build with symbols).
+- on Linux the program's GNU build ID (`build-id:`) and the stack where glibc has one; `tools/symbolize_crash.py`
+  names a release's frames from the symbol files kept when it was built (docs/hardening.md "Crash reports from
+  release builds").
 
 On Windows a minidump, `crash-<...>.dmp`, goes beside it (`platform/crash_log.h`): call stacks, registers and the
 module list. It goes into bug reports unchanged, so it holds no heap (not the password field, the session key or a
@@ -723,7 +744,7 @@ After the report the previous handler runs (a core dump, a sanitizer's report, o
 An error that ends the run without a crash (no Vulkan driver, no qualifying GPU, no window, missing shaders) is logged
 and shown in a dialog (`app/startup_error.h`) with the kind of problem, the usual fix, the error and the log's path.
 When no GPU qualifies, it names each GPU and what it lacks (`render/gpu_requirements.h`). The test runs (`--frames`,
-`--screenshot`) show no dialog.
+`--bench`, `--screenshot`) show no dialog.
 
 #### Bug reports
 

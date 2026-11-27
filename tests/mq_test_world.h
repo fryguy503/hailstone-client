@@ -50,6 +50,7 @@ struct GameConnectionTestAccess {
         c.tracking_request_at_ = GameConnection::now_ms() - 10001; c.maintain_tracking();
     }
     static bool has_tracking_request(const GameConnection& c) { return c.tracking_request_.has_value(); }
+    static const game::mechanics::GameTables& tables(const GameConnection& c) { return c.tables(); }
     static void replace_spawn(GameConnection& c, const Spawn& spawn) { c.apply_spawn(spawn); }
     static game::WorldState& world(GameConnection& c) { return touch(c, c.world_); }
     static glm::vec3& position(GameConnection& c) { return c.position_; } // the player's own (world coordinates)

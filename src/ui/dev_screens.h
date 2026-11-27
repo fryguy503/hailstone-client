@@ -493,6 +493,7 @@ struct ChatLine {
                               // buffer (each chat window keeps its own last lines: app/lua_ui_chat.cpp)
     std::vector<std::string> group_messages; // nonempty when text is the title of a collapsible chat group
     bool group_expanded = false;
+    bool from_code = false; // Hailstone: a plugin's or script's own line (net::ChatEvent::from_code)
 
     std::string group_label() const;
 };
@@ -509,8 +510,9 @@ struct ChatView {
     std::uint64_t revision = 0; // counts added lines (the Lua chat window's hs.ChatText version)
     std::uint64_t group_revision = 0; // changes when an existing group is opened or closed
 
-    void add(ChatChannel channel, std::string text, std::uint32_t rgb = 0, std::uint32_t color = 0, std::string peer = {});
-    void add_chat_group(std::string title, std::vector<std::string> messages);
+    void add(ChatChannel channel, std::string text, std::uint32_t rgb = 0, std::uint32_t color = 0, std::string peer = {},
+             bool from_code = false);
+    void add_chat_group(std::string title, std::vector<std::string> messages, bool from_code = false);
     void add_client_messages(std::vector<std::string> messages);
     void toggle_chat_group(ChatLine& line);
 };
@@ -548,6 +550,7 @@ struct TargetView {
     int level = 0;
     int hp_percent = 0;
     std::uint32_t con_rgb = 0xffffff; // consider colour of the name
+    std::string con_label;            // the con colour in words (Con Labels, game/accessibility.h); empty: none
     bool is_corpse = false;
     bool is_self = false;
     float distance = 0.0f;

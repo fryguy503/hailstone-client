@@ -55,11 +55,17 @@ function TC.Amount(values, color)
   end
 end
 
+local FITTED_LABEL_X, FITTED_RIGHT_INSET, FITTED_TEXT_GAP = 15, 5, 7
+
 -- One coin pile as a button bound to a money child: its count (the child's text), the coin's colour; a click is
--- the child's (pick the pile up, or drop the coin on the cursor). Returns clicked.
-function TC.MoneyButton(win, id, coin, s, width, tooltip)
+-- the child's (pick the pile up, or drop the coin on the cursor). A fitted pile supplies the count measured for
+-- layout, so drawing and measuring use the same text. Returns clicked.
+function TC.MoneyButton(win, id, coin, s, width, tooltip, pile)
   local enabled = select(1, API.windows.ChildState(win, id)) ~= false
-  local n = tonumber((API.windows.Text(win, id))) or 0
+  local n = pile and pile.count or tonumber((API.windows.Text(win, id))) or 0
+  local amount = pile and pile.amount or T.Thousands(n)
+  local labelX = pile and FITTED_LABEL_X or 17
+  local rightInset = pile and FITTED_RIGHT_INSET or 7
   local x, y = ui.GetCursorScreenPos()
   local _, th = T.TextSize("Ag", T.font.small)
   local h = th + 10 * s
@@ -68,10 +74,10 @@ function TC.MoneyButton(win, id, coin, s, width, tooltip)
   local k = TC.COIN[coin][3]
   ui.DrawRectFilled(x, y, x + width, y + h, k[1], k[2], k[3], act and 0.20 or hov and 0.14 or 0.07, 5 * s)
   ui.DrawRect(x, y, x + width, y + h, k[1], k[2], k[3], hov and 0.7 or 0.25, 5 * s, 1)
-  ui.DrawCircleFilled(x + 10 * s, y + h / 2, 4 * s, k[1], k[2], k[3], 1)
-  T.Text(x + 17 * s, y + (h - th) / 2, TC.COIN[coin][1]:sub(1, 1), k, T.font.small)
-  T.Text(x + width - 7 * s, y + (h - th) / 2, T.Thousands(n), n > 0 and C.text or C.faint, T.font.small, "right")
-  if hov and tooltip then ui.SetTooltip(TC.COIN[coin][2] .. ": " .. T.Thousands(n) .. "\n" .. tooltip) end
+  ui.DrawCircleFilled(x + (labelX - 7) * s, y + h / 2, 4 * s, k[1], k[2], k[3], 1)
+  T.Text(x + labelX * s, y + (h - th) / 2, TC.COIN[coin][1]:sub(1, 1), k, T.font.small)
+  T.Text(x + width - rightInset * s, y + (h - th) / 2, amount, n > 0 and C.text or C.faint, T.font.small, "right")
+  if hov and tooltip then ui.SetTooltip(TC.COIN[coin][2] .. ": " .. amount .. "\n" .. tooltip) end
   if clicked and enabled then
     API.windows.ClickChild(win, id, "left")
     return true
@@ -88,6 +94,41 @@ function TC.MoneyButtons(win, ids, s, tooltip, width)
   for i, id in ipairs(ids) do
     if i > 1 then ui.SameLine(0, gap) end
     TC.MoneyButton(win, id, i, s, bw, tooltip)
+  end
+end
+
+-- Trade offer columns can be narrow even in a wide window. Size each column for its longest exact amount and
+-- wrap the four piles to two columns (or one) when the label and the amount would otherwise collide.
+function TC.FittedMoneyButtons(win, ids, s, tooltip, width)
+  -- The extra pixel covers T.Text rounding its screen position before drawing.
+  local padding = (FITTED_LABEL_X + FITTED_TEXT_GAP + FITTED_RIGHT_INSET) * s + 1
+  local piles = {}
+  for i, id in ipairs(ids) do
+    local count = tonumber((API.windows.Text(win, id))) or 0
+    local amount = T.Thousands(count)
+    local label = TC.COIN[i][1]:sub(1, 1)
+    local textWidth = T.TextSize(label, T.font.small) + T.TextSize(amount, T.font.small)
+    piles[i] = { count = count, amount = amount, width = textWidth + padding }
+  end
+
+  local gap = 6 * s
+  for _, columns in ipairs({ 4, 2, 1 }) do
+    local widths = {}
+    for i, pile in ipairs(piles) do
+      local column = (i - 1) % columns + 1
+      widths[column] = math.max(widths[column] or 0, pile.width)
+    end
+    local needed = gap * (columns - 1)
+    for _, w in ipairs(widths) do needed = needed + w end
+    if needed <= width or columns == 1 then
+      local extra = math.max(0, width - needed) / columns
+      for i, id in ipairs(ids) do
+        local column = (i - 1) % columns + 1
+        if column > 1 then ui.SameLine(0, gap) end
+        TC.MoneyButton(win, id, i, s, widths[column] + extra, tooltip, piles[i])
+      end
+      return
+    end
   end
 end
 

@@ -39,6 +39,9 @@ ui_api() {
   run python3 -m unittest discover -s tests -p 'test_make_addon_autoload.py'
   run python3 -m unittest discover -s tests -p 'test_release_tools.py'
   run python3 -m unittest discover -s tests -p 'test_make_update.py'
+  run python3 -m unittest discover -s tests -p 'test_perf_track.py'
+  run python3 -m unittest discover -s tests -p 'test_symbolize_crash.py'
+  run python3 -m unittest discover -s tests -p 'test_live_smoke.py'
 }
 
 [ $# -eq 0 ] && set -- core-names layers wiki ui-api

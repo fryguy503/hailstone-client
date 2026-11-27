@@ -223,7 +223,8 @@ bool GameConnection::prepare_chat(ChatEvent& event, std::optional<std::string> d
     // server's message, a player's tell) a BEL is taken out, so their text cannot colour the chat. A hook below may
     // still put codes into a line it rewrites, as the plugin's own. The client's own coded lines (client_message) keep
     // theirs.
-    if (plugin::caller_name().empty() && !client_codes) {
+    event.from_code = !plugin::caller_name().empty();
+    if (!event.from_code && !client_codes) {
         std::erase(event.text, game::kMqColorCode);
         if (display_text) std::erase(*display_text, game::kMqColorCode);
     }
@@ -274,6 +275,7 @@ bool GameConnection::write_chat_group(std::string title, std::vector<std::string
 
     ChatEvent group;
     group.text = std::move(title);
+    group.from_code = !plugin::caller_name().empty();
     group.group.reserve(messages.size());
     std::vector<ChatEvent> colored;
     for (auto& message : messages) {
@@ -331,6 +333,7 @@ void GameConnection::start(const WorldTicket& ticket) {
     link_death_.reset();
     zone_client_messages_.reset();
     zoning_ = false;
+    zone_reentry_ = false;
     connect_world(false);
 }
 
@@ -541,12 +544,16 @@ void GameConnection::update() {
     }
 
     update_chat_server();
-    if (state_ == ConnectionState::InZone) {
+    if (in_zone()) {
         maintain_tracking();
+        // A reopened window can ask for its list once the retired reply drains or times out.
+        const bool retired_request_finished = !tracking_request_ && std::exchange(tracking_request_retired_, false);
         // CTrackingWnd::OnProcessFrame: OP_Track every 6 s with auto update on.
         auto f = game::tracking_frame(tracking_.open, static_cast<std::uint32_t>(now_ms()), tracking_.next_controls,
                                       tracking_.next_track, tracking_.auto_update);
-        if (f.send_track) send_track();
+        if (f.send_track || (retired_request_finished && tracking_.open)) send_track();
+    }
+    if (state_ == ConnectionState::InZone) {
         // No movement reports while a zone change waits for its answer: the original blocks in
         // RequestZoneChangeStatusBlocking @0x52cee0 (from MoveToZone @0x541710) and its main loop does not run, so a
         // retry still finds the crossing position (send_zone_line_position) as the last report.
@@ -566,13 +573,15 @@ void GameConnection::update() {
     }
     // The rules last while the character is in the world. From the world login to the zone-in (character select
     // too) the last login's rules hold, provisional: only what has the 'login' permission runs. Disconnected,
-    // nothing runs.
+    // nothing runs. A zone change passes through world (Zoning, then EnteringWorld after world's OP_EnterWorld):
+    // the character is still in the world, so its rules stay, and the plugins and scripts running stay as they are.
+    const bool reentering = state_ == ConnectionState::EnteringWorld && zone_reentry_;
     bool in_world = state_ == ConnectionState::InZone || state_ == ConnectionState::Zoning ||
                     state_ == ConnectionState::ZoneConnecting || state_ == ConnectionState::ZoneEntering ||
-                    state_ == ConnectionState::Camping;
+                    state_ == ConnectionState::Camping || reentering;
     bool logging_in = state_ == ConnectionState::WorldConnecting || state_ == ConnectionState::WorldAuth ||
-                      state_ == ConnectionState::CharacterSelect || state_ == ConnectionState::EnteringWorld ||
-                      state_ == ConnectionState::Creating;
+                      state_ == ConnectionState::CharacterSelect ||
+                      (state_ == ConnectionState::EnteringWorld && !reentering) || state_ == ConnectionState::Creating;
     if (logging_in && (!server_rules_ || !server_rules_->provisional)) {
         server_rules_ = cached_server_rules(options_.server_files_dir);
         ++server_rules_serial_;
@@ -661,8 +670,13 @@ void GameConnection::raise_hook_events() {
         switch (state_) {
         case ConnectionState::WorldConnecting:
         case ConnectionState::WorldAuth: game_state = plugin::kGameStatePreCharSelect; break;
-        case ConnectionState::CharacterSelect:
-        case ConnectionState::EnteringWorld: game_state = plugin::kGameStateCharSelect; break;
+        case ConnectionState::CharacterSelect: game_state = plugin::kGameStateCharSelect; break;
+        // A zone change's pass through world stays in game, as Zoning does below; only an entry from character
+        // select is character select.
+        case ConnectionState::EnteringWorld:
+            game_state = zone_reentry_ && hook_game_state_ == plugin::kGameStateInGame ? plugin::kGameStateInGame
+                                                                                        : plugin::kGameStateCharSelect;
+            break;
         case ConnectionState::Creating: game_state = plugin::kGameStateCharCreate; break;
         case ConnectionState::InZone:
         case ConnectionState::Camping: game_state = plugin::kGameStateInGame; break;
@@ -745,6 +759,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         characters_serial_ = core::next_process_serial();
         bool first = state_ == ConnectionState::WorldAuth;
         state_ = ConnectionState::CharacterSelect;
+        zone_reentry_ = false;
         status_.clear();
         if (first) {
             send_checksums(); // Handle_OP_SendCharInfo
@@ -791,6 +806,7 @@ void GameConnection::handle_world(const AppPacket& p) {
                 ask(std::move(c));
             }
             state_ = ConnectionState::CharacterSelect;
+            zone_reentry_ = false;
         }
         break;
     }
@@ -802,6 +818,7 @@ void GameConnection::handle_world(const AppPacket& p) {
             e.name = name && !name->empty() ? *name : character_;
             send_world(encode(e));
             state_ = ConnectionState::EnteringWorld;
+            zone_reentry_ = true;
             status_ = "Entering the world";
         }
         break;
@@ -962,6 +979,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         auto zone = decode_zone_unavail(p);
         error_ = "That zone is not available" + (zone ? " (" + *zone + ")" : std::string()) + ".";
         state_ = ConnectionState::CharacterSelect;
+        zone_reentry_ = false;
         break;
     }
     case Op::MOTD:
@@ -1081,6 +1099,7 @@ void GameConnection::enter_world(const std::string& name, bool return_home) {
     send_world(encode(e));
     error_.clear();
     state_ = ConnectionState::EnteringWorld;
+    zone_reentry_ = false;
     status_ = (return_home ? "Returning home as " : "Entering the world as ") + name;
 }
 
@@ -2921,6 +2940,14 @@ void GameConnection::set_target(std::uint32_t spawn_id) {
     send_zone(encode_target(false, spawn_id));
 }
 
+bool GameConnection::request_target_of_target() {
+    if (state_ != ConnectionState::InZone || !world_.target_id || !target_of_target_ ||
+        !world_.spawns.contains(target_of_target_)) return false;
+    // RoF2's path: CGaugeWnd's left-button-up @0x66f920 (the target-of-target gauge, EQType 27) calls
+    // Send_OP_TargetCommand_00761690, whose case 0x1b (@0x761827) asks the server whether this spawn can be targeted.
+    return send_zone(encode_target(true, target_of_target_));
+}
+
 void GameConnection::target_by_name(const std::string& name) {
     if (name.empty()) {
         chat(ChatEvent::Kind::System, "Usage: /target NAME");
@@ -3407,8 +3434,13 @@ void GameConnection::handle_combat(Op op, const AppPacket& p) {
         }
         break;
     case Op::TargetCommand:
-        // The server accepted a target (or targets our pet for us).
-        if (auto t = decode_target(p)) world_.target_id = *t;
+        if (auto t = decode_target(p)) {
+            // The server accepted a target (or targets our pet for us). RoF2 resolves the spawn and then reports
+            // the change with OP_TargetMouse, which lets the server update its selected target and send its HoTT.
+            // CEverQuest::HandleWorldMessage (case 0x58e2) sets the target only when GetSpawnByID finds the spawn,
+            // so an id of 0 or an unknown one leaves the current target alone.
+            if (world_.spawns.contains(*t)) set_target(*t);
+        }
         break;
     case Op::ZonePlayerToBind:
         handle_zone_to_bind(p); // net/game_connection_death.cpp

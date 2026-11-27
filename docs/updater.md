@@ -292,12 +292,19 @@ updater and the add-on manager otherwise run as usual.
 
    Run each platform's `hailstone_tests` (Windows under Wine) before going on; the macOS workflow runs its own.
 
+   The release settings include `HAILSTONE_SEPARATE_SYMBOLS`: each build also writes its binaries' debug information
+   to `build-<platform>/symbols/`, which `tools/docker/build.sh` copies to `release-symbols/<version>/<platform>/`.
+   It is not part of the install or the download, and is not uploaded. Keep that folder for as long as players may
+   run the version: it is what names a crash report's functions later (docs/hardening.md "Crash reports
+   from release builds"). A build made with `linux_build.sh` or `msvc_build.sh` alone leaves them in its build
+   folder's `symbols/`: copy that folder there by hand.
+
    `linux_build.sh` and `msvc_build.sh` configure every time with the release's settings before `CMAKE_ARGS`
    (`tools/docker/release_options.sh`): `-DHAILSTONE_UPDATE_KEY=` the line of `update-key.pub`, Release, the
    sanitizer and `HAILSTONE_ALLOW_IN_EQ_FOLDER` off, and the feed, index and page addresses back to their defaults.
    A reused build folder therefore keeps none of an earlier configure's options (CMake caches
    `HAILSTONE_UPDATE_KEY`, and read `update-key.pub` only at the folder's first configure). A configure whose key
-   differs from `update-key.pub`'s warns.
+   differs from `update-key.pub`'s warns. They also turn on `HAILSTONE_SEPARATE_SYMBOLS` (above).
 
    The build environment is pinned. msvc-wine is pinned to a commit, and MSVC and the Windows SDK to the release
    install's versions (Visual Studio 17.14, toolset 14.44.35207; SDK 10.0.26100.0; `tools/docker/msvc_setup.sh`).

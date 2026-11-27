@@ -199,7 +199,9 @@ ui.window("HUD Target", function()
     nTargetBuffs = nBuffs
   end
   local nBuffs = nTargetBuffs
-  local extra = (traw ~= -1 and (tname or "") ~= "") or nBuffs > 0
+  local hasTot = traw ~= -1 and tname and tname ~= ""
+  local extra = hasTot or nBuffs > 0
+  local totX0, totY0, totX1, totY1
   hud("HUD Target", 660, 74, 600, extra and 150 or 110, false, function(x0, y0, x1, y1)
     T.panel(x0, y0, x1, y1, 0.9)
     local con = conColour()
@@ -207,9 +209,13 @@ ui.window("HUD Target", function()
     if con then -- the con colour as the panel's left edge and the name
       T.rect(x0, y0 + T.px(14), x0 + T.px(6), y1 - T.px(14), con, 1, T.px(3))
     end
+    -- Con Labels (Options > Interface; game/accessibility.h): the con colour in words, which the host gives the con
+    -- box as its tooltip while the option is on.
+    local conName = con and API.windows.ChildTooltip("TargetWindow", "A_TargetBoxStaticAnimFill")
+    local shown = (conName and conName ~= "") and (name .. " (" .. conName .. ")") or name
     T.font(26)
     local _, nh = ui.CalcTextSize("Ag")
-    T.textIn(x0 + p + T.px(4), y0 + p - T.px(2), x1 - p - T.px(90), y0 + p + nh, name, con or C.text, 0)
+    T.textIn(x0 + p + T.px(4), y0 + p - T.px(2), x1 - p - T.px(90), y0 + p + nh, shown, con or C.text, 0)
     T.unfont()
     -- A distance is optional; the current host does not export this capability.
     if HAS_TARGET_DISTANCE then
@@ -241,13 +247,20 @@ ui.window("HUD Target", function()
       end
     end
     -- the target's target
-    if traw ~= -1 and tname and tname ~= "" then
+    if hasTot then
       T.font(16)
-      local tx0 = x1 - p - T.px(170)
-      T.bar(tx0, y + T.px(2), x1 - p, y + s - T.px(2), tfrac, C.hp, T.fit(tname, T.px(150)))
+      totX0, totY0, totX1, totY1 = x1 - p - T.px(170), y + T.px(2), x1 - p, y + s - T.px(2)
+      T.bar(totX0, totY0, totX1, totY1, tfrac, C.hp, T.fit(tname, T.px(150)))
       T.unfont()
     end
   end)
+  if totX0 then
+    hitArea("HUD Target of Target", totX0, totY0, totX1, totY1, function(x0, y0, x1, y1)
+      if ui.InvisibleButton("##tot", x1 - x0, y1 - y0) then
+        API.windows.ClickChild("TargetOfTargetWindow", "TargetOfTarget_HP", "left")
+      end
+    end)
+  end
 end)
 
 -- ---------------------------------------------------------------- group

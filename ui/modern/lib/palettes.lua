@@ -232,4 +232,31 @@ P.list = {
   },
 }
 
+-- Colour vision (Options > Display > Accessibility > Colour Vision: the client option colour_vision, which also sets
+-- the con colours, game/accessibility.h). lib/theme.lua lays the mode's colours over whichever palette is picked, so
+-- the meaning colours (health and low health, good and bad, danger, pet / ready) stay apart for that colour
+-- blindness. Deuteranopia and protanopia take Okabe and Ito's Color Universal Design set (vermillion, reddish purple,
+-- sky blue, bluish green); tritanopia Paul Tol's "vibrant" scheme (red, magenta, cyan). Every palette with each mode
+-- laid over it keeps `checks` (tests/lua_scripts_test.cpp). `colourVisionModes`: the option's values 0..3.
+P.colourVisionModes = { "off", "deuteranopia", "protanopia", "tritanopia" }
+local RED_GREEN = {
+  hp = { 0.835, 0.369, 0.000, 1 },     -- vermillion
+  hpLow = { 0.800, 0.475, 0.655, 1 },  -- reddish purple: apart from the vermillion in lightness and hue
+  good = { 0.337, 0.706, 0.914, 1 },   -- sky blue
+  bad = { 0.835, 0.369, 0.000, 1 },    -- vermillion
+  danger = { 0.835, 0.369, 0.000, 1 },
+  pet = { 0.000, 0.620, 0.451, 1 },    -- bluish green
+}
+P.colourVision = {
+  deuteranopia = RED_GREEN,
+  protanopia = RED_GREEN,
+  tritanopia = {
+    hp = { 0.800, 0.200, 0.067, 1 },   -- red
+    hpLow = { 0.200, 0.733, 0.933, 1 }, -- cyan: red and cyan are the pair a tritanope tells apart best
+    good = { 0.200, 0.733, 0.933, 1 },
+    bad = { 0.800, 0.200, 0.067, 1 },
+    danger = { 0.800, 0.200, 0.067, 1 },
+  },
+}
+
 return P

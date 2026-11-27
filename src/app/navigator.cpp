@@ -757,6 +757,7 @@ nav::NavStatus Navigator::status() const {
     s.paused = paused_;
     s.moveto = s.active && goal_.moveto;
     s.moveto_arrived = moveto_arrived_;
+    s.stuck = (s.moveto || stick_.has_value()) && follower_.stuck();
     if (afollow_) {
         s.afollow_spawn = afollow_->spawn;
         s.afollow_distance = afollow_->options.distance;

@@ -68,6 +68,7 @@ local descriptors = {
   {"ChatSetTabFlashColor", "chat", "SetTabFlashColor", "function", 2, false},
   {"ChatSetTabScrollbar", "chat", "SetTabScrollbar", "function", 2, false},
   {"ChatSetTellWindows", "chat", "SetTellWindows", "function", 2, false},
+  {"ChatSetTimestamps", "chat", "SetTimestamps", "function", 2, false},
   {"ChatSetTitle", "chat", "SetTitle", "function", 2, false},
   {"ChatSetWindowTitle", "chat", "SetWindowTitle", "function", 2, false},
   {"ChatSplitTab", "chat", "SplitTab", "function", 2, false},
@@ -75,6 +76,7 @@ local descriptors = {
   {"ChatTakeFocus", "chat", "TakeFocus", "function", 0, false},
   {"ChatTellWindows", "chat", "TellWindows", "function", 0, false},
   {"ChatText", "chat", "Text", "function", 0, false},
+  {"ChatTimestamps", "chat", "Timestamps", "function", 0, false},
   {"ChatWindows", "chat", "Windows", "function", 0, false},
   {"CompareBagSlotItem", "compare", "BagSlotItem", "function", 0, false},
   {"CompareItem", "compare", "Item", "function", 0, false},
@@ -384,7 +386,7 @@ return function(root)
     end
     return value
   end
-  local API, modules = {version={major=1,minor=12}}, {}
+  local API, modules = {version={major=1,minor=13}}, {}
   for _, row in ipairs(descriptors) do
     local module = modules[row[2]]
     if not module then module={};modules[row[2]]=module end
@@ -425,7 +427,7 @@ return function(root)
       if member~=nil then local row=modules[module][member];return row and describeMember(row) or nil end
       return describeModule(module)
     end
-    local names,result={}, {version={major=1,minor=12},modules={}}
+    local names,result={}, {version={major=1,minor=13},modules={}}
     for name in pairs(modules) do names[#names+1]=name end
     table.sort(names)
     for _, name in ipairs(names) do result.modules[#result.modules+1]=describeModule(name) end

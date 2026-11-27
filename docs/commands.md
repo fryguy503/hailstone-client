@@ -95,6 +95,7 @@ follow the RoF2 client; the ones Hailstone adds are marked as Hailstone's. For t
 | `/attack [on\|off]` | Auto attack. |
 | `/autofire` | Auto fire (ranged). |
 | `/cast <1..12>` | Cast the spell in a gem. |
+| `/cast "<spell name>"`, `/cast "=<spell name>"` | Cast the first memorized spell whose name starts with the text, in any case; with `=`, the one with that whole name. As MacroQuest's `/cast`: the name is the first word, so quote a name with spaces. "You do not seem to have that spell memorized." when no gem matches. MacroQuest's `/cast item <name>` and `/cast list` are not supported: `/useitem` uses an item. |
 | `/stopcast` | Stop casting. |
 | `/melody <gems>`, `/stopsong` | Twist songs; stop singing. |
 | `/discipline <name>`, `/stopdisc` | Use a discipline; end the active one. |
@@ -139,6 +140,7 @@ discipline's name may leave out its rank.
 | `/lootnodrop [always \| usable \| never]` | Ask before looting No Drop items. |
 | `/autoinventory` | Put the item on your cursor into your inventory. |
 | `/useitem <slot> [bag index]` | Use an item by slot number. |
+| `/useitem <item name>`, `/useitem "<item name>"`, `/useitem <item id>` | Use the first carried item (worn, then the general slots and their bags) whose name holds the text, in any case; in quotes, with that whole name. As MacroQuest's `/useitem`; when no item matches, a quoted name says nothing (as MacroQuest) and an unquoted one shows RoF2's usage text (as any word but a number did before). The slot number may be in single or double quotes (`/useitem '12'`), as RoF2 reads it. A single number past the slots (0..32) is an item id when you carry that item (Hailstone's; otherwise it stays an invalid slot, as in RoF2). |
 | `/split <pp> <gp> <sp> <cp>`, `/autosplit` | Split coin with the group; split it always. |
 | `/bandolier <add \| delete \| activate> <name or number>` | Weapon sets. |
 | `/potionbelt` | The potion belt. |
@@ -277,6 +279,7 @@ one, the server's add-on rules decide whether it may.
 | `/echo <text>` | Print a line to chat. As in MacroQuest, `\a` then a colour letter colours what follows (`\ayYellow \agGreen\ax`), `\n` breaks the line and `\\` is a backslash. A colour that comes from a `${...}` in a typed line (a server's text) does not colour. |
 | `/beep [sound]` | Play a sound (MacroQuest's; scripts use it as an alert). With nothing given, the Beep sound chosen in Individual Sounds: the tone (1280 Hz for a quarter second, as MacroQuest), a short list of game sounds that suit an alert, or any sound of your game folder (the drop-down has a search). With a sound name or any game sound file (`/beep LevelUp.WAV`) it plays that instead; MacroQuest plays any file path, Hailstone only the game folder's own sounds, and a name it lacks plays the tone. All at the Beep volume. |
 | `/docommand <line>`, `/noparse <line>` | Run a line; run it without expanding `${...}`. |
+| `/loadcfg <name>` | Run a `.cfg` file's command lines now, as MacroQuest does (docs/autoexec.md): a name from the character's, the server's or the global `cfg/` folder, or (typed by you only) a path to a `.cfg` file inside one of those folders. |
 | `/invoke ${...}` | Read the line's `${...}` and do nothing else: what acts is the read, for MacroQuest's window methods (`${Window[InventoryWindow].DoOpen}`, `${Window[BigBankWnd].Child[BIGB_AutoButton].LeftMouseUp}`). |
 | `/squelch <line>` | Run a line without the chat lines it prints. |
 | `/timed <deciseconds> <line>` | Run a line that many tenths of a second later (MacroQuest's). Its `${...}` are read when it runs; a script's line keeps the script's permissions. At most 1000 wait at once. |

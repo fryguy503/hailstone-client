@@ -1511,10 +1511,24 @@ Real estate is built to the original (docs/protocol/rof2-packets.md "Real estate
   (AltAdvManager::GetAAById with the player's level), which is not decoded. Now: the player's owned rank when they have
   one (the rank they cast), else the first rank the AA table holds. Settle: GetAAById's use of the level argument.
 
+- **The first zone-in's `.cfg` files against `InGame.cfg`.** `player` (docs/autoexec.md) At a world entry Hailstone
+  runs `InGame`, `<server>_<character>` and `<Class>` before the first zone's `<zone>.cfg` and `zoned.cfg`. MacroQuest
+  loads the first set when its game state turns to "in game" and the second at the end of a zone-in, only while in
+  game; which of the two comes first at a login is not checked. Settle: the order PluginsSetGameState and
+  PluginsEndZone run in at a login in MacroQuest's emulator build.
+- **`Group.MarkNpc` and `MasterLooter`.** `player` MQ reads group role bits for Mark NPC and Master Looter that
+  RoF2's group roles do not have (CGroupBase_SetMemberRole takes 1..3: tank, assist, puller). Now: `MarkNpc` is the
+  member the leader delegated Mark NPC to (OP_DelegateAbility, the RoF2 client's group marker), and `MasterLooter` is
+  never anyone. Settle: whether MQ's emulator build reads the delegated marker for IsMarkNPC, and whether RoF2's
+  CGroupMember keeps any master looter state.
 - **`Merchant.ItemsReceived` for a merchant with nothing to sell.** `player` MQ sets it once the merchant window's list
   has been filled (CMerchantWnd's PurchasePageHandler::UpdateList). Here it is TRUE once the merchant is open and an
   item of its stock has come, so a merchant with no stock stays FALSE. Settle: whether UpdateList runs for an empty
   stock.
+- **`Item.Spell`'s order.** `player` (`mq/tlo_game.cpp`) Now: the first of the item's click, scroll, proc, focus and
+  worn effects whose spell id the spell table has; an id the table lacks is skipped for the next effect. Neither the
+  order nor the skipping is checked against MacroQuest. Settle: MQ's `ItemMembers::Spell` (the effects it reads, in
+  which order, and what it returns for an id `GetSpellByID` does not find).
 
 ## Server-specific extensions
 

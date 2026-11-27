@@ -105,6 +105,10 @@ local function body(x, y, w, h, s)
   local pad = 10 * s
   local frac, _, raw = API.character.Gauge(6)
   local caption = API.character.Label(28, true) or name
+  -- Con Labels (Options > Accessibility; game/accessibility.h): the con colour in words, which the host gives the
+  -- con box as its tooltip while the option is on.
+  local conName = con and API.windows.ChildTooltip(WINDOW, "A_TargetBoxStaticAnimTop")
+  if conName and conName ~= "" then caption = caption .. " (" .. conName .. ")" end
   local pct = API.character.Label(29) or ""
   -- name and the con dot
   local nx = x + pad
@@ -129,7 +133,11 @@ local function body(x, y, w, h, s)
     local tw = (x + w - pad) - tx
     T.Text(tx, by - 2 * s, T.Fit(tname, tw * 0.5, T.font.small), C.muted, T.font.small)
     TOT_BAR.right, TOT_BAR.font = tpct ~= "" and (tpct .. "%") or nil, T.font.tiny
-    T.Bar("target.tot", tx + tw * 0.52, by + 2 * s, x + w - pad, by + 10 * s, s, tf, C.hp, TOT_BAR)
+    local bx0, by0, bx1, by1 = tx + tw * 0.52, by + 2 * s, x + w - pad, by + 10 * s
+    T.Bar("target.tot", bx0, by0, bx1, by1, s, tf, C.hp, TOT_BAR)
+    if not ui.GetIO().alt and T.Hit("##tot", bx0, by0, bx1, by1, false) then
+      API.windows.ClickChild("TargetOfTargetWindow", "TargetOfTarget_HP", "left")
+    end
   end
   if aggroOn then
     by = by + (hasTot and 18 or 0) * s

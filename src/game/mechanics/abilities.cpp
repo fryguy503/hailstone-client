@@ -30,6 +30,8 @@ constexpr std::uint32_t kMovedUnhidden = 12682;    // 0x318a You have moved and 
 
 constexpr std::uint32_t kColorSkill = 0x10e;
 
+bool has_racial_bash(std::uint32_t race) { return race == 2 || race == 9 || race == 10; }
+
 void say(SkillResult& out, std::uint32_t eqstr, std::uint32_t color = kColorSkill, std::vector<std::string> args = {}) {
     out.messages.push_back({eqstr, std::move(args), color});
 }
@@ -102,6 +104,15 @@ std::int32_t adjusted_skill(const Character& ch, std::uint32_t skill) {
         if (std::uint32_t spoof = rules.spoof_class(rules.ctx, static_cast<std::int32_t>(skill), sheet.class_mask))
             if (std::int32_t v = ch.adjusted_skill_as(skill, spoof); v > 0) return v;
     return server_adjusted_skill(ch, skill);
+}
+
+bool has_innate_slam(const Character& ch, std::uint32_t current_race) {
+    return slam_innate(current_race ? current_race : ch.sheet().race) != 0xff;
+}
+
+bool can_slam(const Character& ch, std::uint32_t current_race) {
+    const auto race = current_race ? current_race : ch.sheet().race;
+    return slam_innate(race) != 0xff && (has_racial_bash(race) || adjusted_skill(ch, skill::kBash) > 0);
 }
 
 std::uint32_t modify_attack_speed(const Character& ch, std::uint32_t delay) {
@@ -505,14 +516,14 @@ bool can_use_combat_skill(const SkillContext& ctx, std::uint32_t skill, bool sla
     // (vtable +0x88, 0x58b4e0, the raw +0xeb4 an illusion's SetRace writes) with those three, so the variant races
     // 90, 92 and 93, whose innate Slam slot InitInnates also sets, do not pass here.
     const std::uint32_t race = ctx.form_race ? ctx.form_race : sheet.race;
-    if (skill == skill::kBash && (race == 9 || race == 10 || race == 2)) return true;
+    // A deliberate change to a RoF2 rule (docs/mechanics.md "Slam"): Slam's attack needs no shield. The original
+    // asks the races 90, 92 and 93, which have the innate Slam but not the race pass below, for the shield as for
+    // Bash; Hailstone asks only for the Bash skill, which EQEmu's OPCombatAbility wants from them too (it bypasses
+    // the skill only for races 2, 9 and 10, by GetRace, and checks no shield). A form without the innate Slam fails.
+    if (skill == skill::kBash && slam) return can_slam(*ctx.ch, race);
+    if (skill == skill::kBash && has_racial_bash(race)) return true;
     if (adjusted_skill(*ctx.ch, skill) <= 0) return false; // CharacterZoneClient::HasSkill @0x44a1b0
     if (skill != skill::kBash || ctx.me.type != 0) return true;
-    // A deliberate change to a RoF2 rule (docs/mechanics.md "Slam"): Slam's attack needs no shield. The original
-    // asks the races 90, 92 and 93, which have the innate Slam but not the race pass above, for the shield as for
-    // Bash; Hailstone asks only for the Bash skill, which EQEmu's OPCombatAbility wants from them too (it bypasses
-    // the skill only for races 2, 9 and 10, by GetRace, and checks no shield).
-    if (slam) return true;
     // Bash: a shield in the secondary slot, one of three primary items, or a two-hander with SPA 226.
     bool allowed = true;
     const net::Item* secondary = sheet.item(14);
@@ -943,10 +954,10 @@ std::vector<std::uint32_t> usable_skills(const Character& ch, bool combat, std::
         std::int32_t type = skill_combat_type(s);
         if ((type == 1 || type == 2) == combat) out.push_back(s);
     }
-    // Slam (111) comes from the current form, not necessarily the profile race.
+    // Slam (111) comes from the current form's innate slot alone, as CSkillsSelectWnd::SetTypesToDisplay lists it:
+    // a 90, 92 or 93 form without Bash sees it too, though its use is refused (can_use_combat_skill).
     // The list updates as an illusion starts or expires.
-    const auto race = current_race ? current_race : ch.sheet().race;
-    if (combat && slam_innate(race) != 0xff) out.push_back(skill::kSlam);
+    if (combat && has_innate_slam(ch, current_race)) out.push_back(skill::kSlam);
     return out;
 }
 

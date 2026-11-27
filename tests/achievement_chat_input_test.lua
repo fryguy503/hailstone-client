@@ -90,6 +90,7 @@ for _,pack in ipairs({"modern","gamepad"})do
   hs=setmetatable({InGame=function()return true end,UiReady=function()return true end,
     GameState=function()return gameState end,Name=function()return charName end,
     ChatWindows=function()return {chatWindow}end,ChatText=function()return 0,{},true,0 end,
+    ChatTimestamps=function()return "off" end,
     ChatInfo=function()return 3,true,"Say"end,ChatPage=function()return nil end,
     ChatHistory=function()
       local line = recalled

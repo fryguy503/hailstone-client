@@ -103,6 +103,7 @@ local function slot(set, n, cx, cy, size, alpha, held)
     ui.DrawRectFilled(x0, y0, x1, y1, C.accent[1], C.accent[2], C.accent[3], 0.18 * alpha, r)
     T.outline(x0, y0, x1, y1, C.accent, alpha, r, T.px(3))
   end
+  if info.unavailable then ui.DrawRectFilled(x0, y0, x1, y1, 0, 0, 0, 0.55 * alpha, r) end
   T.outline(x0, y0, x1, y1, pressed and C.accent or C.edge, alpha, r, pressed and T.px(3) or 1)
   if hovered then T.outline(x0, y0, x1, y1, C.accent, 0.8, r, T.px(2)) end
   -- the pad button that fires it, at the slot's outer corner

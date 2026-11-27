@@ -445,6 +445,11 @@ TEST_CASE("CanUseCombatSkill: Bash without the skill is for races 2, 9 and 10 by
         c.form_race = race;
         c.form_slam = slam_innate(race);
         CHECK_FALSE(can_use_combat_skill(c, skill::kBash, true));
+        CHECK_FALSE(can_slam(bard.ch, race));
+        // Listed all the same, as CSkillsSelectWnd::SetTypesToDisplay lists it from the innate slot alone.
+        CHECK(has_innate_slam(bard.ch, race));
+        const auto skills = usable_skills(bard.ch, true, race);
+        CHECK(std::find(skills.begin(), skills.end(), skill::kSlam) != skills.end());
         c.target = Fixture::rat(10.0f);
         for (std::uint32_t id : {skill::kBash, skill::kSlam}) {
             SkillState state;

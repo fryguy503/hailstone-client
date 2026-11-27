@@ -655,6 +655,7 @@ void ActionsUi::hot_button(net::GameConnection& conn, const mech::Character* ch,
                            int button, bool mouse) {
     if (bar < 0 || bar >= game::kHotBars || button < 0 || button >= game::kHotButtons) return;
     const HotButton b = store_.current(bar, button);
+    if (button_skill(b) == mech::skill::kSlam && (!ch || !mech::can_slam(*ch, skill_race(conn, *ch)))) return;
     const auto& ps = conn.player_status();
     game::HotButtonGlobals g;
     g.stand_state = ps.stand_state;
@@ -935,10 +936,13 @@ void ActionsUi::draw_hotbar(net::GameConnection& conn, const mech::Character* ch
     std::uint32_t now = static_cast<std::uint32_t>(net::GameConnection::now_ms());
     float size = em * 3.6f;
     const auto& inv = conn.inventory();
+    const bool slam_available = ch && mech::can_slam(*ch, skill_race(conn, *ch));
     for (int i = 0; i < game::kHotButtons; ++i) {
         if (i % 6) ImGui::SameLine();
         ImGui::PushID(i);
         HotButton& b = store_.current(bar, i);
+        const std::int32_t skill = button_skill(b);
+        const bool unavailable = skill == mech::skill::kSlam && !slam_available;
         std::string label = b.empty() ? "" : button_label(conn, b);
         std::uint64_t stack_count = 0;
         if (const auto at = game::hot_button_item_slot(inv, b)) {
@@ -957,8 +961,8 @@ void ActionsUi::draw_hotbar(net::GameConnection& conn, const mech::Character* ch
         ImDrawList* dl = ImGui::GetWindowDrawList();
         // Cooldown: the part of the reuse time left, darkening the button from the top.
         std::uint32_t left = 0, total = 0;
-        if (ch && button_skill(b) >= 0) {
-            auto s = static_cast<std::uint32_t>(button_skill(b));
+        if (ch && skill >= 0 && !unavailable) {
+            auto s = static_cast<std::uint32_t>(skill);
             left = state_.timers.remaining(*ch, s, now);
             total = state_.timers.timer_duration(*ch, s);
         }
@@ -973,7 +977,8 @@ void ActionsUi::draw_hotbar(net::GameConnection& conn, const mech::Character* ch
             ImGui::PushClipRect(p, ImVec2(p.x + size, p.y + label_height), true);
             ImVec2 ts = ImGui::CalcTextSize(label.c_str(), nullptr, false, size - 4.0f);
             dl->AddText(ImGui::GetFont(), em * 0.85f, ImVec2(p.x + 3.0f, p.y + (label_height - ts.y * 0.85f) * 0.5f),
-                        IM_COL32(235, 235, 235, 255), label.c_str(), nullptr, size - 6.0f);
+                        unavailable ? ImGui::GetColorU32(ImGuiCol_TextDisabled) : IM_COL32(235, 235, 235, 255),
+                        label.c_str(), nullptr, size - 6.0f);
             ImGui::PopClipRect();
         }
         if (!key.empty()) dl->AddText(ImGui::GetFont(), em * 0.75f, ImVec2(p.x + 3.0f, p.y + 2.0f), IM_COL32(255, 220, 120, 255), key.c_str());
@@ -990,7 +995,7 @@ void ActionsUi::draw_hotbar(net::GameConnection& conn, const mech::Character* ch
             dl->AddText(ImVec2(p.x + size - ImGui::CalcTextSize(t.c_str()).x - 3.0f, p.y + size - em - 2.0f),
                         IM_COL32(255, 255, 255, 255), t.c_str());
         }
-        if (clicked) hot_button(conn, ch, view, bar, i);
+        if (clicked && !unavailable) hot_button(conn, ch, view, bar, i);
         if (ImGui::BeginDragDropTarget()) {
             if (ImGui::AcceptDragDropPayload(kDragType)) {
                 b = dragged();
@@ -1055,6 +1060,7 @@ void ActionsUi::draw_actions(net::GameConnection& conn, const mech::Character* c
         else ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "ready");
         ImGui::PopID();
     };
+    const bool slam_available = ch && mech::can_slam(*ch, skill_race(conn, *ch));
     auto slot_buttons = [&](auto& slots, bool combat, const char* id) {
         for (std::size_t i = 0; i < slots.size(); ++i) {
             if (i % 2) ImGui::SameLine();
@@ -1062,9 +1068,13 @@ void ActionsUi::draw_actions(net::GameConnection& conn, const mech::Character* c
             ImGui::PushID(static_cast<int>(i));
             std::int32_t s = slots[i];
             std::string label = s < 0 ? "(empty)" : skill_name(conn, static_cast<std::uint32_t>(s));
-            if (ImGui::Button((label + "##slot").c_str(), ImVec2(em * 9.5f, 0)) && s >= 0)
+            const bool unavailable = s == mech::skill::kSlam && !slam_available;
+            if (unavailable) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            const bool clicked = ImGui::Button((label + "##slot").c_str(), ImVec2(em * 9.5f, 0));
+            if (unavailable) ImGui::PopStyleColor();
+            if (clicked && s >= 0 && !unavailable)
                 use_skill(conn, ch, view, static_cast<std::uint32_t>(s));
-            if (s >= 0 && ImGui::BeginDragDropSource()) {
+            if (s >= 0 && !unavailable && ImGui::BeginDragDropSource()) {
                 dragged() = skill_button(static_cast<std::uint32_t>(s), combat);
                 ImGui::SetDragDropPayload(kDragType, &s, sizeof(s));
                 ImGui::TextUnformatted(label.c_str());

@@ -20,6 +20,7 @@ SET_EXECUTABLE_TARGET_PROPERTIES(hailstone-web)
 add_dependencies(hailstone-web libcef_dll_wrapper)
 target_link_libraries(hailstone-web PRIVATE libcef_dll_wrapper hailstone_web_protocol ${CEF_STANDARD_LIBS})
 set_target_properties(hailstone-web PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${HAILSTONE_BROWSER_DIR}$<0:>)
+hailstone_separate_symbols(hailstone-web)
 
 if(WIN32)
   target_link_libraries(hailstone-web PRIVATE ${CEF_BINARY_DIR}/libcef.lib)

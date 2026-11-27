@@ -578,6 +578,36 @@ TEST_CASE("nav: progress resets the stall clock") {
     CHECK(f.remaining(feet) == doctest::Approx(100.0f - feet.x));
 }
 
+TEST_CASE("nav: a follower is stuck from its first stall until it gains ground (MoveUtils.Stuck)") {
+    nav::PathFollower f;
+    f.start({{0, 0, 0}, {50, 0, 0}}, 2.0f);
+    glm::vec3 feet(0, 0, 0);
+    double t = 0.0;
+    for (; t < 0.9; t += 0.05) {
+        f.step(feet, t);
+        CHECK_FALSE(f.stuck()); // inside the stall time
+    }
+    for (; t < 1.2; t += 0.05) f.step(feet, t);
+    CHECK(f.stuck()); // the stall found: its first jump and strafe
+    // Moving less than the tuning's progress (0.5) is not gaining ground.
+    feet.x += 0.3f;
+    f.step(feet, t);
+    t += 0.05;
+    CHECK(f.stuck());
+    feet.x += 1.0f;
+    f.step(feet, t);
+    t += 0.05;
+    CHECK_FALSE(f.stuck());
+    // Stalled again, then stopped.
+    for (double end = t + 1.5; t < end; t += 0.05) f.step(feet, t);
+    CHECK(f.stuck());
+    f.stop();
+    CHECK_FALSE(f.stuck());
+    // A new walk starts unstuck.
+    f.start({{0, 0, 0}, {50, 0, 0}}, 2.0f);
+    CHECK_FALSE(f.stuck());
+}
+
 TEST_CASE("nav: a hitch is not counted as being stuck") {
     nav::PathFollower f;
     f.start({{0, 0, 0}, {100, 0, 0}}, 2.0f);
@@ -1153,6 +1183,7 @@ struct FakeNav : nav::NavControl {
     bool paused = false, shown = false;
     bool moveto_walk = false, moveto_done = false; // NavStatus::moveto, moveto_arrived
     bool warping = false; // NavStatus::afollow_waiting_warp
+    bool stuck = false;   // NavStatus::stuck
     std::string go_to_point(const glm::vec3& w, float d, std::string, bool straight, bool flat) override {
         calls.push_back({"point", w, 0, d, straight, flat});
         return {};
@@ -1196,12 +1227,14 @@ struct FakeNav : nav::NavControl {
         if (!calls.empty() && calls.back().what == "stick") {
             s.stick_spawn = calls.back().id;
             s.stick_distance = calls.back().distance > 0.0f ? calls.back().distance : 9.0f;
+            s.stuck = stuck;
             return s;
         }
         s.active = !calls.empty() && calls.back().what != "stop" && calls.back().what != "unstick";
         s.paused = paused;
         s.moveto = moveto_walk;
         s.moveto_arrived = moveto_done;
+        s.stuck = stuck;
         s.goal = "a_rat01";
         s.tiles_done = 3;
         s.tiles_total = 4;
@@ -1389,6 +1422,46 @@ TEST_CASE("nav: the MoveTo TLO") {
     CHECK(h.p("${MoveTo} ${MoveTo.Moving} ${MoveTo.Stopped}") == "OFF FALSE TRUE");
     h.ctx.nav = nullptr; // no navigation: no MoveTo
     CHECK(h.p("${MoveTo}") == "NULL");
+}
+
+TEST_CASE("nav: the MoveUtils TLO") {
+    MqHost h;
+    CHECK(h.p("${MoveUtils} ${MoveUtils.Command} ${MoveUtils.Stuck}") == "NONE NONE FALSE");
+    h.nav.moveto_walk = true;
+    h.run("/moveto loc 5 6");
+    CHECK(h.p("${MoveUtils} ${MoveUtils.Command} ${MoveUtils.Stuck}") == "MOVETO MOVETO FALSE");
+    h.nav.stuck = true;
+    CHECK(h.p("${MoveUtils.Stuck}") == "TRUE");
+    h.run("/stick id 10");
+    CHECK(h.p("${MoveUtils} ${MoveUtils.Stuck}") == "STICK TRUE");
+    h.nav.stuck = false;
+    CHECK(h.p("${MoveUtils.Stuck}") == "FALSE");
+    h.ctx.nav = nullptr; // no navigation: no MoveUtils
+    CHECK(h.p("${MoveUtils}") == "NULL");
+}
+
+TEST_CASE("nav: a /moveto held in place is stuck (MoveUtils.Stuck) until it walks on") {
+    NavHarness h;
+    h.nav.zone_loaded(h.collision, nullptr, {});
+    REQUIRE(h.nav.go_to_point({20, 40, 0}, 3.0f, "north", true, true).empty());
+    auto held = [&h] { // a frame where the character does not move (a wall, a rock)
+        app::Navigator::Frame f;
+        f.feet = h.feet;
+        f.now = h.now;
+        h.nav.frame(f);
+        h.now += 0.05;
+    };
+    for (int i = 0; i < 10; ++i) held(); // half a second: not yet
+    CHECK(h.nav.status().moveto);
+    CHECK_FALSE(h.nav.status().stuck);
+    for (int i = 0; i < 20; ++i) held(); // past the follower's second
+    CHECK(h.nav.status().moveto);
+    CHECK(h.nav.status().stuck);
+    for (int i = 0; i < 5; ++i) h.frame(); // free to move: it walks on
+    CHECK(h.nav.status().moveto);
+    CHECK_FALSE(h.nav.status().stuck);
+    h.nav.stop("");
+    CHECK_FALSE(h.nav.status().stuck);
 }
 
 TEST_CASE("nav: a /moveto's arrival sets MoveTo.Stopped, cleared by the next /moveto; other walks leave it") {

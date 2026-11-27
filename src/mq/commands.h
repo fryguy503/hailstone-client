@@ -27,6 +27,13 @@ namespace hailstone::mq {
 
 class MapFilters;
 
+// A .cfg file to run (app/autoexec.h CfgFile).
+struct CfgLoad {
+    std::string file;               // its canonical path: a file already running is not run again inside itself
+    std::vector<std::string> lines;
+    std::string refused;            // not empty: the file does not run, and this chat line says why
+};
+
 struct CommandEnv {
     plugin::Hooks* hooks = nullptr;
     const Registry* registry = nullptr;
@@ -45,6 +52,9 @@ struct CommandEnv {
     std::function<bool(std::string_view command, int mode)> keypress;
     // /timed's clock, in milliseconds; null: the steady clock.
     std::function<std::int64_t()> now_ms;
+    // /loadcfg: the .cfg file a name or path gives (app/autoexec.h load_cfg); nullopt: no such file. `typed`: the
+    // player sent the line (no script, plugin or window did), so a path may be taken. Null: /loadcfg finds none.
+    std::function<std::optional<CfgLoad>(std::string_view name, bool typed)> load_cfg;
 };
 
 // /timed's limit on lines waiting at once: one more is refused with a chat line, so a script that queues without end
@@ -65,8 +75,13 @@ public:
 // Whether a key command is movement (kCapMove) rather than an action (kCapActions) for /keypress.
 bool movement_key(std::string_view command);
 
-// How deep /docommand, /noparse and /squelch may run each other in one line.
+// How deep /docommand, /noparse, /squelch and /loadcfg may run each other in one line.
 inline constexpr int kMaxNestedCommands = 16;
+
+// How many .cfg lines one /loadcfg the player or a script sent, or one batch of files the client runs at a moment
+// (Commands::run_cfg_files), may run in all, the lines of the files they /loadcfg in turn included: nesting alone
+// would let a file of a few /loadcfg lines run millions.
+inline constexpr int kMaxCfgLines = 1000;
 
 class Commands {
 public:
@@ -74,6 +89,10 @@ public:
     ~Commands();
     Commands(const Commands&) = delete;
     Commands& operator=(const Commands&) = delete;
+
+    // .cfg files due at one moment (app/automation.cpp: AutoExec, InGame, zoned ...), in order, as the player's lines,
+    // under one budget of kMaxCfgLines. A refused file's chat line is said instead.
+    void run_cfg_files(const std::vector<CfgLoad>& files);
 
 private:
     void filter(std::string& line, plugin::Flow& flow);
@@ -86,6 +105,11 @@ private:
     void map_filter(std::string_view args);
     // /docommand, /noparse and /squelch: the rest of the line run as a command, at most kMaxNestedCommands deep.
     void run_nested(std::string_view args);
+    // /loadcfg (MacroQuest's LoadCfgCommand): each of the file's lines run as a typed line (parsed), one level deeper.
+    void load_cfg(std::string_view args);
+    // A file's lines, in the current budget; not when the file is already running further out.
+    void run_cfg(const CfgLoad& file);
+    bool too_deep() const; // kMaxNestedCommands reached: says so
     // /timed: a line waiting for its time, with who sent it (run as them: CallerScope).
     struct Timed {
         std::int64_t due_ms = 0;
@@ -106,6 +130,9 @@ private:
     bool noparse_ = false;
     int squelch_ = 0;
     int nested_ = 0; // run_nested calls in progress
+    std::vector<std::string> cfg_stack_; // the .cfg files running, outermost first
+    int cfg_budget_ = 0;                 // lines the outermost /loadcfg or batch may still run
+    bool cfg_budget_said_ = false;       // its end has been said
 };
 
 } // namespace hailstone::mq

@@ -306,10 +306,13 @@ void ClientApp::draw_ui(float fps) {
             tv.name = game::spawn_label(t);
             tv.level = t.level;
             tv.hp_percent = t.hp_percent;
-            tv.con_rgb = game::con_rgb(game::con_level(t, ps.level, conn_->pvp_rules()));
+            const game::Con con = game::con_level(t, ps.level, conn_->pvp_rules());
+            tv.con_rgb = game::con_rgb(con);
             tv.is_corpse = t.is_corpse;
             tv.is_self = it->first == world.player_id;
             if (tv.is_self) tv.con_rgb = 0xffffff;
+            // Hailstone's Con Labels (game/accessibility.h): the con colour in words too.
+            if (accessibility_.con_labels && !tv.is_self && !t.is_corpse) tv.con_label = game::con_colour_name(con);
             tv.distance = glm::distance(t.position, feet_ + glm::vec3(0, 0, floor_offset_));
         }
         game_view_.respawn = {};

@@ -21,37 +21,43 @@ constexpr std::int64_t kFindReplyWaitMs = 10000;
 }
 
 std::uint64_t GameConnection::interaction_context() const {
-    const auto* player = world_.player();
-    const auto incarnation = player ? player->incarnation : 0;
     // Camping changes which actions are allowed, not this zone/connection/player lifetime. Callers still check
     // the actual state independently; a pending server camp offer must remain tied to the same opaque context.
     const auto context_state = state_ == ConnectionState::Camping ? ConnectionState::InZone : state_;
-    if (!interaction_context_ || interaction_player_ != incarnation || interaction_session_ != zone_session_.get() ||
-        interaction_state_ != context_state || interaction_dead_ != pstatus_.dead) {
-        interaction_context_ = core::next_process_identity();
-        interaction_player_ = incarnation;
-        interaction_session_ = zone_session_.get();
-        interaction_state_ = context_state;
-        interaction_dead_ = pstatus_.dead;
-    }
-    return interaction_context_;
+    return context_for(interaction_, context_state);
+}
+
+std::uint64_t GameConnection::context_for(InteractionContext& context, ConnectionState state) const {
+    const auto* player = world_.player();
+    const auto incarnation = player ? player->incarnation : 0;
+    if (!context.id || context.player != incarnation || context.session != zone_session_.get() ||
+        context.state != state || context.dead != pstatus_.dead)
+        context = {core::next_process_identity(), incarnation, zone_session_.get(), state, pstatus_.dead};
+    return context.id;
 }
 
 void GameConnection::invalidate_interaction_context() {
-    interaction_context_ = 0;
+    interaction_.id = tracking_interaction_.id = 0;
     large_dialog_.reset();
 }
 
 std::optional<GameConnection::ActorRef> GameConnection::captureActorRef(std::uint32_t id) const {
     if (state_ != ConnectionState::InZone || !world_.player()) return std::nullopt;
+    return capture_actor_ref(id, interaction_context());
+}
+
+std::optional<GameConnection::ActorRef> GameConnection::capture_actor_ref(std::uint32_t id, std::uint64_t context) const {
     const auto actor = world_.spawns.find(id);
     if (actor == world_.spawns.end() || !actor->second.incarnation) return std::nullopt;
-    return ActorRef{interaction_context(), id, actor->second.incarnation};
+    return ActorRef{context, id, actor->second.incarnation};
 }
 
 bool GameConnection::matches(const ActorRef& actor) const {
-    if (!actor.context || state_ != ConnectionState::InZone || !world_.player() ||
-        interaction_context() != actor.context) return false;
+    return state_ == ConnectionState::InZone && world_.player() && matches_actor_ref(actor, interaction_context());
+}
+
+bool GameConnection::matches_actor_ref(const ActorRef& actor, std::uint64_t context) const {
+    if (!actor.context || actor.context != context) return false;
     const auto current = world_.spawns.find(actor.id);
     return current != world_.spawns.end() && current->second.incarnation == actor.incarnation;
 }

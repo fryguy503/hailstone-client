@@ -40,10 +40,21 @@ bool write_crash_report(const char* what);
 // The pieces, async-signal-safe: they write into `out` (always NUL-terminated) and return the length.
 // "crash-YYYYMMDD-HHMMSS.txt" for `unix_seconds` (UTC).
 std::size_t format_crash_name(char* out, std::size_t size, std::int64_t unix_seconds);
-// The report: a title, "build: <build>" (when not empty), "time: YYYY-MM-DD HH:MM:SS UTC", "what: <what>",
-// "log: <log_path>" (when not empty) and "last log lines:" followed by `recent`. write_crash_report then appends
-// the stack ("stack:", one frame a line, glibc's backtrace) where the system has one.
+// The report: a title, "build: <build>" (when not empty), "build-id: <build_id>" (when not empty), "time:
+// YYYY-MM-DD HH:MM:SS UTC", "what: <what>", "log: <log_path>" (when not empty) and "last log lines:" followed by
+// `recent`. write_crash_report then appends the stack ("stack:", one frame a line, glibc's backtrace) where the
+// system has one. tools/symbolize_crash.py picks the build's symbol file by the build ID (docs/hardening.md).
 std::size_t format_crash_report(char* out, std::size_t size, std::int64_t unix_seconds, const char* what,
-                                const char* log_path, const char* recent, const char* build = nullptr);
+                                const char* log_path, const char* recent, const char* build = nullptr,
+                                const char* build_id = nullptr);
+
+// The GNU build ID (an NT_GNU_BUILD_ID note named "GNU") in an ELF note segment as it lies in memory, in the
+// program's own byte order; `align` is the segment's alignment (4, or 8 for a segment of 8-aligned notes). Returns
+// its length and points `id` at it; 0 when the segment has none or is malformed.
+std::size_t find_gnu_build_id(const unsigned char* notes, std::size_t size, std::size_t align,
+                              const unsigned char** id);
+// The running program's GNU build ID in lowercase hex, read once by set_crash_report_dir; empty where there is none
+// (Windows, whose minidump names the PDB instead; macOS; a link without --build-id).
+const char* crash_build_id();
 
 } // namespace hailstone::platform

@@ -24,22 +24,30 @@ TEST_CASE("Frame pace: focused, or a background rate of 0, keeps the frame limit
     CHECK(p.draw);
 }
 
-TEST_CASE("Frame pace: a background rate of 10 or more caps the loop and draws every frame") {
+TEST_CASE("Frame pace: a background rate of 30 or more caps the loop and draws every frame") {
+    CHECK(app::kBackgroundTickHz == 30);
     CHECK(app::frame_pace(0, 30, false, milliseconds(0)).cap == 30);
     CHECK(app::frame_pace(144, 60, false, milliseconds(0)).cap == 60);
     CHECK(app::frame_pace(30, 60, false, milliseconds(0)).cap == 30); // the lower of the two
-    CHECK(app::frame_pace(0, 10, false, milliseconds(0)).draw);
+    CHECK(app::frame_pace(0, 30, false, milliseconds(0)).draw);
 }
 
-TEST_CASE("Frame pace: below 10 in the background the loop runs at 10 and draws that many frames a second") {
-    for (int bg : {1, 5, app::kBackgroundNoDraw}) CHECK(app::frame_pace(0, bg, false, milliseconds(0)).cap == 10);
-    // 1: once a second, on the loop's tenth tick (not the eleventh after a late wake).
+TEST_CASE("Frame pace: below 30 in the background the loop runs at 30 and draws that many frames a second") {
+    for (int bg : {1, 5, 10, 15, app::kBackgroundNoDraw})
+        CHECK(app::frame_pace(0, bg, false, milliseconds(0)).cap == 30);
+    // A loop capped lower than the floor keeps its own cap.
+    CHECK(app::frame_pace(20, 5, false, milliseconds(0)).cap == 20);
+    // 1: once a second, on the loop's thirtieth tick (not the thirty-first after a late wake).
     CHECK_FALSE(app::frame_pace(0, 1, false, milliseconds(900)).draw);
     CHECK(app::frame_pace(0, 1, false, milliseconds(1000)).draw);
     CHECK(app::frame_pace(0, 1, false, milliseconds(990)).draw);
-    // 5: every second tick.
+    // 5: every sixth tick.
     CHECK_FALSE(app::frame_pace(0, 5, false, milliseconds(100)).draw);
+    CHECK_FALSE(app::frame_pace(0, 5, false, milliseconds(166)).draw);
     CHECK(app::frame_pace(0, 5, false, milliseconds(200)).draw);
+    // 15: every second tick.
+    CHECK_FALSE(app::frame_pace(0, 15, false, milliseconds(34)).draw);
+    CHECK(app::frame_pace(0, 15, false, milliseconds(67)).draw);
     // 0 (kBackgroundNoDraw): never.
     CHECK_FALSE(app::frame_pace(0, app::kBackgroundNoDraw, false, milliseconds(60000)).draw);
 }
@@ -123,7 +131,7 @@ TEST_CASE("Frame pace: outside a light screen max_fps 0 stays unlimited and set 
 
 TEST_CASE("Frame pace: the background limit still works on a light screen") {
     CHECK(app::frame_pace(0, 30, false, milliseconds(0), true).cap == 30);
-    CHECK(app::frame_pace(0, 5, false, milliseconds(0), true).cap == 10);
+    CHECK(app::frame_pace(0, 5, false, milliseconds(0), true).cap == app::kBackgroundTickHz);
     CHECK_FALSE(app::frame_pace(0, 5, false, milliseconds(100), true).draw);
     CHECK(app::frame_pace(0, 5, false, milliseconds(200), true).draw);
     CHECK_FALSE(app::frame_pace(0, app::kBackgroundNoDraw, false, milliseconds(60000), true).draw);
@@ -168,7 +176,7 @@ TEST_CASE("Frame pace: the light-screen cap holds through the deadline schedule 
 }
 
 TEST_CASE("Frame pace: a minimised window runs at the background tick whatever the settings") {
-    // The defaults (max_fps 0, background_fps 0) would be unlimited; minimised they are held at 10.
+    // The defaults (max_fps 0, background_fps 0) would be unlimited; minimised they are held at 30.
     CHECK(app::frame_pace(0, 0, false, milliseconds(0), false, true).cap == app::kBackgroundTickHz);
     CHECK(app::frame_pace(0, 0, true, milliseconds(0), false, true).cap == app::kBackgroundTickHz);
     CHECK(app::frame_pace(0, 1000, false, milliseconds(0), false, true).cap == app::kBackgroundTickHz);

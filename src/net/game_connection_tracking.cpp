@@ -28,12 +28,22 @@ bool in_group_fn(const void* ctx, std::int32_t id) {
 
 } // namespace
 
+bool GameConnection::tracking_in_zone() const { return in_zone() && zone_exit_ == ZoneExit::None; }
+
+std::uint64_t GameConnection::tracking_context() const {
+    // The countdown and standing to cancel it preserve the tracking list and its actors in the same zone. As in RoF2:
+    // Send_OP_Camp @0x5317a0 sits, saves, sends OP_Camp and starts the camp timer without touching any window;
+    // CharacterZoneClient::UseSkill @0x45b2d0 (case 0x35) refuses Tracking only while feigned (StandState 'f'); the
+    // window goes at CDisplay::DeactivateMainUI (@0x4891b0) after OP_Logout.
+    return context_for(tracking_interaction_, tracking_in_zone() ? ConnectionState::InZone : state_);
+}
+
 std::optional<GameConnection::TrackingAdmission> GameConnection::tracking_admission() const try {
-    if (tracking_admission_running_ || state_ != ConnectionState::InZone || pstatus_.dead || !world_.player() || !profile_)
+    if (tracking_admission_running_ || !tracking_in_zone() || pstatus_.dead || !world_.player() || !profile_)
         return std::nullopt;
     struct Reset { bool& flag; ~Reset() { flag = false; } } reset{tracking_admission_running_};
     tracking_admission_running_ = true;
-    const auto context = interaction_context();
+    const auto context = tracking_context();
     const auto lifecycle = server_ext().lifecycle_revision(*this);
     bool allowed = false;
     with_character([&](game::mechanics::Character& character) {
@@ -42,7 +52,7 @@ std::optional<GameConnection::TrackingAdmission> GameConnection::tracking_admiss
         allowed = server_ext().tracking_allowed(*this, character.sheet().class_id, player_class_mask(),
             static_cast<std::uint32_t>(std::max(0, tracker.adjusted_skill(game::mechanics::skill::kTracking))));
     });
-    if (!allowed || interaction_context() != context || server_ext().lifecycle_revision(*this) != lifecycle)
+    if (!allowed || tracking_context() != context || server_ext().lifecycle_revision(*this) != lifecycle)
         return std::nullopt;
     return TrackingAdmission{context, lifecycle};
 } catch (...) { return std::nullopt; }
@@ -68,18 +78,18 @@ void GameConnection::maintain_tracking() {
     // list shown stays. A reply that comes after it is the next request's (the replies carry no request id).
     if (tracking_request_ && now_ms() - tracking_request_at_ > 10000) tracking_request_.reset();
     if ((tracking_data_ && !tracking_admission_current(*tracking_data_)) ||
-        (tracking_request_ && !tracking_admission_current(*tracking_request_)) ||
+        (tracking_request_ && !tracking_request_retired_ && !tracking_admission_current(*tracking_request_)) ||
         (tracking_.open && !tracking_admitted())) retire_tracking();
 }
 
 void GameConnection::open_tracking(bool skill_admitted) try {
-    const auto context = interaction_context();
+    const auto context = tracking_context();
     if (!skill_admitted) {
         const auto allowed = server_ext().before_use_skill(*this, game::mechanics::skill::kTracking);
         if (allowed && !*allowed) { retire_tracking(); return; }
     }
     maintain_tracking();
-    if (context != interaction_context() || !tracking_admitted()) { retire_tracking(); return; }
+    if (context != tracking_context() || !tracking_admitted()) { retire_tracking(); return; }
     // CTrackingWnd::Activate: the times cleared and every entry reset (the level kept), then AboutToShow's OP_Track.
     tracking_.next_controls = tracking_.next_track = 0;
     for (auto& e : tracking_.list) {
@@ -142,7 +152,7 @@ void GameConnection::track_spawn(std::int32_t spawn_id, std::uint32_t expected_r
                            [&](const game::TrackEntry& e) { return e.spawn_id == spawn_id && spawn_id != 0; });
     if (it == tracking_.list.end()) return;
     const auto actor = tracking_actors_.find(spawn_id);
-    if (actor != tracking_actors_.end() && !matches(actor->second)) return;
+    if (actor != tracking_actors_.end() && !matches_actor_ref(actor->second, tracking_data_->context)) return;
     const std::optional<ActorRef> actor_ref = actor == tracking_actors_.end() ? std::nullopt : std::optional(actor->second);
     const auto admission = *tracking_data_;
     const auto revision = tracking_.revision;
@@ -151,7 +161,7 @@ void GameConnection::track_spawn(std::int32_t spawn_id, std::uint32_t expected_r
     const auto owned = [this, admission, revision, generation, actor_ref] {
         return tracking_action_generation_ == generation && tracking_data_ && tracking_.revision == revision &&
             tracking_data_->context == admission.context && tracking_data_->lifecycle == admission.lifecycle &&
-            interaction_context() == admission.context && (!actor_ref || matches(*actor_ref));
+            tracking_context() == admission.context && (!actor_ref || matches_actor_ref(*actor_ref, admission.context));
     };
     ByteWriter w;
     w.le<std::uint32_t>(static_cast<std::uint32_t>(spawn_id));
@@ -159,8 +169,8 @@ void GameConnection::track_spawn(std::int32_t spawn_id, std::uint32_t expected_r
         return owned() && tracking_admission_current(admission) && owned();
     }) || !owned()) return;
     tracking_.tracked = spawn_id;
+    close_tracking();
     system(12040, {name}, 0x10e);
-    tracking_.open = false;
 } catch (...) { retire_tracking(); }
 
 void GameConnection::set_track_sort(std::uint32_t order) {
@@ -197,9 +207,8 @@ void GameConnection::handle_track_reply(const AppPacket& p) {
     maintain_tracking();
     if (!tracking_request_) return;
     const auto request = *tracking_request_;
-    const bool retired = tracking_request_retired_;
-    tracking_request_.reset(); tracking_request_retired_ = false;
-    if (retired || !tracking_admission_current(request)) return;
+    tracking_request_.reset();
+    if (tracking_request_retired_ || !tracking_admission_current(request)) return;
     if (decode_track_reply_header(p) == game::kTrackReplyTimer) {
         log::debug("track: the reply is a timer, not a list");
         return;
@@ -212,7 +221,7 @@ void GameConnection::handle_track_reply(const AppPacket& p) {
     tracking_data_ = request;
     tracking_actors_.clear();
     for (const auto& entry : tracking_.list)
-        if (auto actor = captureActorRef(static_cast<std::uint32_t>(entry.spawn_id)))
+        if (auto actor = capture_actor_ref(static_cast<std::uint32_t>(entry.spawn_id), request.context))
             tracking_actors_.emplace(entry.spawn_id, *actor);
     std::size_t n = std::count_if(tracking_.list.begin(), tracking_.list.end(), [](const auto& e) { return e.position >= 0; });
     log::info("track: {} spawns in the reply", n);

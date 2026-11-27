@@ -101,7 +101,7 @@ hs=setmetatable({InGame=function() return 4 end,CursorSlot=33,
  gamepad=setmetatable({connected=function() return true end},{__index=function() return noop end})},
  {__index=function() return noop end})
 local API=TEST_UI_API_ATTACH(hs)
-assert(API.version.major==1 and API.version.minor==12)
+assert(API.version.major==1 and API.version.minor==13)
 assert(API.Supports('session') and API.Supports('session','InGame'))
 assert(not API.Supports('session','UiReady') and not API.Supports('invented'))
 assert(API.Supports('inventory','CursorSlot') and API.inventory.CursorSlot==33)
@@ -298,8 +298,36 @@ TEST_CASE("UI palettes: every palette is complete and keeps its UI's contrast ch
         }
         lua_pop(L, 1);
         CHECK(!checks.empty());
-        for (const Raw& r : raws) {
-            const Palette p = resolve(r, 0);
+        // The colour-vision modes' colours (`colourVision`, game/accessibility.h), laid over every palette as
+        // lib/theme.lua does (only tokens the palette has); each palette must keep its checks under each of them.
+        std::vector<std::pair<std::string, Palette>> overlays{{"", {}}};
+        lua_getfield(L, P, "colourVision");
+        if (lua_istable(L, -1)) {
+            lua_pushnil(L);
+            while (lua_next(L, -2)) {
+                if (lua_type(L, -2) == LUA_TSTRING && lua_istable(L, -1)) {
+                    Palette o;
+                    lua_pushnil(L);
+                    while (lua_next(L, -2)) {
+                        if (lua_type(L, -2) == LUA_TSTRING && lua_istable(L, -1)) {
+                            CHECK_MESSAGE(base.count(lua_tostring(L, -2)) == 1, "colourVision names no token " << lua_tostring(L, -2));
+                            o[lua_tostring(L, -2)] = read_color(L, lua_gettop(L));
+                        }
+                        lua_pop(L, 1);
+                    }
+                    overlays.emplace_back(lua_tostring(L, -2), std::move(o));
+                }
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+        for (const Raw& r : raws)
+        for (const auto& variant : overlays) {
+            Palette p = resolve(r, 0);
+            for (const auto& [k, v] : variant.second)
+                if (p.count(k)) p[k] = v;
+            const std::string mode = variant.first.empty() ? "off" : variant.first;
+            INFO("colour vision: " << mode);
             for (const auto& [k, v] : base) CHECK_MESSAGE(p.count(k) == 1, r.id << " has no colour " << k);
             for (const Check& c : checks) {
                 if (!p.count(c.fg) || !p.count(c.bg) || (!c.under.empty() && !p.count(c.under))) {

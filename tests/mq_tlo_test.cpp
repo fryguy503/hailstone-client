@@ -209,7 +209,9 @@ TEST_CASE("TLO: spells, gems and buffs") {
     CHECK(f.p("${Spell[200].Name}") == "Minor Healing");
     CHECK(f.p("${Spell[Minor Healing].ID}") == "200");
     CHECK(f.p("${Spell[200].Range}") == "100.00");
-    CHECK(f.p("${Spell[200].CastTime}") == "1.50");
+    // The spell times are timestamps (milliseconds), as MQ's and MyCastTime.
+    CHECK(f.p("${Spell[200].CastTime} ${Spell[200].MyCastTime} ${Spell[200].CastTime.TotalSeconds}") == "1500 1500 1");
+    CHECK(f.p("${Spell[200].RecastTime} ${Spell[200].RecoveryTime}") == "0 0");
     CHECK(f.p("${Spell[200].TargetType}") == "Single");
     CHECK(f.p("${Spell[200].SpellType}") == "Beneficial");
     CHECK(f.p("${Spell[11].Level}") == "3"); // the cleric's level column
@@ -563,7 +565,10 @@ TEST_CASE("TLO: Group, items, Zone and the rest") {
     CHECK(f.p("${Group.Member[0]}") == "Tester");
     CHECK(f.p("${Group.Member[1].Name}") == "Groupie");
     CHECK(f.p("${Group.Member[1].Distance}") == "20.00"); // groupmember inherits spawn
-    CHECK(f.p("${Group.Member[Groupie]}") == "1");
+    CHECK(f.p("${Group.Member[Groupie]}") == "Groupie"); // a name gives the member, as MQ's
+    CHECK(f.p("${Group.Member[groupie].Index}") == "1");
+    CHECK(f.p("${Group.Member[Tester].Index}") == "0");
+    CHECK(f.p("${Group.Member[Nobody]} ${Group.Member[]}") == "NULL NULL");
     CHECK(f.p("${Group.Leader}") == "Groupie");
     CHECK(f.p("${Group.MainTank.Name}") == "Groupie");
     CHECK(f.p("${Zone.ShortName} / ${Zone}") == "qeynos2 / North Qeynos");
@@ -887,6 +892,26 @@ TEST_CASE("spawn search: random text parses and searches without fault") {
     }
 }
 
+TEST_CASE("TLO: Me.Aura[n|name] and .ID, .Name, .SpawnID, .Find (MacroQuest's Aura)") {
+    Fixture f;
+    CHECK(f.p("${Me.Aura}") == "NULL"); // no auras
+    CHECK(f.p("${Me.Aura[1]}") == "NULL");
+    auto& auras = net::GameConnectionTestAccess::auras(*f.world.conn);
+    auras.push_back({net::kAuraAdd, 0, 501, 0, "Aura of the Zealot"});
+    auras.push_back({net::kAuraAdd, 0, 502, 0, "Reverent Aura"});
+    CHECK(f.p("${Me.Aura}") == "Aura of the Zealot"); // no index: the first
+    CHECK(f.p("${Me.Aura[1]}") == "Aura of the Zealot");
+    CHECK(f.p("${Me.Aura[2].Name}") == "Reverent Aura");
+    CHECK(f.p("${Me.Aura[2].ID}") == "2");
+    CHECK(f.p("${Me.Aura[2].SpawnID}") == "502");
+    CHECK(f.p("${Me.Aura[3]}") == "NULL");
+    CHECK(f.p("${Me.Aura[0]}") == "NULL");
+    CHECK(f.p("${Me.Aura[reverent].ID}") == "2"); // the start of a name, any case
+    CHECK(f.p("${Me.Aura[Zealot]}") == "NULL");    // not the middle of one
+    CHECK(f.p("${Me.Aura[1].Find[zealot]}") == "13");
+    CHECK(f.p("${Me.Aura[1].Find[Reverent]}") == "NULL");
+}
+
 TEST_CASE("TLO: Me.Bandolier[name|#] and .Active, .Index, .Name, .Item[n]") {
     Fixture f;
     using A = net::GameConnectionTestAccess;
@@ -988,7 +1013,9 @@ TEST_CASE("TLO: Me's endurance, AA points, auto fire, cast and gem timers, disci
     const int gem_left = std::stoi(f.p("${Me.GemTimer[Minor Healing]}"));
     CHECK(gem_left > 4000);
     CHECK(gem_left <= 5000);
-    CHECK(f.p("${Me.GemTimer[1].TotalSeconds}") == std::to_string(gem_left / 1000));
+    // Read a moment later, on the wall clock: a second boundary may have passed since (seen under the sanitizer).
+    const int gem_seconds = std::stoi(f.p("${Me.GemTimer[1].TotalSeconds}"));
+    CHECK((gem_seconds == gem_left / 1000 || gem_seconds == gem_left / 1000 - 1));
     CHECK(f.p("${Me.GemTimer[5]}") == "NULL");
     // Past int: no gem, not the one it wraps to (gem 1), nor INT_MIN - 1.
     CHECK(f.p("${Me.GemTimer[4294967297]}") == "NULL");
@@ -1090,6 +1117,37 @@ TEST_CASE("TLO: FindItemBank and FindItemBankCount search the bank and the share
     CHECK(f.p("${Bool[${FindItemBank[=Bone Chips of the Ages]}]} ${FindItemBank[]}") == "FALSE NULL");
 }
 
+TEST_CASE("TLO: Item.Spell is the first of the click, scroll, proc, focus and worn effects (MQ's order)") {
+    Fixture f;
+    using A = net::GameConnectionTestAccess;
+    auto& inv = A::inventory(*f.world.conn);
+    const net::ItemSlot primary = net::ItemSlot::possessions(net::kSlotPrimary);
+    net::Item sword;
+    sword.name = "Venom Blade";
+    sword.id = 6101;
+    sword.effects[net::kEffectProc].effect = 3006;  // Test Venom
+    sword.effects[net::kEffectWorn].effect = 11;    // Holy Armor
+    REQUIRE(inv.put(primary, sword));
+    CHECK(f.p("${Me.Inventory[13].Spell} ${Me.Inventory[13].Spell.ID}") == "Test Venom 3006"); // the proc before worn
+    // A click effect comes first; one whose spell the table lacks is passed over, as GetSpellByID's NULL is.
+    CHECK(f.p("${Me.Inventory[13].CastTime}") == "NULL"); // no click effect
+    sword.effects[net::kEffectClick].effect = 200; // Minor Healing
+    sword.effects[net::kEffectClick].extra[1] = 3000; // its cast time (ms)
+    REQUIRE(inv.put(primary, sword));
+    CHECK(f.p("${Me.Inventory[13].Spell}") == "Minor Healing");
+    CHECK(f.p("${Me.Inventory[13].CastTime} ${Me.Inventory[13].Spell.CastTime}") == "3000 1500"); // the item's, the spell's
+    sword.effects[net::kEffectClick].effect = 99999;
+    REQUIRE(inv.put(primary, sword));
+    CHECK(f.p("${Me.Inventory[13].Spell}") == "Test Venom");
+    sword.effects[net::kEffectClick].effect = 0;
+    sword.effects[net::kEffectProc].effect = 0;
+    REQUIRE(inv.put(primary, sword));
+    CHECK(f.p("${Me.Inventory[13].Spell}") == "Holy Armor");
+    sword.effects[net::kEffectWorn].effect = 0;
+    REQUIRE(inv.put(primary, sword));
+    CHECK(f.p("${Me.Inventory[13].Spell}") == "NULL");
+}
+
 TEST_CASE("TLO: item members E3 reads (ItemReady, Timer, Clicky, stacks, worn slots, augments, links)") {
     Fixture f;
     using A = net::GameConnectionTestAccess;
@@ -1189,6 +1247,52 @@ TEST_CASE("TLO: spawns' Aggressive, Primary, Secondary and Body; the group's Pre
     CHECK(f.p("${Group.LowMana[" + std::to_string(my_mana + 1) + "]}") == (my_mana + 1 > 10 ? "2" : "1"));
     CHECK(f.p("${Group.LowMana[5]}") == "0");
     CHECK(f.p("${Group.Injured}") == "0");
+}
+
+TEST_CASE("TLO: the rest of Group and groupmember, as MacroQuest's") {
+    Fixture f;
+    using A = net::GameConnectionTestAccess;
+    auto& conn = *f.world.conn;
+    auto& w = A::world(conn);
+    auto& grp = A::group(conn);
+    // Groupie (slot 0, in the zone) and the player: nobody missing, nobody a mercenary.
+    CHECK(f.p("${Group.AnyoneMissing}") == "FALSE");
+    CHECK(f.p("${Group.Member[1].Present} ${Group.Member[0].Present}") == "TRUE TRUE");
+    CHECK(f.p("${Group.MercenaryCount} ${Group.HealerMercCount}") == "0 0");
+    // AvgHPs: the player's 75% and Groupie's 100%.
+    w.spawns[12].hp_percent = 100;
+    CHECK(f.p("${Group.AvgHPs}") == "87");
+    // Cleric: the first player cleric in the zone, in member order (the player, a cleric here, is member 0).
+    w.spawns[1].class_id = game::Cleric;
+    CHECK(f.p("${Group.Cleric} ${Group.Cleric.ID}") == "Tester 1");
+    w.spawns[1].class_id = game::Warrior;
+    w.spawns[12].class_id = game::Warrior; // (the test world makes every player a cleric)
+    CHECK(f.p("${Group.Cleric}") == "NULL");
+    w.spawns[12].class_id = game::Cleric;
+    CHECK(f.p("${Group.Cleric} ${Group.Cleric.ID}") == "Groupie 12");
+    // Mark NPC: the member the leader delegated it to.
+    CHECK(f.p("${Group.MarkNpc} ${Group.Member[1].MarkNpc}") == "NULL FALSE");
+    A::leadership(conn).group_marker = 12;
+    CHECK(f.p("${Group.MarkNpc} ${Group.MarkNpc.Index}") == "Groupie 1");
+    CHECK(f.p("${Group.Member[1].MarkNpc} ${Group.Member[0].MarkNpc}") == "TRUE FALSE");
+    // No master looter in RoF2's group; no hover here.
+    CHECK(f.p("${Group.MasterLooter} ${Group.Member[1].MasterLooter}") == "NULL FALSE");
+    CHECK(f.p("${Group.MouseOver}") == "NULL");
+    // A mercenary cleric joins in the zone; then Groupie goes elsewhere.
+    grp.slots[2].name = "Merc";
+    grp.slots[2].merc = true;
+    auto& merc = w.spawns[14];
+    merc.id = 14;
+    merc.name = "Merc";
+    merc.is_npc = true;
+    merc.class_id = game::Cleric;
+    CHECK(f.p("${Group.MercenaryCount} ${Group.HealerMercCount} ${Group.TankMercCount}") == "1 1 0");
+    CHECK(f.p("${Group.Member[Merc].Mercenary}") == "TRUE");
+    w.spawns.erase(12);
+    CHECK(f.p("${Group.AnyoneMissing} ${Group.Member[Groupie].Present}") == "TRUE FALSE");
+    // Not grouped: none of them.
+    grp.active = false;
+    CHECK(f.p("${Group.AnyoneMissing} ${Group.AvgHPs} ${Group.MercenaryCount}") == "NULL NULL NULL");
 }
 
 TEST_CASE("TLO: Raid and its members") {

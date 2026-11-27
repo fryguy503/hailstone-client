@@ -564,6 +564,18 @@ needs a new major and an explicit migration.
 The API version is independent of the Hailstone release and the plugin SDK ABI, and describes host support, not a
 server's. Flat `hs` bindings use the same guarded closures as the namespaced methods.
 
+API 1.13 adds:
+
+- `hs.UI.character.GaugeValues(eqType[, petIndex[, requestExact]])` (flat `hs.GaugeValues`): a group member's HP,
+  mana or endurance, or a pet's HP, as `current, maximum, percent`, each nil when the server sent no such reading.
+- `hs.UI.chat.Timestamps(slot)` and `hs.UI.chat.SetTimestamps(slot, format)` (flat `hs.ChatTimestamps` and
+  `hs.ChatSetTimestamps`): the timestamp format of a window's selected tab (`"off"`, `"12h-seconds"`, `"24h-minutes"`
+  or `"24h-seconds"`), kept per tab.
+- The `unavailable` field of `hs.UI.hotbars.Info` (flat `hs.HotButtonInfo`): true for a Slam binding the current
+  form cannot use, so the interface can dim it.
+
+Check `API.version.minor >= 13` (or feature-check the method) before relying on them.
+
 ## Service policy and observed identities
 
 The read-only `hs.UI.map.Policy()` result includes `custom_spawns`, `stock_npcs`, `npc_find`, `name`, `revision`,

@@ -1717,6 +1717,11 @@ Other (22), and keeps 99 user colours (User_1..99). Checked: `CChatWindowManager
 - The extended user colours follow the original's rows on the Options Colors page, with Hailstone's defaults; Reset
   Default Colors resets them. `/usercolor` keeps 1..99 (100 a no-op).
 
+- Channel 108, Plugins and Scripts (`game::kChatChannelCode`), is not reached by a colour: a line a plugin or script
+  wrote while its code ran (`plugin::caller_name()` set: `mq.print`, `/echo`, `WriteChatf`, a command's own reply)
+  goes there whatever its colour. Its item is in the Filters menu after System Messages, so the Filters menu's ALL
+  moves it too. It starts on the main window, so nothing moves until the player moves it.
+
 Stock EQEmu sends no colour above 340 (`common/eq_constants.h` `Chat`), so on a stock server everything routes as in
 the original; the extension has no switch. The names and meanings of 355..408 are not confirmed (docs/unknowns.md
 "Chat").
@@ -1947,6 +1952,12 @@ pages go to HB_<fileNum>.ini [Hotbuttons] Page<p>.Slot<b>.
 
 #### Tracking
 
+The Tracking window, list and auto update work during the camp countdown. Standing to cancel the camp keeps the
+same list and pending reply. Sending OP_Logout closes the window and retires any pending list.
+RoF2 does the same: `Send_OP_Camp` (@0x5317a0) sits, saves, sends OP_Camp and starts the camp timer without
+touching any window; `CharacterZoneClient::UseSkill` (@0x45b2d0, case 0x35) refuses Tracking only while feigned
+(StandState 'f'); the window goes at `CDisplay::DeactivateMainUI` (@0x4891b0) after OP_Logout.
+
 The reply's entries are ordered by an introsort (insertion sort up to 32, median of nine above 40, heap sort when
 depth runs out) by the ranger's /tracksort order or the reply order, so ties land in a fixed place. The filter sets
 the standard con bit and hides by the con mask and the player / pet / mercenary filters.
@@ -2061,16 +2072,24 @@ behaviour worth keeping.
 
 #### Slam
 
-Skill 111, `slam_innate`. A deliberate change: Hailstone takes the innate Slam from the spawn's current race
-(`app::skill_race`), as EQEmu does (Client::OPCombatAbility checks `GetRace()`). The combat lists gain or lose Slam
-with an illusion, and Bash without a shield uses the Slam path; both send `DoAttack(100, 10)`. The original uses the
-profile race (EQ_Character::InitInnates).
+Skill 111, `slam_innate`. The innate Slam (`EQ_Character::InitInnates` @0x44d4d0: slot 11, profile +0x325c, set for
+races 2 / 90, 9 / 92 and 10 / 93) follows the spawn's current race (`app::skill_race`), as in the original:
+`EQPlayer::SetHeights` (@0x5a3f40) reruns `InitInnates(GetRace())`, keeping only slot 10 (regeneration), and
+`EQPlayer::do_change_form` (@0x596b20) and `EQ_Character::eqspa_change_form` (@0x43e2a0) call it on a change of
+form. EQEmu also checks `GetRace()` (Client::OPCombatAbility). The combat lists gain or lose Slam with an illusion,
+and Bash without a shield uses the Slam path; both send `DoAttack(100, 10)`.
+
+The Combat skill picker and the Ability Book list Slam on the innate slot alone (`has_innate_slam`), as
+`CSkillsSelectWnd::SetTypesToDisplay` (@0x756ce0) does: it checks no Bash, so a 90, 92 or 93 form without the Bash
+skill sees Slam too, and its use is refused (below). Hailstone's UI dims a saved Actions or hotbar Slam button, which
+then does nothing, while the current form cannot use Slam (`can_slam`: the innate slot, plus Bash for 90, 92 and 93),
+and it works again as soon as the form can.
 
 That attack still goes through `CanUseCombatSkill` (@0x5a2f10), which lets Bash pass without the skill or a shield
 only when the spawn's `GetRace` (vtable +0x88, 0x58b4e0: the raw race an illusion sets) is 2, 9 or 10. The citizen
 races 90, 92 and 93 have the innate Slam but not that pass, so in the original their Slam needs Bash and a shield.
 
-A second deliberate change: Slam never needs a shield. Under a 90, 92 or 93 form Hailstone's Slam (and Bash, which
+A deliberate change: Slam never needs a shield. Under a 90, 92 or 93 form Hailstone's Slam (and Bash, which
 goes the Slam way there) needs only the Bash skill (`can_use_combat_skill(..., slam)`): a character with the skill
 slams shieldless, one without it sends nothing. That is what stock EQEmu accepts: `Client::OPCombatAbility` bypasses
 the skill check only for races 2, 9 and 10 by `GetRace()` and checks no shield (it uses one only for the damage).

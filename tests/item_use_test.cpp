@@ -163,7 +163,13 @@ TEST_CASE("item use: Cmd_useitem's arguments") {
     CHECK(has_line(lines, "usage: /useitem <slot> <subindex>"));
     CHECK(has_line(lines, "       Power Source = 21"));
     CHECK(has_line(lines, "       Bag Slot 10 = 32"));
+    CHECK(has_line(lines, "or: /useitem <item name>, /useitem \"<item name>\" or /useitem <item id>"));
     conn.send_command("/useitem 40");
+    CHECK(has_line(drain_chat(conn), "That is an invalid slot index."));
+    // Not a number and no item's name: still RoF2's usage text.
+    conn.send_command("/useitem -1");
+    CHECK(has_line(drain_chat(conn), "usage: /useitem <slot> <subindex>"));
+    conn.send_command("/useitem '40'"); // single quotes, as RoF2's GetNextCmdArg takes them: a slot
     CHECK(has_line(drain_chat(conn), "That is an invalid slot index."));
     // A bad bag index keeps the bag itself; a good one the item in it.
     conn.send_command("/useitem 24 9");
@@ -172,6 +178,52 @@ TEST_CASE("item use: Cmd_useitem's arguments") {
     REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, Op::ItemVerifyRequest) == 1; }));
     const AppPacket* req = last_of(rig.server.zone_log, Op::ItemVerifyRequest);
     CHECK(u32_at(*req, 4) == (24u | 2u << 16));
+}
+
+TEST_CASE("item use: /useitem by name, by whole name in quotes, or by item id (MacroQuest's and Hailstone's)") {
+    Item bag = make_item(1003, "Backpack", 24);
+    bag.item_class = 1;
+    bag.bag_slots = 4;
+    BagItem in;
+    in.index = 2;
+    in.item = make_item(1004, "Gem of Sight", 24);
+    bag.contents.push_back(in);
+    Rig rig(with_items({bag}));
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    drain_chat(conn);
+    auto request_slot = [&](int n) { // the slot field of the n-th OP_ItemVerifyRequest
+        REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, Op::ItemVerifyRequest) == n; }));
+        return u32_at(*last_of(rig.server.zone_log, Op::ItemVerifyRequest), 4);
+    };
+    auto clear_pending = [&](const ItemSlot& s) { conn.receive_zone_packet_for_test(encode(ItemVerifyReply{s, -1, 0})); };
+    // Part of the name, any case: the Rations in general slot 1 (23).
+    conn.send_command("/useitem ratio");
+    CHECK(request_slot(1) == (23u | 0xffffu << 16));
+    clear_pending(ItemSlot::possessions(23));
+    // An item in a bag, by its whole name in quotes, any case.
+    conn.send_command("/useitem \"gem of sight\"");
+    CHECK(request_slot(2) == (24u | 2u << 16));
+    clear_pending(ItemSlot::possessions(24, 2));
+    // Quoted means the whole name: part of it finds nothing, and nothing is said.
+    conn.send_command("/useitem \"Gem\"");
+    rig.run_for(std::chrono::milliseconds(30));
+    CHECK(MockEqServer::count(rig.server.zone_log, Op::ItemVerifyRequest) == 2);
+    CHECK(drain_chat(conn).empty());
+    // An item id past the slots: the Short Sword (1001) in the primary slot (13).
+    conn.send_command("/useitem 1001");
+    CHECK(request_slot(3) == (13u | 0xffffu << 16));
+    clear_pending(ItemSlot::possessions(13));
+    // An id no carried item has stays RoF2's invalid slot; an unquoted name no item has shows RoF2's usage text.
+    conn.send_command("/useitem 5555");
+    CHECK(has_line(drain_chat(conn), "That is an invalid slot index."));
+    conn.send_command("/useitem Nothing Like It");
+    rig.run_for(std::chrono::milliseconds(30));
+    CHECK(MockEqServer::count(rig.server.zone_log, Op::ItemVerifyRequest) == 3);
+    CHECK(has_line(drain_chat(conn), "usage: /useitem <slot> <subindex>"));
+    // A slot is still a slot (13 is the sword's slot, not an item id).
+    conn.send_command("/useitem 13");
+    CHECK(request_slot(4) == (13u | 0xffffu << 16));
 }
 
 TEST_CASE("item use: a poison applies through OP_ApplyPoison (CEverQuest::ApplyPoison)") {

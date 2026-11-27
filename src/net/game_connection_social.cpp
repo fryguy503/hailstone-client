@@ -14,6 +14,7 @@
 #include <limits>
 
 #include "core/log.h"
+#include "net/cast_line.h"
 #include "game/chat_windows.h"
 #include "game/coords.h"
 #include "game/eq_names.h"
@@ -430,7 +431,23 @@ bool GameConnection::run_slash_command(std::size_t index, const std::string& arg
     }
     if (h == "Cmd_stand") { set_sitting(false); return true; }
     if (h == "Cmd_cast") {
-        // Cmd_cast @0x4e8900: /cast 1..12 (the bard twist cleared first).
+        // Cmd_cast @0x4e8900: /cast 1..12 (the bard twist cleared first). MacroQuest's Cast adds a memorized
+        // spell's name (net/cast_line.h).
+        if (!cast_line_is_gem(args)) {
+            std::string_view words = args;
+            const std::string spell_name = game::next_cmd_arg(words);
+            for (int g = 0; g < game::kSpellGems; ++g) {
+                const std::uint32_t id = spells_.gems[static_cast<std::size_t>(g)].spell;
+                const game::SpellData* s = id == game::kNoSpell || !spell_table_ ? nullptr : spell_table_->get(id);
+                if (s && cast_spell_name_matches(s->name, spell_name)) {
+                    clear_bard_twist();
+                    cast_gem(g);
+                    return true;
+                }
+            }
+            chat(ChatEvent::Kind::System, "You do not seem to have that spell memorized.");
+            return true;
+        }
         int gem = std::atoi(args.c_str());
         if (gem < 1 || gem > game::kSpellGems) system(13255);
         else {

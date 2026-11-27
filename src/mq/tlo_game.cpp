@@ -43,8 +43,8 @@ using net::GameConnection;
 
 struct Types {
     const Type *spawn, *character, *cls, *race, *heading, *spell, *buff, *timestamp, *item, *zone, *group, *member,
-        *everquest, *macroquest, *hailstone, *window, *plugin, *time, *gametime, *navigation, *stick, *debuff, *moveto,
-        *bandolier, *bandolier_item, *advpath, *target, *xtarget, *altability, *aug, *ticks, *body, *raid, *raidmember, *corpse, *pet, *invslot, *merchant, *door, *mercenary;
+        *everquest, *macroquest, *hailstone, *window, *plugin, *time, *gametime, *navigation, *stick, *debuff, *moveto, *moveutils,
+        *bandolier, *bandolier_item, *advpath, *target, *xtarget, *altability, *aug, *ticks, *body, *raid, *raidmember, *corpse, *pet, *invslot, *merchant, *door, *mercenary, *aura;
 };
 
 Types g; // set once by register_game_tlos (the types live in the registry that registered them)
@@ -1024,11 +1024,12 @@ void register_spell() {
     m("Range", [](const Context&, const game::SpellData& s, std::string_view) { return V::number(s.range); });
     m("AERange", [](const Context&, const game::SpellData& s, std::string_view) { return V::number(s.ae_range); });
     m("Mana", [](const Context&, const game::SpellData& s, std::string_view) { return V::integer(s.mana); });
-    m("CastTime", [](const Context&, const game::SpellData& s, std::string_view) { return V::number(s.cast_time / 1000.0); });
+    // MQ's CastTime, RecastTime and RecoveryTime: timestamps (milliseconds), as MyCastTime.
+    m("CastTime", [](const Context&, const game::SpellData& s, std::string_view) { return V::object(g.timestamp, s.cast_time); });
     m("MyCastTime", [](const Context&, const game::SpellData& s, std::string_view) { return V::object(g.timestamp, s.cast_time); });
-    m("RecastTime", [](const Context&, const game::SpellData& s, std::string_view) { return V::number(s.recast_time / 1000.0); });
+    m("RecastTime", [](const Context&, const game::SpellData& s, std::string_view) { return V::object(g.timestamp, s.recast_time); });
     m("RecoveryTime", [](const Context&, const game::SpellData& s, std::string_view) {
-        return V::number(s.recovery_time / 1000.0);
+        return V::object(g.timestamp, s.recovery_time);
     });
     // MQ's Spell.Duration: ticks (a plain value of ticks, the timestamp members on their milliseconds) at the
     // player's level (GetSpellDuration), the record's cap without a connection.
@@ -1173,10 +1174,11 @@ void register_group() {
         std::int64_t n = 0;
         if (parse_int(index, n))
             return n >= 0 && n <= std::numeric_limits<int>::max() ? member_value(c, static_cast<int>(n)) : V::nil();
+        // A name is that member (MQ2GroupType's Member: a groupmember, not its number; .Index gives the number).
         auto members = group_members(c);
         for (std::size_t i = 0; i < members.size(); ++i) {
             std::string name = members[i] ? members[i]->name : c.conn->character_name();
-            if (iequals(name, index)) return V::integer(static_cast<std::int64_t>(i));
+            if (!index.empty() && iequals(name, index)) return member_value(c, static_cast<int>(i));
         }
         return V::nil();
     });
@@ -1337,8 +1339,10 @@ void register_misc_types() {
         case net::ConnectionState::Zoning:
         case net::ConnectionState::ZoneConnecting:
         case net::ConnectionState::ZoneEntering: return V::string("INGAME");
-        case net::ConnectionState::CharacterSelect:
+        // A zone change passes through world: still in game, as the plugins' game state says.
         case net::ConnectionState::EnteringWorld:
+            return V::string(c.conn->zone_reentry() ? "INGAME" : "CHARSELECT");
+        case net::ConnectionState::CharacterSelect:
         case net::ConnectionState::Creating: return V::string("CHARSELECT");
         default: return V::string("PRECHARSELECT");
         }
@@ -1872,6 +1876,23 @@ void register_e3_members() {
         const auto& e = it.effects[net::kEffectClick];
         return e.present() ? spell_value(c, static_cast<std::uint32_t>(e.effect)) : V::nil();
     });
+    // MQ's CastTime (ItemMembers::CastTime): the click effect's cast time, a timestamp (milliseconds); NULL without a
+    // click effect. (A negative one from a server is 0.)
+    im("CastTime", [](const Context&, const Value&, const net::Item& it, std::string_view) -> V {
+        const auto& e = it.effects[net::kEffectClick];
+        return e.present() ? V::object(g.timestamp, std::max<std::int64_t>(e.cast_time(), 0)) : V::nil();
+    });
+    // MQ's Spell (ItemMembers::Spell): the first of the click, scroll, proc, focus and worn effects whose spell the
+    // table has (GetSpellByID), NULL when none. The order and the skipping of an id the table lacks are not checked
+    // against MacroQuest (docs/unknowns.md "Item.Spell's order").
+    im("Spell", [](const Context& c, const Value&, const net::Item& it, std::string_view) -> V {
+        for (auto kind : {net::kEffectClick, net::kEffectScroll, net::kEffectProc, net::kEffectFocus, net::kEffectWorn}) {
+            const auto& e = it.effects[kind];
+            if (!e.present()) continue;
+            if (V spell = spell_value(c, static_cast<std::uint32_t>(e.effect)); !spell.is_nil()) return spell;
+        }
+        return V::nil();
+    });
     // MQ's EffectType: the first of scroll, click (worn / inventory), worn or focus, combat.
     im("EffectType", [](const Context&, const Value&, const net::Item& it, std::string_view) -> V {
         if (it.effects[net::kEffectScroll].present()) return V::string("Spell Scroll");
@@ -2046,6 +2067,105 @@ void register_e3_members() {
         if (v.i < 0 || v.i >= 6) return V::nil();
         return aggro_pct(c, v.i == 0 ? net::kAggroPlayer : net::kAggroGroup1 + static_cast<int>(v.i) - 1);
     });
+
+    // The rest of MQ2GroupType and MQ2GroupMemberType. A member's spawn: the player's own, else the one of its name
+    // in the zone (a corpse is none).
+    auto member_spawn = [](const Context& c, std::size_t i, const game::GroupMember* m) -> const game::Spawn* {
+        if (i == 0) return me(c);
+        return m ? spawn_named(c, m->name) : nullptr;
+    };
+    // AnyoneMissing: a member other than the player offline, or not in the zone, or only a corpse here.
+    add(g.group, "AnyoneMissing", [member_spawn](const Context& c, const Value&, std::string_view) -> V {
+        auto members = group_members(c);
+        if (members.empty()) return V::nil();
+        for (std::size_t i = 1; i < members.size(); ++i)
+            if (members[i] && (members[i]->offline || !member_spawn(c, i, members[i]))) return V::boolean(true);
+        return V::boolean(false);
+    });
+    // MercenaryCount and the four by role (GetGroupMercenaryCount): the mercenaries in the zone of any class, or a
+    // warrior (tank), cleric (healer), rogue (melee), wizard (caster), as MQ's class masks pick them.
+    auto merc_count = [member_spawn](int wanted_class) {
+        return [member_spawn, wanted_class](const Context& c, const Value&, std::string_view) -> V {
+            auto members = group_members(c);
+            if (members.empty()) return V::nil();
+            std::int64_t n = 0;
+            for (std::size_t i = 1; i < members.size(); ++i) {
+                if (!members[i] || !members[i]->merc) continue;
+                const game::Spawn* s = member_spawn(c, i, members[i]);
+                if (s && (wanted_class == 0 || s->class_id == wanted_class)) ++n;
+            }
+            return V::integer(n);
+        };
+    };
+    add(g.group, "MercenaryCount", merc_count(0));
+    add(g.group, "TankMercCount", merc_count(game::Warrior));
+    add(g.group, "HealerMercCount", merc_count(game::Cleric));
+    add(g.group, "MeleeMercCount", merc_count(game::Rogue));
+    add(g.group, "CasterMercCount", merc_count(game::Wizard));
+    // AvgHPs: the player's HP percent and each other member's in the zone, averaged; 100 when they add up to 0.
+    // A deliberate difference from MQ, whose player term is (current / max) * 100 in whole numbers (0 unless the
+    // player is at full HP): here it is the player's percent.
+    add(g.group, "AvgHPs", [member_spawn](const Context& c, const Value&, std::string_view) -> V {
+        auto members = group_members(c);
+        if (members.empty()) return V::nil();
+        std::int64_t total = 0, count = 1;
+        if (V mine = character_member(c, "PctHPs"); mine.kind == Value::Kind::Int) total = mine.i;
+        for (std::size_t i = 1; i < members.size(); ++i) {
+            if (!members[i]) continue;
+            if (const game::Spawn* s = member_spawn(c, i, members[i])) {
+                total += s->hp_percent;
+                ++count;
+            }
+        }
+        return V::integer(total != 0 ? total / count : 100);
+    });
+    // Cleric: the first member who is a player cleric in the zone (the player too), as a spawn.
+    add(g.group, "Cleric", [member_spawn](const Context& c, const Value&, std::string_view) -> V {
+        auto members = group_members(c);
+        for (std::size_t i = 0; i < members.size(); ++i) {
+            if (members[i] && members[i]->merc) continue;
+            const game::Spawn* s = member_spawn(c, i, members[i]);
+            if (s && s->class_id == game::Cleric) return spawn_value(s);
+        }
+        return V::nil();
+    });
+    // MarkNpc: the member the leader delegated Mark NPC to (OP_DelegateAbility; Leadership::group_marker). MQ reads
+    // a group role bit that RoF2's group roles (1..3: tank, assist, puller) do not have; the delegated marker is
+    // RoF2's nearest (docs/unknowns.md "Group.MarkNpc and MasterLooter").
+    auto is_marker = [member_spawn](const Context& c, std::size_t i, const game::GroupMember* m) {
+        const game::Spawn* s = member_spawn(c, i, m);
+        return s && c.conn && c.conn->leadership().group_marker != 0 && s->id == c.conn->leadership().group_marker;
+    };
+    add(g.group, "MarkNpc", [is_marker](const Context& c, const Value&, std::string_view) -> V {
+        auto members = group_members(c);
+        for (std::size_t i = 0; i < members.size(); ++i)
+            if (is_marker(c, i, members[i])) return member_value(c, static_cast<int>(i));
+        return V::nil();
+    });
+    add(g.member, "MarkNpc", [is_marker](const Context& c, const Value& v, std::string_view) -> V {
+        auto members = group_members(c);
+        if (v.i < 0 || v.i >= static_cast<std::int64_t>(members.size())) return V::nil();
+        const auto i = static_cast<std::size_t>(v.i);
+        return V::boolean(is_marker(c, i, members[i]));
+    });
+    // MasterLooter: RoF2's group has no master looter (CGroupBase_SetMemberRole takes roles 1..3 only), so no
+    // member is one (docs/unknowns.md "Group.MarkNpc and MasterLooter").
+    add(g.group, "MasterLooter", [](const Context&, const Value&, std::string_view) { return V::nil(); });
+    add(g.member, "MasterLooter", [](const Context& c, const Value& v, std::string_view) -> V {
+        auto members = group_members(c);
+        if (v.i < 0 || v.i >= static_cast<std::int64_t>(members.size())) return V::nil();
+        return V::boolean(false);
+    });
+    // Present: the member's spawn is in the zone (the player always).
+    add(g.member, "Present", [member_spawn](const Context& c, const Value& v, std::string_view) -> V {
+        auto members = group_members(c);
+        if (v.i < 0 || v.i >= static_cast<std::int64_t>(members.size())) return V::nil();
+        const auto i = static_cast<std::size_t>(v.i);
+        return V::boolean(member_spawn(c, i, members[i]) != nullptr);
+    });
+    // MouseOver: the member whose Group window gauge the mouse is over. The TLOs cannot see the UI's hover, so it
+    // is NULL, as MQ's is with the mouse anywhere else.
+    add(g.group, "MouseOver", [](const Context&, const Value&, std::string_view) { return V::nil(); });
 }
 
 // ---------------------------------------------------------------- Raid, Corpse and more of Me (MacroQuest's meanings)
@@ -2711,6 +2831,30 @@ void register_stick() {
 // ArrivalDistX are not here.
 void register_moveto();
 
+// The MoveUtils TLO (MQ2MoveUtils' members): Stuck, a /moveto's or /stick's walk that has stalled and not moved on
+// since (NavStatus::stuck: the walk found no progress for a second, and is jumping and strafing or asking for a new
+// path). MQ2MoveUtils' own test (under a tenth of a unit moved per pulse, its StuckLogic) is not taken: Hailstone's
+// walk has its own (nav/path_follower.h), so Stuck turns TRUE later than MQ2MoveUtils' would. Command and its text: the
+// command walking, "STICK", "MOVETO" or "NONE" (MQ2MoveUtils' CIRCLE and MAKECAMP are not in Hailstone). Its settings
+// and the rest (Summoned, StuckLogic, Verbosity, Aggro, the pause delays, PulseCheck, PulseUnstuck, TryToJump,
+// DistStuck, Version, MovePause, GM) are not here.
+void register_moveutils() {
+    auto status = [](const Context& c) { return c.nav ? std::optional(c.nav->status()) : std::nullopt; };
+    auto command = [status](const Context& c) {
+        auto s = status(c);
+        return std::string(!s ? "NONE" : s->stick_spawn != 0 ? "STICK" : s->moveto ? "MOVETO" : "NONE");
+    };
+    add(g.moveutils, "Stuck", [status](const Context& c, const Value&, std::string_view) {
+        auto s = status(c);
+        return V::boolean(s && s->stuck);
+    });
+    add(g.moveutils, "Command", [command](const Context& c, const Value&, std::string_view) {
+        return V::string(command(c));
+    });
+    Type& t = const_cast<Type&>(*g.moveutils);
+    t.to_value = [command](const Context& c, const Value&) { return V::string(command(c)); };
+}
+
 // Me.Bandolier[name|#] (MQ's CharacterMembers::Bandolier and MQ2BandolierType): a set by its name, any case, or its
 // number (1..20, clamped as MQ clamps it); NULL for a name no set has. A set without a name answers NULL to every
 // member, as MQ's GetMember fails on it. Its text is its name. i: the set's index (0..19).
@@ -2832,6 +2976,54 @@ void register_bandolier() {
     add(g.bandolier_item, "Name", [item](const Context& c, const Value& v, std::string_view) -> V {
         const game::BeltItem* b = item(c, v);
         return b ? V::string(b->name) : V::nil();
+    });
+}
+
+// Me.Aura and its auratype (MQ2CharacterType's Aura, MQ2AuraType): the player's auras as OP_UpdateAura listed
+// them, in the order they came. A number is 1-based; a name matches the start of an aura's name, ignoring case
+// (MQ's _strnicmp over the index's length); no index is the first aura. NULL while the player has none.
+// MQ's Remove method is not here: a TLO read cannot act on the connection. /removeaura <name> does it.
+const net::AuraUpdate* aura_at(const Context& c, std::int64_t n) {
+    if (!c.conn || n < 0 || n >= static_cast<std::int64_t>(c.conn->auras().size())) return nullptr;
+    return &c.conn->auras()[static_cast<std::size_t>(n)];
+}
+
+void register_auras() {
+    me_member("Aura", [](const Context&, const GameConnection& c, std::string_view index) -> V {
+        const auto& auras = c.auras();
+        if (auras.empty()) return V::nil();
+        if (index.empty()) return V::object(g.aura, 0);
+        std::int64_t n = 0;
+        if (parse_int(index, n))
+            return n >= 1 && n <= static_cast<std::int64_t>(auras.size()) ? V::object(g.aura, n - 1) : V::nil();
+        for (std::size_t k = 0; k < auras.size(); ++k)
+            if (istarts_with(auras[k].name, index)) return V::object(g.aura, static_cast<std::int64_t>(k));
+        return V::nil();
+    });
+    Type& t = const_cast<Type&>(*g.aura);
+    t.to_value = [](const Context& c, const Value& v) -> V {
+        const net::AuraUpdate* a = aura_at(c, v.i);
+        return a ? V::string(a->name) : V::nil();
+    };
+    add(g.aura, "ID", [](const Context& c, const Value& v, std::string_view) -> V {
+        return aura_at(c, v.i) ? V::integer(v.i + 1) : V::nil();
+    });
+    add(g.aura, "Name", [](const Context& c, const Value& v, std::string_view) -> V {
+        const net::AuraUpdate* a = aura_at(c, v.i);
+        return a ? V::string(a->name) : V::nil();
+    });
+    add(g.aura, "SpawnID", [](const Context& c, const Value& v, std::string_view) -> V {
+        const net::AuraUpdate* a = aura_at(c, v.i);
+        return a ? V::integer(a->spawn_id) : V::nil();
+    });
+    // Where the index first appears in the name, 1-based and ignoring case; NULL when it does not.
+    add(g.aura, "Find", [](const Context& c, const Value& v, std::string_view index) -> V {
+        const net::AuraUpdate* a = aura_at(c, v.i);
+        if (!a || index.empty() || index.size() > a->name.size()) return V::nil();
+        for (std::size_t pos = 0; pos + index.size() <= a->name.size(); ++pos)
+            if (iequals(std::string_view(a->name).substr(pos, index.size()), index))
+                return V::integer(static_cast<std::int64_t>(pos) + 1);
+        return V::nil();
     });
 }
 
@@ -3042,6 +3234,7 @@ void register_game_tlos(Registry& r) {
     g.navigation = &r.type("navigation");
     g.stick = &r.type("stick");
     g.moveto = &r.type("moveto");
+    g.moveutils = &r.type("moveutils");
     g.bandolier = &r.type("bandolier");
     g.bandolier_item = &r.type("bandolieritem");
     g.advpath = &r.type("advpath");
@@ -3060,6 +3253,7 @@ void register_game_tlos(Registry& r) {
     g.merchant = &r.type("merchant");
     g.door = &r.type("switch");
     g.mercenary = &r.type("mercenary");
+    g.aura = &r.type("auratype");
     register_spawn();
     register_character();
     register_abilities();
@@ -3071,7 +3265,9 @@ void register_game_tlos(Registry& r) {
     register_navigation();
     register_stick();
     register_moveto();
+    register_moveutils();
     register_bandolier();
+    register_auras();
     register_advpath();
     register_e3_members();
     register_e3_members2();
@@ -3115,6 +3311,9 @@ void register_game_tlos(Registry& r) {
               "Stick movement and positioning status.");
     r.add_tlo("MoveTo", [](const Context& c, std::string_view) -> V { return c.nav ? V::object(g.moveto, 0) : V::nil(); },
               "MoveTo movement and arrival status.");
+    r.add_tlo("MoveUtils", [](const Context& c, std::string_view) -> V {
+        return c.nav ? V::object(g.moveutils, 0) : V::nil();
+    }, "Stuck detection and the movement command walking.");
     r.add_tlo("AdvPath", [](const Context& c, std::string_view) -> V {
         return c.nav ? V::object(g.advpath, 0) : V::nil();
     }, "Path-following status.");

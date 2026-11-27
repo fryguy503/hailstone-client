@@ -18,6 +18,7 @@
 
 #include "app/client_app.h"
 #include "app/display_flags.h"
+#include "app/frame_bench.h"
 #include "app/frame_pace.h"
 #include "app/terrain_cache.h"
 #include "app/update_install.h"
@@ -82,6 +83,8 @@ namespace {
 struct Options {
     bool validation = false;
     int frames = 0; // stop after this many frames; 0 runs until closed
+    int bench_frames = 0;       // --bench: frames timed once the scene settles, then logged (app/frame_bench.h)
+    double bench_settle = -1.0; // --bench-settle: seconds ready before timing (< 0: the viewer 2, the client 10)
     std::string game_dir;
     std::string classic_dir;
     std::string zone;
@@ -349,7 +352,11 @@ void usage() {
         "  --no-audio         never open an audio device (sound settings: audio.* in hailstone.ini)\n"
         "  --validation       enable the Vulkan validation layer\n"
         "  --frames N         exit after N frames; the log then gives the mean frame time\n"
-        "  --no-vsync         present without waiting for the display (measuring frame times)\n"
+        "  --bench N          once the zone has settled, time N frames, log one \"bench:\" line (frame time\n"
+        "                     percentiles, hitches, memory) and quit; viewer and client (tools/perf_track.py)\n"
+        "  --bench-settle S   seconds the zone must be ready before --bench times (viewer 2, client 10)\n"
+        "  --no-vsync         present without waiting for the display (measuring frame times; the client: for\n"
+        "                     this run, display.vsync off)\n"
         "  --frame-dt S       the viewer's clock moves S seconds each frame, not with the wall clock (screenshots\n"
         "                     that match from run to run: the wind, water and sky at the same moment)\n"
         "  --fly X Y Z        viewer: the camera flies X Y Z units a second (with --frame-dt, frame N of one run\n"
@@ -383,6 +390,12 @@ Options parse_args(int argc, char** argv) {
         } else if (arg("--frames")) {
             need(1);
             o.frames = std::atoi(argv[++i]);
+        } else if (arg("--bench")) {
+            need(1);
+            o.bench_frames = std::max(0, std::atoi(argv[++i]));
+        } else if (arg("--bench-settle")) {
+            need(1);
+            o.bench_settle = std::max(0.0, std::atof(argv[++i]));
         } else if (arg("--game-dir")) {
             need(1);
             o.game_dir = argv[++i];
@@ -786,7 +799,7 @@ int main(int argc, char** argv) {
     std::filesystem::path log_written;
     try {
         Options opts = parse_args(argc, argv);
-        error_dialog = opts.frames == 0 && opts.screenshot.empty();
+        error_dialog = opts.frames == 0 && opts.bench_frames == 0 && opts.screenshot.empty();
         // The data folder (platform/paths.h) is the Hailstone folder itself. One that cannot hold the settings (a
         // read-only folder, an EverQuest folder) stops the start with a message: nothing is ever written elsewhere.
         if (std::string problem = platform::data_dir_problem(); !problem.empty()) {
@@ -858,7 +871,8 @@ int main(int argc, char** argv) {
             // (update_at_start_allowed); the next start without a ticket finishes what update_at_start would do.
             // A box set's other windows leave updates and add-ons to the first window, which waits for them to quit
             // before it installs (app/updater.h kBoxChildArg).
-            c.updates = app::run_has_updates(opts.frames, !opts.screenshot.empty(), opts.box_child);
+            c.updates =
+                app::run_has_updates(opts.frames + opts.bench_frames, !opts.screenshot.empty(), opts.box_child);
             c.box_child = opts.box_child;
             // While it runs, a player's run (a box set's window too) holds a claim on the folder: no other Hailstone
             // installs or rolls back an update under it (app/update_install.h claim_running).
@@ -881,6 +895,8 @@ int main(int argc, char** argv) {
             c.classic_dir = opts.classic_dir;
             c.validation = opts.validation;
             c.frames = opts.frames;
+            c.bench_frames = opts.bench_frames;
+            c.bench_settle = opts.bench_settle < 0.0 ? 10.0 : opts.bench_settle;
             c.screenshot = opts.screenshot;
             c.screenshot_generated = opts.screenshot_generated;
             c.ui_scale = opts.ui_scale;
@@ -1208,6 +1224,7 @@ int main(int argc, char** argv) {
         // --gpu-timing: each pass's GPU time summed over the timed frames read back, in the order first seen.
         std::vector<std::pair<const char*, double>> gpu_totals;
         std::uint64_t gpu_serial = vk.gpu_sections_serial(), gpu_frames = 0;
+        app::FrameBench bench(opts.bench_frames, opts.bench_settle < 0.0 ? 2.0 : opts.bench_settle);
         for (int frame = 0; window.poll_events(); ++frame) {
             if (opts.frames && frame == timed_from) timed_start = std::chrono::steady_clock::now();
             if (opts.frames && frame >= opts.frames) {
@@ -1253,6 +1270,11 @@ int main(int argc, char** argv) {
             float dt = std::chrono::duration<float>(now - last).count();
             last = now;
             double t = std::chrono::duration<double>(now - start).count();
+            // The viewer's zone is loaded before the loop: ready from the first frame (whose time is the load's).
+            if (bench.add(frame > 0, t, dt * 1000.0f)) {
+                log::info("{}", app::bench_line(opts.zone, app::bench_stats(bench.times()), app::bench_memory(vk)));
+                break;
+            }
             if (opts.frame_dt > 0.0f) {
                 dt = opts.frame_dt;
                 t = frame * static_cast<double>(opts.frame_dt);
@@ -1260,7 +1282,8 @@ int main(int argc, char** argv) {
             // While the camera is being dragged the UI must not take the mouse.
             // A timed run (--frames: a test, a screenshot) takes no input: what the person at the computer types or
             // moves while the window has the focus would move the camera.
-            if (!opts.frames) update_camera(camera, window, dt, !ui_mouse || window.input().right_button, !ui_keys);
+            if (!opts.frames && !opts.bench_frames)
+                update_camera(camera, window, dt, !ui_mouse || window.input().right_button, !ui_keys);
             camera.position += opts.fly * dt;
             camera.yaw += glm::radians(opts.pan) * dt;
 

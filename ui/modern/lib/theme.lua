@@ -76,12 +76,27 @@ local function paletteColors(id)
   return resolve(byId[id] or byId[PALETTES.default], {})
 end
 
+-- The colour-vision mode's colours (lib/palettes.lua colourVision) for the client option colour_vision, nil for off
+-- or a host without it.
+local function colourVision()
+  local settings = API and API.settings
+  local v = settings and settings.Option and settings.Option("colour_vision")
+  local mode = type(v) == "number" and PALETTES.colourVisionModes and PALETTES.colourVisionModes[v + 1]
+  return mode and PALETTES.colourVision and PALETTES.colourVision[mode], v
+end
+
 local function applyPalette(id)
-  for k, v in pairs(paletteColors(id)) do
+  local colors = paletteColors(id)
+  local over, mode = colourVision()
+  for k, v in pairs(over or {}) do
+    if colors[k] then colors[k] = v end
+  end
+  for k, v in pairs(colors) do
     local c = C[k]
     if not c then c = {} C[k] = c end
     c[1], c[2], c[3], c[4] = v[1], v[2], v[3], v[4] or 1
   end
+  modern_colour_vision = mode
   modern_palette = id
   modern_palette_gen = (modern_palette_gen or 0) + 1 -- what was worked out from the colours (lib/style.lua) is redone
 end
@@ -93,6 +108,12 @@ function T.Palette() return modern_palette end
 function T.SetPalette(id)
   ui.SetSetting("palette", id)
   applyPalette(id)
+end
+-- The colour-vision mode changed (Options): the palette's colours laid out again under it, when it differs from the
+-- one applied.
+function T.RefreshColourVision()
+  local _, mode = colourVision()
+  if mode ~= modern_colour_vision then applyPalette(modern_palette or PALETTES.default) end
 end
 if not modern_palette then applyPalette(ui.GetSetting("palette") or PALETTES.default) end
 ui_palette = ui_palette or {

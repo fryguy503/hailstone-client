@@ -301,6 +301,24 @@ local PAGES = {
         T.setPalette(list[(idx - 1 + dir) % #list + 1].id)
       end }
     end
+    do -- Hailstone's accessibility options (game/accessibility.h; docs/dev-ui.md "Accessibility")
+      local modes = API.settings.OptionChoices("colour_vision")
+      local cv = modes and #modes > 0 and optionRow("Colour vision", "colour_vision", modes) or nil
+      if cv then
+        local set = cv[3]
+        cv[3] = function(dir) -- every window's theme lays the mode's colours over the palette (lib/theme.lua T.frame)
+          set(dir)
+          ui_colour_vision_gen = (ui_colour_vision_gen or 0) + 1
+        end
+        rows[#rows + 1] = cv
+      end
+      local sizes, names = { 0, 10, 11, 12, 13, 14, 16, 18, 20, 24 }, {}
+      for i, v in ipairs(sizes) do names[i] = v == 0 and "Off" or (v .. " pt") end
+      local list = table.pack(optionRow("Con labels", "con_labels", "bool"),
+        optionRow("Minimum text size", "min_text_size", names, sizes),
+        optionRow("Screen effects", "screen_effects", { 0, 100, 10, " %" }))
+      for i = 1, list.n do if list[i] then rows[#rows + 1] = list[i] end end
+    end
     -- The map pack: the map's maps directory (MVW_MapsDirCombobox, "Main" "MapSkin" in the character's UI ini).
     local packs, pack = API.windows.ComboInfo("MapViewWnd", "MVW_MapsDirCombobox")
     if packs and #packs > 0 then

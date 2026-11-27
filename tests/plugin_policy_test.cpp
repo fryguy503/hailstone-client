@@ -285,6 +285,17 @@ Block_Groups = addon_commands
     CHECK_FALSE(rules.allowed("/follow"));
 }
 
+TEST_CASE("hailstone.cfg: command_helpers covers /loadcfg, as it covers /docommand") {
+    const auto rules = plugin::parse_server_cfg("[commands]\nblock_groups = command_helpers\n").commands;
+    REQUIRE(rules.enabled);
+    CHECK_FALSE(rules.allowed("/loadcfg"));
+    CHECK_FALSE(rules.allowed("/LoadCfg"));
+    CHECK_FALSE(rules.allowed("/docommand"));
+    CHECK(rules.allowed("/sit"));
+    const auto allowed = plugin::parse_server_cfg("[commands]\ndefault = deny\nallow_groups = command_helpers\n").commands;
+    CHECK(allowed.allowed("/loadcfg"));
+}
+
 TEST_CASE("command catalog: stock aliases, extended commands, and live add-on registrations") {
     const std::vector<std::string> registered{"/nav", "/target", "/raidnotes"};
     const auto rows = plugin::command_catalog(registered);

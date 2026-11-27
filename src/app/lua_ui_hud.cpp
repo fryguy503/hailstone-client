@@ -15,6 +15,7 @@
 #include "app/lua_ui_windows.h"
 #include "core/ascii_case.h"
 #include "game/spawn_name_lookup.h"
+#include "game/accessibility.h"
 #include "game/combat.h"
 #include "game/combat_ability_menu.h"
 #include "app/lua_ui_hotbar.h"
@@ -349,6 +350,9 @@ public:
             if (con != game::Con::None) {
                 Rgb rgb = argb_to_rgb(game::con_rgb(con));
                 out.tint = std::array<float, 4>{rgb[0], rgb[1], rgb[2], 1.0f};
+                // Hailstone's Con Labels (game/accessibility.h): the colour in words, for the packs' target windows
+                // (hs.ChildTooltip) and the stock window's hover.
+                if (game::accessibility().con_labels) out.tooltip = std::string(game::con_colour_name(con));
             }
         } else if (int i = index_after(id, "Buff"); i >= 0) {
             const game::BuffSlot* b = target_buff(c, i);
@@ -786,6 +790,11 @@ std::vector<UiHost::MenuRow> spell_select_rows(UiHost& host, std::int32_t gem) {
     return rows;
 }
 
+bool hot_button_unavailable(const UiHost& host, const game::HotButton& button) {
+    return host.actions && host.actions->button_skill(button) == game::mechanics::skill::kSlam &&
+           !slam_available(host);
+}
+
 // CHotButton_ShowContextMenu for bar 0..9, button 0..11 of the bar's current page at x, y (game/hot_button_menu.h):
 // the rows CHotButton_UpdateContextMenu leaves shown, in CHotButtonWnd_BuildContextMenus' order.
 void open_hot_button_menu(UiHost& host, int bar, int button, float x, float y) {
@@ -812,10 +821,10 @@ void open_hot_button_menu(UiHost& host, int bar, int button, float x, float y) {
         rows.push_back(std::move(r));
     };
     // 0x1b58 / 0x1b61: DoHotButton(n, 0).
-    auto activate = [&host, bar, button] {
-        if (host.press_hot_button) host.press_hot_button(bar, button, false);
+    auto activate = [&host, bar, button, record] {
+        if (host.press_hot_button && !hot_button_unavailable(host, record())) host.press_hot_button(bar, button, false);
     };
-    if (shown.activate) add(text(game::kStrHbActivate), activate);
+    if (shown.activate && !hot_button_unavailable(host, b)) add(text(game::kStrHbActivate), activate);
     if (shown.consume) add(text(game::kStrHbConsume), activate);
     if (shown.inspect)
         add(text(game::kStrHbInspect), [&host, record] {
@@ -964,6 +973,7 @@ public:
         // 0x54ff40: an icon of the button's own (Assign Icon) is drawn instead of its decal, item or spell icon
         if (b.icon_type != -1)
             if (auto c = hot_button_custom_icon(host, b.icon_type, b.icon_slot)) info.icon = *c;
+        if (info.unavailable) return info;
         const auto now = net::GameConnection::eq_time();
         if (b.type == game::HotButtonType::SpellGem) {
             if (auto look = g_cast_spell_window ? g_cast_spell_window->gem_look(host, b.slot) : std::nullopt) {
@@ -1021,7 +1031,7 @@ public:
             break;
         }
         case A::Press:
-            if (host.press_hot_button) host.press_hot_button(bar_, n - 1, true);
+            if (host.press_hot_button && !hot_button_unavailable(host, b)) host.press_hot_button(bar_, n - 1, true);
             break;
         case A::RightClick:
         case A::None: // an item's own right click (its CInvSlot's HandleRButtonUp: the item's use), as the actions take it
@@ -1054,7 +1064,8 @@ HotButtonInfo hot_button_info(UiHost& host, const game::HotButton& b, std::strin
     if (b.empty()) return info;
     info.label = std::move(label);
     info.kind = "button";
-    info.checked = pet_hot_button_checked(host, info.label).value_or(false);
+    info.unavailable = hot_button_unavailable(host, b);
+    if (!info.unavailable) info.checked = pet_hot_button_checked(host, info.label).value_or(false);
     if (b.type == game::HotButtonType::SpellGem && host.conn) {
         info.kind = "spell";
         const auto& gems = host.conn->spell_state().gems;

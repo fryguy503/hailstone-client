@@ -1026,6 +1026,7 @@ HailstoneItem item_struct(const net::Item& it) {
     v.icon = it.icon;
     v.stack_count = it.stack_count;
     v.charges = it.charges;
+    v.base_value_copper = it.value;
     auto spell = [](std::int32_t id) { return id > 0 ? static_cast<std::uint32_t>(id) : 0u; };
     v.click_spell = spell(it.effects[net::kEffectClick].effect);
     v.scroll_spell = spell(it.effects[net::kEffectScroll].effect);
@@ -4057,6 +4058,7 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     }
     m.say(std::format("[Plugin] {} loaded ({})", name, caps_text(caps)), zone_policy, notice_subject(name));
     log::info("plugin {} loaded from {} (sha256 {}, caps {})", name, file->string(), to_hex(hash), caps_text(caps));
+    if (m.env.loaded) m.env.loaded(name);
     return true;
 }
 

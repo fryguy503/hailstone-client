@@ -7,6 +7,7 @@
 #include <span>
 #include <vector>
 
+#include "game/accessibility.h"
 #include "game/coords.h"
 #include "game/mechanics/anim_select.h"
 
@@ -151,16 +152,8 @@ std::optional<std::uint32_t> mercenary_name_colour(const Spawn& s) {
 }
 
 std::uint32_t con_rgb(Con con) {
-    switch (con) {
-    case Con::Gray: return 0x9a9a9a;
-    case Con::Green: return 0x00ee00;
-    case Con::LightBlue: return 0x00e0ff;
-    case Con::DarkBlue: return 0x4060ff;
-    case Con::White: return 0xffffff;
-    case Con::Yellow: return 0xffff00;
-    case Con::Red: return 0xff2020;
-    default: return 0xc0c0c0;
-    }
+    // The table and the colour-blind sets are in game/accessibility.cpp; Off (the default) is this client's own.
+    return con_rgb(con, accessibility().colour_vision);
 }
 
 std::string consider_message(const EqStrings& strings, const Spawn& target, int my_level, std::uint32_t faction,

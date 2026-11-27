@@ -27,6 +27,7 @@
 #include "core/game_dir.h"
 #include "net/game_connection.h"
 #include "platform/local_time.h"
+#include "plugin/policy.h"
 #include "ui/dev_screens.h"
 #include "scratch_dir.h"
 
@@ -718,7 +719,7 @@ TEST_CASE("Chat windows: extended channels take only the extended colours and ke
         CHECK(lua.run("return hs.ChatNewWindow('Extended')") == "2");
         const auto original_server_settings = conn.chat_filters().settings;
         for (const auto& item : game::chat_filter_items()) {
-            if (item.channel < game::kChatChannelCountRoF2) continue;
+            if (item.channel < game::kChatChannelCountRoF2 || item.channel == game::kChatChannelCode) continue;
             CAPTURE(item.channel);
             int color = extended_color_of(item.channel);
             REQUIRE(color != 0); // every extended channel in the menu is reached by an extended colour
@@ -797,7 +798,7 @@ TEST_CASE("Chat windows: extended channels take only the extended colours and ke
         Lua lua(api);
         lua.run(kLines + std::string("_G.lines = lines"));
         for (const auto& item : game::chat_filter_items()) {
-            if (item.channel < game::kChatChannelCountRoF2) continue;
+            if (item.channel < game::kChatChannelCountRoF2 || item.channel == game::kChatChannelCode) continue;
             const int window = item.menu == game::ChatFilterMenu::Healing ? 3 : 2;
             CHECK(lua.run(std::format("for _, f in ipairs(hs.ChatFilters({})) do if f.id == {} then return f.on end end",
                                       window, item.channel)) == "true");
@@ -1204,6 +1205,156 @@ TEST_CASE("Chat windows: Always Chat Here takes the chat keys; the main window h
         Lua lua(api);
         CHECK(lua.run("return tostring(select(5, hs.ChatInfo(1)))") == "false");
     }
+    ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("Chat windows: Plugins and Scripts takes every line a plugin or script wrote, whatever its colour") {
+    ImGuiContext* ctx = ImGui::CreateContext();
+    test::ScratchDir scratch("chat_code_lines");
+    fs::path dir = scratch.path();
+    fs::create_directories(dir / "game");
+    write_strings(dir / "game");
+    GameDir game_dir(dir / "game");
+    {
+        net::GameConnection conn(game_dir);
+        // The connection marks a line written while a plugin's or script's code runs, and no other.
+        conn.ui_message("from the client");
+        {
+            plugin::CallerScope scope(~0u, "lua:helper");
+            conn.ui_message("from a script", 0, 257); // a tell's colour: the channel still wins
+        }
+        auto client_line = conn.poll_chat();
+        auto code_line = conn.poll_chat();
+        REQUIRE(client_line);
+        REQUIRE(code_line);
+        CHECK_FALSE(client_line->from_code);
+        CHECK(code_line->from_code);
+
+        ui::ChatView view;
+        app::UiHost host;
+        host.in_game = host.ui_ready = true;
+        host.game = &game_dir;
+        host.conn = &conn;
+        host.chat = &view;
+        app::UiApi api(host);
+        api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
+        Lua lua(api);
+        lua.run(kLines + std::string("_G.lines = lines"));
+
+        // Until it is moved, the channel is in the main window, as every channel starts.
+        view.add(ui::ChatChannel::System, "early script line", 0, 273, {}, true);
+        CHECK(lua.run("return lines(1)") == "early script line");
+
+        CHECK(lua.run("return hs.ChatNewWindow('Scripts')") == "2");
+        lua.run(std::format("hs.ChatSetFilter(2, {}, true); hs.ChatClear(2)", game::kChatChannelCode));
+        CHECK(lua.run(std::format("for _, f in ipairs(hs.ChatFilters(2)) do if f.id == {} then return f.name end end",
+                                  game::kChatChannelCode)) == "Plugins and Scripts");
+        view.add(ui::ChatChannel::System, "client line", 0, 273);
+        view.add(ui::ChatChannel::System, code_line->text, 0, code_line->color, {}, code_line->from_code);
+        view.add(ui::ChatChannel::Say, "script say", 0, 0, {}, true);
+        CHECK(lua.run("return lines(2)") == "from a script|script say");
+        view.add_chat_group("script group", {"row"}, true); // a group's title line keeps the mark too
+        CHECK(view.lines.back().from_code);
+        CHECK(lua.run("return lines(1)") == "early script line|client line");
+
+        // The Filters menu has it after System Messages, before the Chat Channel, Melee and Spells submenus.
+        lua.run("hs.ChatMenu(2)");
+        REQUIRE(host.menus.size() == 1);
+        const auto& menu = host.menus[0].rows;
+        auto filters = std::find_if(menu.begin(), menu.end(), [](const auto& row) { return row.text == "Filters"; });
+        REQUIRE(filters != menu.end());
+        REQUIRE(filters->submenu);
+        const auto rows = filters->submenu();
+        auto at = [&](const char* name) {
+            return std::find_if(rows.begin(), rows.end(), [&](const auto& row) { return row.text == name; });
+        };
+        REQUIRE(at("Plugins and Scripts") != rows.end());
+        CHECK(at("Plugins and Scripts")->check);
+        CHECK(at("Plugins and Scripts") + 1 == at("Chat Channel"));
+    }
+    ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("Chat windows: each tab keeps its own timestamp format; one without follows the old shared setting") {
+    ImGuiContext* ctx = ImGui::CreateContext();
+    test::ScratchDir scratch("chat_tab_timestamps");
+    fs::path dir = scratch.path();
+    fs::create_directories(dir / "game");
+    write_strings(dir / "game");
+    GameDir game_dir(dir / "game");
+    std::string shared = "12h-seconds"; // the pack's old chat.timestamps, one format for every tab
+    auto run = [&](auto&& body) {
+        net::GameConnection conn(game_dir);
+        ui::ChatView view;
+        app::UiHost host;
+        host.in_game = host.ui_ready = true;
+        host.game = &game_dir;
+        host.conn = &conn;
+        host.chat = &view;
+        host.layout_setting = [&](std::string_view key) { return key == "chat.timestamps" ? shared : std::string(); };
+        host.set_layout_setting = [&](std::string_view key, std::string_view value) {
+            if (key == "chat.timestamps") shared = value;
+        };
+        app::UiApi api(host);
+        api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
+        Lua lua(api);
+        body(lua, view, api);
+    };
+    const char* stamped = R"lua(
+local _, l = hs.ChatText(%d, nil, false, hs.ChatTimestamps(%d))
+return ((l[#l] or ''):gsub('<[^>]*>', ''))
+)lua";
+    auto last_line = [&](Lua& lua, int slot) {
+        std::string code = stamped;
+        for (std::size_t at; (at = code.find("%d")) != std::string::npos;) code.replace(at, 2, std::to_string(slot));
+        return lua.run(code);
+    };
+    run([&](Lua& lua, ui::ChatView& view, app::UiApi& api) {
+        CHECK(lua.run("return hs.ChatNewWindow('Fights')") == "2");
+        // Neither tab has its own yet: both follow the shared setting.
+        CHECK(lua.run("return hs.ChatTimestamps(1)") == "12h-seconds");
+        CHECK(lua.run("return hs.ChatTimestamps(2)") == "12h-seconds");
+
+        lua.run("hs.ChatSetTimestamps(2, '24h-minutes')");
+        CHECK(lua.run("return hs.ChatTimestamps(2)") == "24h-minutes");
+        CHECK(lua.run("return hs.ChatTimestamps(1)") == "12h-seconds");
+        lua.run("hs.ChatSetTimestamps(1, 'off')");
+        CHECK(lua.run("return hs.ChatTimestamps(1)") == "off");
+        CHECK(shared == "12h-seconds"); // the tabs' own formats leave the shared setting as it was
+
+        // The menu sets the format of the tab it was opened on only.
+        const auto rows = app::chat_context_rows(2);
+        const auto item = std::find_if(rows.begin(), rows.end(), [](const auto& row) { return row.text == "Timestamps"; });
+        REQUIRE(item != rows.end());
+        REQUIRE(item->submenu);
+        const auto formats = item->submenu();
+        REQUIRE(formats.size() == 4);
+        CHECK(formats[2].check); // [21:07], the tab's own
+        REQUIRE(formats[3].act);
+        formats[3].act();        // [21:07:43]
+        CHECK(lua.run("return hs.ChatTimestamps(2)") == "24h-seconds");
+        CHECK(lua.run("return hs.ChatTimestamps(1)") == "off");
+
+        lua.run(std::format("hs.ChatSetFilter(2, {}, true); hs.ChatClear(2)", game::chat_channel_of_color(277)));
+        view.add(ui::ChatChannel::Say, "hello");
+        view.add(ui::ChatChannel::System, "You have been slain", 0, 277); // My Death, to window 2
+        CHECK(last_line(lua, 1) == "hello");
+        const std::string fights = last_line(lua, 2);
+        CHECK(fights.size() == std::string("[21:07:43] You have been slain").size());
+        CHECK(fights.starts_with("["));
+        CHECK(fights.ends_with("] You have been slain"));
+        api.save_layout();
+    });
+    // Kept with each tab in the UI ini; a change to the shared setting no longer moves a tab that has its own.
+    shared = "24h-minutes";
+    run([&](Lua& lua, ui::ChatView&, app::UiApi&) {
+        CHECK(lua.run("return hs.ChatTimestamps(1)") == "off");
+        CHECK(lua.run("return hs.ChatTimestamps(2)") == "24h-seconds");
+        lua.run("hs.ChatSetTimestamps(2, true)"); // true is 24h-seconds, as hs.ChatText takes it
+        CHECK(lua.run("return hs.ChatTimestamps(2)") == "24h-seconds");
+        lua.run("hs.ChatSetTimestamps(2, 'nonsense')");
+        CHECK(lua.run("return hs.ChatTimestamps(2)") == "off");
+    });
     ImGui::DestroyContext(ctx);
 }
 

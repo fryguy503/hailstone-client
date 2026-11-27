@@ -261,6 +261,9 @@ struct ChatEvent {
     std::string peer; // the player the line is from: a tell's other player (the sender, or whom we told), a channel's
                       // speaker (Hailstone: the modern chat's name links)
     std::vector<std::string> group; // the group's plain text rows. When nonempty, text is its title.
+    // Hailstone: a plugin or script wrote it while its code ran (plugin::caller_name()); the chat windows route such
+    // a line to its own channel (game::kChatChannelCode), not by its colour.
+    bool from_code = false;
 };
 
 // Something the client plays a sound for (audio/; the wave each gets is
@@ -401,6 +404,8 @@ public:
     const WorldTicket& ticket() const { return ticket_; }
 
     ConnectionState state() const { return state_; }
+    // EnteringWorld on a zone change's pass through world, not an entry from character select: still in game.
+    bool zone_reentry() const { return state_ == ConnectionState::EnteringWorld && zone_reentry_; }
     // In a zone, the camp's 30 s included (the player is still there): what the plugins see as in_zone.
     bool in_zone() const { return state_ == ConnectionState::InZone || state_ == ConnectionState::Camping; }
     const std::string& error() const { return error_; }
@@ -662,6 +667,7 @@ public:
     // Sets the target and tells the server (OP_TargetMouse, as the original
     // does on every target change); 0 clears it.
     void set_target(std::uint32_t spawn_id);
+    bool request_target_of_target();
     enum class GroupTargetMode { CyclePet, MemberOnly };
     // F1 = self, F2..F6 = the group's other rows. The keys select the pet when the owner is already
     // targeted. A click on the member's row selects the member. The selection /disband reads is
@@ -2897,6 +2903,7 @@ public:
         game::TrackList list;
     };
     const Tracking& tracking() const { return tracking_; }
+    std::uint64_t tracking_context() const;
     bool tracking_admitted() const;
     // CTrackingWnd::AboutToShow: Activate (the list cleared, the controls), then OP_Track.
     void open_tracking(bool skill_admitted = false);
@@ -3560,6 +3567,9 @@ private:
     std::string zone_host_;
     std::uint16_t zone_port_ = 0;
     bool zoning_ = false;
+    // EnteringWorld is a zone change's (world's OP_EnterWorld while Zoning), not an entry from character select:
+    // the character stays in the world, so the server's rules and the game state the plugins see stay as they were.
+    bool zone_reentry_ = false;
     bool world_login_sent_ = false;
     // ZoneServerInfo's hand-off (4.4): OP_WorldComplete went out and the zone is connected once world drops the
     // link (NetMgr_WaitForDisconnect, 30 s).
@@ -3821,11 +3831,17 @@ private:
     game::ServerPathLease shown_find_lease_;
     bool shown_find_silent_ = false;
     std::uint64_t shown_find_owner_ = 0, shown_find_generation_ = 0;
-    mutable std::uint64_t interaction_context_ = 0, interaction_player_ = 0;
-    mutable const void* interaction_session_ = nullptr;
-    mutable ConnectionState interaction_state_ = ConnectionState::Idle;
-    mutable bool interaction_dead_ = false;
+    struct InteractionContext {
+        std::uint64_t id = 0, player = 0;
+        const Session* session = nullptr;
+        ConnectionState state = ConnectionState::Idle;
+        bool dead = false;
+    };
+    mutable InteractionContext interaction_, tracking_interaction_;
+    std::uint64_t context_for(InteractionContext& context, ConnectionState state) const;
     void invalidate_interaction_context();
+    std::optional<ActorRef> capture_actor_ref(std::uint32_t id, std::uint64_t context) const;
+    bool matches_actor_ref(const ActorRef& actor, std::uint64_t context) const;
     game::SwitchClock switch_clock_;
     std::vector<game::GroundObject> ground_objects_;
     std::optional<game::WorldContainer> world_container_;
@@ -3942,6 +3958,7 @@ private:
     bool tracking_request_retired_ = false;
     mutable bool tracking_admission_running_ = false;
     std::unordered_map<std::int32_t, ActorRef> tracking_actors_;
+    bool tracking_in_zone() const;
     std::optional<TrackingAdmission> tracking_admission() const;
     bool tracking_admission_current(TrackingAdmission admission) const;
     void retire_tracking();

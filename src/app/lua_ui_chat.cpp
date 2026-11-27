@@ -303,6 +303,12 @@ TimestampFormat timestamp_format(std::string_view value) {
     return TimestampFormat::Off;
 }
 
+std::string_view timestamp_value(TimestampFormat format) {
+    for (const auto& option : kTimestampOptions)
+        if (option.format == format) return option.value;
+    return "off";
+}
+
 // Hailstone: the local arrival time in grey before a line, nothing for a line of unknown time.
 // hs.ChatText formats every line of a window again each time a line comes, and each local time read the time zone
 // again (glibc stats /etc/localtime every call): the stamps were most of a chat window's frame in a fight. Time zones
@@ -496,6 +502,9 @@ struct ChatWnd {
     std::string tell_target;    // +0x234 (a tell window's player; the chat channel's name /channel gave)
     bool scrollbar = true;      // the output's WindowStyle bit 0
     int font = 3;               // CChatWindow::SetChatFont's index
+    // Hailstone: the tab's timestamp format (a kTimestampOptions value, _Timestamps). Empty: none of its own yet, so
+    // the UI pack's old shared setting (chat.timestamps), which kept one format for every tab.
+    std::string timestamps;
     int language = 0;           // +0x274
     bool tell = false;          // bIsTellWnd
     int group = 0;              // visible frame slot (1-based)
@@ -598,6 +607,13 @@ bool iequal(std::string_view a, std::string_view b) {
            });
 }
 
+// The tab's timestamp format: its own, else the UI pack's old shared one (chat.timestamps), else none.
+TimestampFormat tab_timestamps(int w) {
+    if (!wnd(w).timestamps.empty()) return timestamp_format(wnd(w).timestamps);
+    const UiHost* h = chat_host();
+    return h && h->layout_setting ? timestamp_format(h->layout_setting(kTimestampSetting)) : TimestampFormat::Off;
+}
+
 // The window's settings under ChatWindow<n>_ (CChatWindow_SaveSettings @0x655d10) and the tabs' keys.
 void save_window(ui::UiIni& ini, int w) {
     const ChatWnd& c = wnd(w);
@@ -616,6 +632,8 @@ void save_window(ui::UiIni& ini, int w) {
     put("Highlight", c.flash ? "1" : "0");
     if (c.flash_color) put("HighlightColor", std::to_string(*c.flash_color));
     else ini.erase("ChatManager", k + "HighlightColor");
+    if (!c.timestamps.empty()) put("Timestamps", c.timestamps);
+    else ini.erase("ChatManager", k + "Timestamps");
 }
 
 // CChatWindowManager::SaveChatSettings @0x64fe40. The original counts NumWindows less its tell windows, which then
@@ -640,6 +658,7 @@ void save_manager(ui::UiIni& ini) {
         ini.erase("ChatManager", std::format("ChatWindow{}_TabOrder", w));
         ini.erase("ChatManager", std::format("ChatWindow{}_Highlight", w));
         ini.erase("ChatManager", std::format("ChatWindow{}_HighlightColor", w));
+        ini.erase("ChatManager", std::format("ChatWindow{}_Timestamps", w));
     }
     for (int g = 1; g <= kMaxChatWindows; ++g) {
         const auto& group = group_at(g);
@@ -672,6 +691,11 @@ void save_manager() {
 void changed() {
     ++manager().serial;
     save_manager();
+}
+
+void set_tab_timestamps(int w, TimestampFormat format) {
+    wnd(w).timestamps = std::string(timestamp_value(format));
+    changed();
 }
 
 // The categories ReportHit_* reads (the first six native modes) and the separate spell modes go to the connection.
@@ -737,7 +761,9 @@ std::uint32_t color_of(const ui::ChatLine& l) {
 }
 
 int routed_window(const ui::ChatLine& line) {
-    const auto channel = game::chat_channel_of_color(static_cast<std::int32_t>(color_of(line)));
+    // Hailstone: a plugin's or script's own line goes by its own channel, whatever colour it was written in.
+    const auto channel = line.from_code ? game::kChatChannelCode
+                                        : game::chat_channel_of_color(static_cast<std::int32_t>(color_of(line)));
     const int window = manager().channel_map[static_cast<std::size_t>(channel)];
     return used(window) ? window : 0;
 }
@@ -1219,9 +1245,13 @@ std::vector<Row> filter_menu(int w, game::ChatFilterMenu menu) {
                 rows.push_back(submenu(group.menu, group.menu != game::ChatFilterMenu::ChatChannel || !joined.empty()));
     };
     if (menu == game::ChatFilterMenu::Filters) {
-        add_items([](const game::ChatFilterItem& it) { return it.channel <= 8 || it.channel == 49; });
+        // (Hailstone's Plugins and Scripts item after System Messages, before the submenus)
+        auto first = [](const game::ChatFilterItem& it) {
+            return it.channel <= 8 || it.channel == 49 || it.channel == game::kChatChannelCode;
+        };
+        add_items(first);
         add_submenus(menu); // Chat Channel, Melee, Spells
-        add_items([](const game::ChatFilterItem& it) { return it.channel > 8 && it.channel != 49; });
+        add_items([first](const game::ChatFilterItem& it) { return !first(it); });
     } else {
         add_submenus(menu); // (Hailstone's extended submenus)
         add_items([](const game::ChatFilterItem&) { return true; });
@@ -1553,16 +1583,14 @@ std::vector<Row> chat_menu(int w) {
     });
     rows.push_back(action("Use Tell Windows", [] { set_tell_windows(!tell_windows_on()); }, true, tell_windows_on()));
     const bool can_set_timestamps = h && h->layout_setting && h->set_layout_setting;
-    sub("Timestamps", [](int) {
+    // Hailstone: the tab's own format (the menu's tab); the other tabs keep theirs.
+    sub("Timestamps", [](int win) {
         std::vector<Row> out;
-        UiHost* hh = chat_host();
-        if (!hh || !hh->layout_setting || !hh->set_layout_setting) return out;
-        const auto selected = timestamp_format(hh->layout_setting(kTimestampSetting));
+        const auto selected = tab_timestamps(win);
         for (const auto& option : kTimestampOptions) {
-            out.push_back(action(option.example, [value = option.value] {
-                if (UiHost* current = chat_host(); current && current->set_layout_setting)
-                    current->set_layout_setting(kTimestampSetting, value);
-            }, true, option.format == selected));
+            out.push_back(action(option.example, on_window(win, [format = option.format](int page) {
+                set_tab_timestamps(page, format);
+            }), true, option.format == selected));
         }
         return out;
     }, can_set_timestamps);
@@ -2146,6 +2174,34 @@ int ChatSetFont(lua_State* L) {
     if (w < 0) return 0;
     wnd(w).font = static_cast<int>(std::clamp<lua_Integer>(luaL_checkinteger(L, 2), 0, 10));
     changed();
+    return 0;
+}
+
+// format = hs.ChatTimestamps(slot)   -- Hailstone: the timestamp format of the tab that is up ("off",
+// "12h-seconds", "24h-minutes" or "24h-seconds"), for hs.ChatText's stamps; a tab with none of its own yet has the
+// UI pack's old shared chat.timestamps
+int ChatTimestamps(lua_State* L) {
+    int w = up_window(L, 1);
+    if (w < 0) return 0;
+    const auto value = timestamp_value(tab_timestamps(w));
+    lua_pushlstring(L, value.data(), value.size());
+    return 1;
+}
+
+// hs.ChatSetTimestamps(slot, format)   -- Hailstone: the timestamp format of the tab that is up, as hs.ChatTimestamps
+// names them (true and "1" are "24h-seconds"; anything else off); kept with the tab
+int ChatSetTimestamps(lua_State* L) {
+    int w = up_window(L, 1);
+    if (w < 0) return 0;
+    auto format = TimestampFormat::Off;
+    if (lua_type(L, 2) == LUA_TSTRING) {
+        std::size_t length = 0;
+        const char* value = lua_tolstring(L, 2, &length);
+        format = timestamp_format(std::string_view(value, length));
+    } else if (lua_toboolean(L, 2)) {
+        format = TimestampFormat::Hours24Seconds;
+    }
+    set_tab_timestamps(w, format);
     return 0;
 }
 
@@ -2768,6 +2824,8 @@ void chat_layout_loaded(ui::UiIni& ini, UiHost& host, const std::filesystem::pat
         tab_order[static_cast<std::size_t>(w)] = num(key + "TabOrder", w);
         auto& c = wnd(w);
         c.flash = num(key + "Highlight", 1) != 0;
+        if (auto stamps = ini.get("ChatManager", key + "Timestamps"); stamps && !stamps->empty())
+            c.timestamps = std::string(timestamp_value(timestamp_format(*stamps)));
         if (auto rgb = ini.get("ChatManager", key + "HighlightColor")) {
             std::uint32_t value = 0;
             const char* end = rgb->data() + rgb->size();
@@ -2990,6 +3048,7 @@ void register_chat_api(lua_State* L, UiHost& h) {
                                    {"ChatSetTitle", ChatSetTitle}, {"ChatFilters", ChatFilters},
                                    {"ChatFilterGroups", ChatFilterGroups},
                                    {"ChatSetFilter", ChatSetFilter}, {"ChatSetFont", ChatSetFont},
+                                   {"ChatTimestamps", ChatTimestamps}, {"ChatSetTimestamps", ChatSetTimestamps},
                                    {"ChatDefaultChannels", ChatDefaultChannels}, {"ChatSetDefault", ChatSetDefault},
                                    {"ChatClear", ChatClear}, {"ChatNewTab", ChatNewTab},
                                    {"ChatCloseTab", ChatCloseTab}, {"ChatSelectTab", ChatSelectTab},

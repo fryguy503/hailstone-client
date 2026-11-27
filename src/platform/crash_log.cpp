@@ -3,6 +3,7 @@
 #include <atomic>
 #include <csignal>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <exception>
 #include <iterator>
@@ -27,6 +28,10 @@
 #define HAILSTONE_HAVE_BACKTRACE 1
 #endif
 #include <fcntl.h>
+#if !defined(__APPLE__) && __has_include(<link.h>)
+#include <link.h>
+#define HAILSTONE_HAVE_PHDR 1
+#endif
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -45,6 +50,7 @@ char g_dir[1024] = {};
 char g_log_path[1024] = {};
 char g_recent[4096] = {};
 char g_report[8192] = {};
+char g_build_id[2 * 64 + 1] = {}; // a build ID is 20 bytes (SHA-1, the linkers' default) or fewer; 64 at most here
 std::atomic<bool> g_reported{false}; // one report per run: a crash in the handler, or abort after terminate
 #ifdef _WIN32
 wchar_t g_path[1200] = {}; // the report's file: kept off the stack, which may be nearly used up
@@ -124,6 +130,26 @@ void copy_dir(const std::filesystem::path& dir) {
     for (std::size_t i = 0; i < n; ++i) g_dir[i] = s[i];
     g_dir[n] = 0;
 }
+
+#ifdef HAILSTONE_HAVE_PHDR
+// dl_iterate_phdr reports the program itself first: its note segments hold the build ID the linker wrote
+// (-Wl,--build-id, cmake/SeparateSymbols.cmake).
+int read_build_id(dl_phdr_info* info, std::size_t, void*) {
+    for (std::size_t i = 0; i < info->dlpi_phnum; ++i) {
+        const auto& ph = info->dlpi_phdr[i];
+        if (ph.p_type != PT_NOTE) continue;
+        const unsigned char* id = nullptr;
+        const std::size_t n = find_gnu_build_id(reinterpret_cast<const unsigned char*>(info->dlpi_addr + ph.p_vaddr),
+                                                static_cast<std::size_t>(ph.p_memsz),
+                                                ph.p_align == 8 ? 8 : 4, &id);
+        if (n == 0 || n * 2 >= sizeof g_build_id) continue;
+        Writer w{g_build_id, sizeof g_build_id};
+        for (std::size_t k = 0; k < n; ++k) w.hex(id[k], 2);
+        break;
+    }
+    return 1; // the program only, not the libraries after it
+}
+#endif
 
 #ifndef _WIN32
 const char* signal_name(int sig) {
@@ -226,7 +252,7 @@ std::size_t format_crash_name(char* out, std::size_t size, std::int64_t unix_sec
 }
 
 std::size_t format_crash_report(char* out, std::size_t size, std::int64_t unix_seconds, const char* what,
-                                const char* log_path, const char* recent, const char* build) {
+                                const char* log_path, const char* recent, const char* build, const char* build_id) {
     if (size == 0) return 0;
     const Civil c = civil(unix_seconds);
     Writer w{out, size};
@@ -235,6 +261,11 @@ std::size_t format_crash_report(char* out, std::size_t size, std::int64_t unix_s
     if (build && *build) {
         w.put("build: ");
         w.put(build);
+        w.put("\n");
+    }
+    if (build_id && *build_id) {
+        w.put("build-id: ");
+        w.put(build_id);
         w.put("\n");
     }
     w.put("time: ");
@@ -262,7 +293,42 @@ std::size_t format_crash_report(char* out, std::size_t size, std::int64_t unix_s
     return w.at;
 }
 
+std::size_t find_gnu_build_id(const unsigned char* notes, std::size_t size, std::size_t align,
+                              const unsigned char** id) {
+    constexpr std::uint32_t kGnuBuildId = 3; // NT_GNU_BUILD_ID
+    if (!notes || (align != 4 && align != 8)) return 0;
+    // Each note: name size, descriptor size, type (32 bits each), then the name and the descriptor, each starting at
+    // a multiple of the alignment (the segment itself is aligned so).
+    const auto skip = [align, size](std::size_t at, std::size_t n) {
+        const std::size_t end = (at + n + align - 1) / align * align;
+        return end < size ? end : size;
+    };
+    std::size_t at = 0;
+    while (size - at >= 12) {
+        std::uint32_t name_size = 0, desc_size = 0, type = 0;
+        std::memcpy(&name_size, notes + at, 4);
+        std::memcpy(&desc_size, notes + at + 4, 4);
+        std::memcpy(&type, notes + at + 8, 4);
+        at += 12;
+        if (name_size > size - at) return 0;
+        const std::size_t name_at = at;
+        at = skip(at, name_size);
+        if (desc_size > size - at) return 0;
+        if (type == kGnuBuildId && name_size == 4 && std::memcmp(notes + name_at, "GNU", 4) == 0 && desc_size > 0) {
+            if (id) *id = notes + at;
+            return desc_size;
+        }
+        at = skip(at, desc_size);
+    }
+    return 0;
+}
+
+const char* crash_build_id() { return g_build_id; }
+
 void set_crash_report_dir(const std::filesystem::path& dir) {
+#ifdef HAILSTONE_HAVE_PHDR
+    if (!g_build_id[0]) dl_iterate_phdr(read_build_id, nullptr);
+#endif
     copy_dir(dir);
     std::string log;
     try {
@@ -279,7 +345,7 @@ bool write_crash_report(const char* what) {
     const std::int64_t now = now_seconds();
     log::copy_recent_lines(g_recent, sizeof g_recent);
     const std::size_t length = format_crash_report(g_report, sizeof g_report, now, what, g_log_path, g_recent,
-                                                     build_version());
+                                                     build_version(), g_build_id);
     char name[64];
     format_crash_name(name, sizeof name, now);
 #ifdef _WIN32
@@ -335,7 +401,7 @@ bool write_crash_report(const char* what) {
         done += static_cast<std::size_t>(n);
     }
 #ifdef HAILSTONE_HAVE_BACKTRACE
-    // The stack (addr2line -e hailstone <offset> names a "+0x..." frame).
+    // The stack: tools/symbolize_crash.py names a "+0x..." frame from the build's symbol file (docs/hardening.md).
     static const char kStack[] = "\nstack:\n";
     if (::write(fd, kStack, sizeof kStack - 1) > 0) {
         void* frames[64];

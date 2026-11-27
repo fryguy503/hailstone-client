@@ -118,6 +118,7 @@ manifest's `caps` (docs/addons.md).
 | `Navigation` | | `navigation` | the client's navigation (docs/navigation.md) |
 | `Stick` | | `stick` | `/stick`'s state (docs/navigation.md) |
 | `MoveTo` | | `moveto` | `/moveto`'s state (docs/navigation.md) |
+| `MoveUtils` | | `moveutils` | whether a `/moveto` or `/stick` walk is stuck (docs/navigation.md) |
 | `AdvPath` | | `advpath` | `/afollow`'s state (docs/navigation.md) |
 | `Int` | number | int | the number cut toward zero; NULL for NaN, infinity or a number beyond 64 bits |
 | `Float` | number | float | the number |
@@ -132,7 +133,7 @@ manifest's `caps` (docs/addons.md).
 1 000 000 in size.
 
 A compiled plugin can add TLOs (`AddTopLevelObject`). It cannot replace one that exists. `Spell.StacksWithDiscs` is
-not given (docs/unknowns.md). MQ TLOs that are missing:
+not given: it is a later live client's spell field (ToB and after), not in the RoF2 spell file. MQ TLOs that are missing:
 `Ground`, `Macro`, and other MQ plugins' TLOs (`Navigation` and
 `Stick` are built in).
 
@@ -264,6 +265,7 @@ character's name.
 | `CashBank` | int | the bank's coin, in copper |
 | `FreeInventory` | int | empty general slots plus empty bag slots |
 | `Pet` | `pet` | as the `Pet` TLO |
+| `Aura[n\|name]` | `auratype` | the player's nth aura (1-based), or the first whose name starts with `name` (any case); no index is the first. NULL while the player has none |
 | `Bandolier[name\|n]` | `bandolier` | a bandolier set by its name (any case) or number (1..20, clamped); NULL for a name no set has |
 | `AbilityReady[name\|number]` | bool | a skill's reuse timer has run out |
 | `CombatAbilityReady[name]` | bool | the same for a combat ability (a discipline); the name works without its "Rk. II" |
@@ -305,7 +307,7 @@ The value of `Spell[...]`, `Me.Gem[n]`, `Me.Casting` and the like. Its plain val
 | `Level` | int | the level the player's class gets it; NULL when the class cannot use it |
 | `Mana` | int | |
 | `Range`, `AERange` | float | |
-| `CastTime`, `RecastTime`, `RecoveryTime` | float | seconds |
+| `CastTime`, `RecastTime`, `RecoveryTime` | `timestamp` | the cast time, the gem's recast and the recovery after the cast, in milliseconds (as MQ's; `.TotalSeconds` for seconds) |
 | `MyCastTime` | `timestamp` | the cast time (not adjusted for focus) |
 | `Duration` | `ticks` | the duration at the player's level, in ticks of 6 s |
 | `DurationWindow` | int | 1 for a short buff (song window), else 0 |
@@ -355,6 +357,8 @@ An item in a slot. Its plain value is the item's name.
 | `NoTrade` | bool | |
 | `Tradeskills` | bool | |
 | `Clicky` | `spell` | its click effect's spell; NULL without one |
+| `CastTime` | `timestamp` | its click effect's cast time (milliseconds); NULL without a click effect |
+| `Spell` | `spell` | the spell of its first effect of click, scroll, proc, focus and worn, in that order (MQ's); NULL without one |
 | `EffectType` | string | `Spell Scroll`, `Click Worn`, `Click Inventory`, `Click Unknown`, `Worn` or `Combat` (the first it has) |
 | `Timer` | `ticks` | ticks left on its click effect's reuse (rounded up), 0 when ready; NULL without a click effect |
 | `StackCount` | int | how many of this item the general slots and their bags hold; 0 for an item that does not stack |
@@ -374,8 +378,10 @@ An item in a slot. Its plain value is the item's name.
 | `Members` | int | members besides the player |
 | `GroupSize` | int | the player included |
 | `Member[n]` | `groupmember` | member n; 0 is the player |
-| `Member[name]` | int | that member's index |
+| `Member[name]` | `groupmember` | the member of that name (any case); `.Index` gives its number |
 | `Leader`, `MainTank`, `MainAssist`, `Puller` | `groupmember` | the member with that role |
+| `MarkNpc` | `groupmember` | the member the leader delegated Mark NPC to |
+| `MasterLooter` | `groupmember` | always NULL: RoF2's group has no master looter |
 
 A `groupmember` has every `spawn` member (of its spawn when it is in the zone), and these. Its plain value is the
 name.
@@ -387,7 +393,10 @@ name.
 | `Spawn` | `spawn` | NULL when it is not in this zone |
 | `Level` | int | also known when it is in another zone |
 | `Leader`, `MainTank`, `MainAssist`, `Puller` | bool | |
+| `MarkNpc` | bool | the leader delegated Mark NPC to it |
+| `MasterLooter` | bool | always FALSE (RoF2 has none) |
 | `Mercenary`, `Offline` | bool | |
+| `Present` | bool | its spawn is in this zone (the player always) |
 | `OtherZone` | bool | online but not in this zone |
 | `PctAggro` | int | its aggro meter percentage |
 
@@ -396,6 +405,12 @@ name.
 | `Present` | int | the members besides the player whose spawn is in this zone |
 | `Injured[pct]` | int | the members in the zone (the player too) with health above 0 and below the percent |
 | `LowMana[pct]` | int | the same for mana (the others' as the group's mana updates give it) |
+| `AnyoneMissing` | bool | a member besides the player is offline, out of the zone, or only a corpse here |
+| `MercenaryCount` | int | the mercenaries in the zone |
+| `TankMercCount`, `HealerMercCount`, `MeleeMercCount`, `CasterMercCount` | int | the same for a warrior, cleric, rogue or wizard mercenary |
+| `AvgHPs` | int | the player's and the other members' in the zone health percent, averaged (100 when they add up to 0). MQ's player term is whole-number (current / max) * 100, 0 below full health; here it is the player's percent |
+| `Cleric` | `spawn` | the first member (the player first) who is a player cleric in the zone |
+| `MouseOver` | `groupmember` | always NULL: the TLOs cannot see the mouse's place in the UI |
 
 ### pet
 
@@ -487,7 +502,7 @@ An AA the player owns. Its plain value is its ability (group) id.
 | `augtype` | the augment's name; NULL for an empty socket | `Name`, `Item` (`item`), `Empty`, `Slot`, `Type` (the socket's type), `Visible` |
 | `timestamp` | milliseconds | `Raw` (ms), `TotalSeconds`, `TotalMinutes`, `Hours`, `Minutes` (0..59), `Seconds` (0..59), `Ticks` (6 s, rounded up), `TimeHMS` (`h:mm:ss`), `Time` (`m:ss`) |
 | `zone` | its long name | `ID`, `Name`, `ShortName` |
-| `everquest` | `EverQuest` | `GameState` (`INGAME`, `CHARSELECT` or `PRECHARSELECT`), `Server` (the server's name), `UIScale` (always 1.0), `Ping` (the connection's average round trip, ms, as `/netstats` shows it), `Foreground` (the game's window has the focus) |
+| `everquest` | `EverQuest` | `GameState` (`INGAME`, `CHARSELECT` or `PRECHARSELECT`; `INGAME` throughout a zone change), `Server` (the server's name), `UIScale` (always 1.0), `Ping` (the connection's average round trip, ms, as `/netstats` shows it), `Foreground` (the game's window has the focus) |
 | `window` | `TRUE` or `FALSE` | `Open`, `Name` |
 | `plugin` | its name when loaded, else NULL | `IsLoaded`, `Name` |
 | `debuff` | `Count` | `Count` (all four), `Poisoned`, `Diseased`, `Cursed`, `Corrupted`: counters, summed over every buff; `Silenced`: bool, a buff silences (SPA 96) |
@@ -495,10 +510,12 @@ An AA the player owns. Its plain value is its ability (group) id.
 | `gametime` | `hh:mm` | `Hour`, `Minute`, `Day`, `Month`, `Year`, `Night`, `Time24` |
 | `navigation` | `Active` | `Active`, `Paused`, `MeshLoaded`, `MeshComplete`, `TilesBuilt`, `TilesTotal`, `Destination`, `Remaining`, `PathExists[dest]`, `PathLength[dest]` (-1 for no path), `Velocity` (the player's speed, units a second); docs/navigation.md "The Navigation TLO" |
 | `stick` | `ON` or `OFF` | `Active`, `Status` (`ON`, `PAUSED` or `OFF`), `Distance`, `StickTarget` (spawn id, 0 none), `StickTargetName`, `Stopped` (within the stick's distance), `Behind` (and at the spawn's back); docs/navigation.md |
+| `auratype` | its name | `ID` (its number, 1-based), `Name`, `SpawnID` (the aura's spawn), `Find[text]` (where the text first appears in the name, 1-based, any case). MacroQuest's `Remove` method is not supported: `/removeaura <name>` removes one |
 | `bandolier` | its name | `Active` (each of its four items is the one worn in its slot, an empty one an empty slot), `Index` (1..20), `Name`, `Item[1..4]` (primary, secondary, range, ammo; clamped). A set without a name is NULL to every member. To switch sets: `/bandolier activate <name>` |
 | `bandolieritem` | its name | `ID`, `IconID`, `Name` |
 | `advpath` | `TRUE` | `Active`, `State` (1 following, 0 not), `Status` (0 off, 1 on, 2 paused), `Following`, `Paused`, `WaitingWarp`, `Waypoints`, `Length`, `Monitor` (spawn), `Playing` and `Recording` (FALSE); docs/navigation.md |
 | `moveto` | `ON`, `PAUSED` or `OFF` | `Moving`, `Stopped` (the last `/moveto` arrived), `ArrivalDist`, `Broken` (always FALSE); docs/navigation.md |
+| `moveutils` | `STICK`, `MOVETO` or `NONE` | `Stuck` (a `/moveto` or `/stick` walk has stalled), `Command` (as the text); docs/navigation.md |
 | `math` | NULL | `Calc[expr]`, `Sqrt`, `Abs`, `Sin`, `Cos`, `Tan`, `Asin`, `Acos`, `Atan` (degrees), `Rand[max]` or `Rand[min,max]`, `Not`, `Hex`, `Dec[hex]`, `Clamp[n,min,max]`, `Distance[y,x,z:y,x,z]` (a missing point or coordinate is the player's) |
 
 `Debuff` is the MQ2Debuffs plugin's TLO, which E3 reads. Only detrimental spells count: some beneficial buffs carry
@@ -1192,7 +1209,7 @@ send a request. `OpenTask` changes the journal selection and visibility, not tas
 | HotButtonFace | (name, child) → {color={r,g,b}, lua, running, enabled, cooldown, overlay, tooltip} \| nil | A social's face extras | — |
 | HotButtonChecked | (name, child) → bool | Drawn pressed (a pet command that is on) | — |
 | HotButtonState | (name, child [, y0, y1]) → {checked, left, cooldown, top, color, tint} \| nil | Check and cool-down state | — |
-| HotButtonInfo | (name, child [, into [, y0, y1]]) → t | HotButton + Face + State in one table (kind, label, tex…, social, color, lua, running, enabled, faceCooldown, overlay, tooltip, state, checked, left, cooldown, top, tint, iconAlpha). `stackCount` is the carried total for a stackable item link, the current stack for an inventory-slot shortcut, or nil. `into` as GemInfo's | — |
+| HotButtonInfo | (name, child [, into [, y0, y1]]) → t | HotButton + Face + State in one table (kind, label, tex…, social, color, lua, running, enabled, faceCooldown, overlay, tooltip, state, checked, left, cooldown, top, tint, iconAlpha). `unavailable` is true for a Slam binding the current form cannot use. `stackCount` is the carried total for a stackable item link, the current stack for an inventory-slot shortcut, or nil. `into` as GemInfo's | — |
 | ClickHotButton | (name, child [, "left"\|"right"\|"rightheld" [, x, y]]) → ok | Use the button, or open its menu (at x, y) | actions |
 | PickUp | (window, child [, row]) → ok | Drag from a child: its hotbutton goes on the cursor | actions |
 | PressButtonFrom | (window, child [, row]) → ok | Run the hotbutton a drag would make (a pad's "use"). Not for hot bars | actions |
@@ -1385,6 +1402,8 @@ achievement and reward-selection APIs.
 | ChatFilterGroups | () → {{id, parent, name}} | Filter menu hierarchy; parent 0 is the root | — |
 | ChatSetFilter | (slot, id\|groupName, on) → — | Route a channel here or back to main | commands |
 | ChatSetFont | (slot, font) → — | Tab font index | commands |
+| ChatTimestamps | (slot) → format | The timestamp format of the tab that is up (`off`, `12h-seconds`, `24h-minutes`, `24h-seconds`), for ChatText's `stamps`. A tab with none of its own follows the pack's old shared `chat.timestamps` | — |
+| ChatSetTimestamps | (slot, format) → — | The tab's own timestamp format (`true` and `"1"` are `24h-seconds`, anything else off), kept in the UI ini | commands |
 | ChatDefaultChannels | () → {names} | Channel menu items (0-based order) | — |
 | ChatSetDefault | (slot, index) → — | Default channel for the tab | commands |
 | ChatClear | (slot [, tab]) → — | Empty the tab that is up, or the given one | commands |

@@ -28,7 +28,9 @@ TEST_CASE("Chat filters: the extended colours 355..408 go to the extended channe
         CHECK(chat_channel_of_color(color) == destinations[index]);
     }
     CHECK(chat_channel_of_color(408) == 107);
-    CHECK(kChatChannelCount == 108);
+    CHECK(kChatChannelCount == 109);
+    CHECK(kChatChannelCode == 108); // no colour goes there: the plugins' and scripts' own lines do
+    for (int color = -300; color <= 1000; ++color) CHECK(chat_channel_of_color(color) != kChatChannelCode);
     CHECK(kChatUserColorCount == 153);
 }
 
@@ -63,15 +65,22 @@ TEST_CASE("Chat filters: menu descriptors cover every destination and form an ac
         ++destinations[item.channel];
         if (item.channel >= 57) CHECK_FALSE(item.label.empty());
     }
-    // Every channel once but the unused 48, and the extended ones no extended colour reaches.
+    // Every channel once but the unused 48, and the extended ones no extended colour reaches. The plugins' and
+    // scripts' channel is reached by who wrote a line, not its colour.
     for (int channel = 0; channel < kChatChannelCount; ++channel) {
         CAPTURE(channel);
-        bool reached = channel < kChatChannelCountRoF2;
+        bool reached = channel < kChatChannelCountRoF2 || channel == kChatChannelCode;
         for (int color = 355; color <= 408 && !reached; ++color) reached = chat_channel_of_color(color) == channel;
         CHECK(destinations[static_cast<std::size_t>(channel)] == (channel == 48 || !reached ? 0 : 1));
     }
-    // The extended items are in Hailstone's own submenus only; the original menus keep their RoF2 items.
+    // The extended items are in Hailstone's own submenus only; the original menus keep their RoF2 items, and the
+    // Filters menu adds only Plugins and Scripts.
     for (const auto& item : chat_filter_items()) {
+        if (item.channel == kChatChannelCode) {
+            CHECK(item.menu == ChatFilterMenu::Filters);
+            CHECK(item.label == "Plugins and Scripts");
+            continue;
+        }
         const bool original_menu = item.menu == ChatFilterMenu::Filters || item.menu == ChatFilterMenu::ChatChannel ||
                                    item.menu == ChatFilterMenu::Melee || item.menu == ChatFilterMenu::Spells;
         CHECK(original_menu == (item.channel < kChatChannelCountRoF2));

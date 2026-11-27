@@ -1,6 +1,7 @@
 // GameConnection state that must not outlive what it was about: questions across a zone change or a loot session,
-// the trader selection after a zone change, spawn deletion and renaming, the auras, aggro meter and stun at
-// zone-in; and the decoders of OP_XTargetResponse, OP_GuildUpdate and opcode 0x3ed4. Against the mock EQEmu.
+// the trader selection after a zone change, spawn deletion and renaming, the target an OP_TargetCommand names, the
+// auras, aggro meter and stun at zone-in; and the decoders of OP_XTargetResponse, OP_GuildUpdate and opcode 0x3ed4.
+// Against the mock EQEmu.
 
 #include <doctest/doctest.h>
 
@@ -18,6 +19,7 @@
 #include "net/market_packets.h"
 #include "net/social_packets.h"
 #include "net/spell_packets.h"
+#include "plugin/hooks.h"
 
 using namespace hailstone;
 using namespace hailstone::net;
@@ -82,6 +84,40 @@ AppPacket mob_rename(std::string_view old_name, std::string_view new_name, std::
 }
 
 } // namespace
+
+TEST_CASE("a zone change keeps the server's rules and the game state: plugins and scripts are not reloaded") {
+    // World's OP_EnterWorld while zoning puts the connection in EnteringWorld, as an entry from character select
+    // does. It once swapped the rules for the login's provisional ones (every plugin and script without 'login'
+    // stopped) and told the plugins the game was at character select; the zone-in then started them all again.
+    plugin::Hooks hooks;
+    std::vector<int> states;
+    hooks.on_game_state(hooks.new_owner("test"), [&](int s) { states.push_back(s); });
+    auto options = quick_options();
+    options.hooks = &hooks;
+    Rig rig(MockConfig::standard(), options);
+    REQUIRE(rig.to_zone());
+    REQUIRE(rig.conn.server_rules());
+    CHECK_FALSE(rig.conn.server_rules()->provisional);
+    REQUIRE_FALSE(states.empty());
+    CHECK(states.back() == plugin::kGameStateInGame);
+    const auto serial = rig.conn.server_rules_serial();
+    bool provisional = false, entering_world = false, reentry_missed = false;
+    rig.on_step = [&] {
+        if (!rig.conn.server_rules() || rig.conn.server_rules()->provisional) provisional = true;
+        if (rig.conn.state() == ConnectionState::EnteringWorld) {
+            entering_world = true;
+            if (!rig.conn.zone_reentry()) reentry_missed = true; // ${EverQuest.GameState} would say CHARSELECT
+        }
+    };
+    states.clear();
+    REQUIRE(zone_again(rig, 2));
+    REQUIRE(zone_again(rig, 1));
+    CHECK(entering_world); // (the zone change did pass through world)
+    CHECK_FALSE(provisional);
+    CHECK_FALSE(reentry_missed);
+    CHECK(rig.conn.server_rules_serial() == serial);
+    CHECK(states.empty()); // in game throughout: no character select, no logging in
+}
 
 TEST_CASE("questions: the mercenary's dismiss question waits behind an open one") {
     Rig rig;
@@ -236,6 +272,22 @@ TEST_CASE("OP_DeleteSpawn of the target clears it and stops auto attack (msgEQRm
     REQUIRE(rig.until([&] { return conn.world().spawns.count(101) == 0; }));
     CHECK(conn.world().target_id == 0);
     CHECK_FALSE(conn.auto_attack());
+}
+
+TEST_CASE("OP_TargetCommand selects a known spawn; 0 or an unknown id leaves the target alone") {
+    // CEverQuest::HandleWorldMessage case 0x58e2: the target changes only when GetSpawnByID finds the spawn.
+    Rig rig;
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    REQUIRE(conn.world().spawns.count(101));
+    REQUIRE(conn.world().spawns.count(102));
+    conn.set_target(101);
+    conn.receive_zone_packet_for_test(encode_target(true, 0));
+    CHECK(conn.world().target_id == 101);
+    conn.receive_zone_packet_for_test(encode_target(true, 999999));
+    CHECK(conn.world().target_id == 101);
+    conn.receive_zone_packet_for_test(encode_target(true, 102));
+    CHECK(conn.world().target_id == 102);
 }
 
 TEST_CASE("OP_MobRename updates the spawn with the full old name and preserves its identity") {

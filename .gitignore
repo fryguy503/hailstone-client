@@ -13,6 +13,7 @@ __pycache__/
 # What a local release writes in the checkout (docs/updater.md "Making a release", docs/addons.md "For authors").
 /dist/
 /release/
+/release-symbols/
 # Container builds (compose.yaml, tools/docker/build.sh): ccache, MSVC, the Wine home
 /.docker/
 # luac -p writes this in the folder it runs in

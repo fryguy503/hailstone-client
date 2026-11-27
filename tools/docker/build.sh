@@ -6,6 +6,8 @@
 # "Making a release"); the build folder is build-<platform>/.
 #   CPUS        the containers' CPU limit (default 8); JOBS, the parallel jobs, follows it unless set
 #   CMAKE_ARGS  extra configure options, split at whitespace (an option cannot hold a space)
+#   SYMBOLS_DIR where each build's symbol files are kept, as <version>/<platform>/ (default release-symbols; docs/
+#               hardening.md "Crash reports"): never part of dist/, so never in a download
 #   MSVC_DIR    msvc-wine's install (default ~/opt/msvc when it has bin/x64/cl, else .docker/msvc); with no install
 #               there, windows-x64 downloads one only when MSVC_ACCEPT_LICENSE=1
 set -euo pipefail
@@ -42,6 +44,20 @@ install_tree() { # <platform> <service>
     rm -rf "dist/$1"
     dc run --rm --no-deps "$2" cmake --install "build-$1" --prefix "dist/$1/hailstone"
     echo "installed dist/$1/hailstone"
+    keep_symbols "$1"
+}
+
+# The debug information HAILSTONE_SEPARATE_SYMBOLS (release_options.sh) kept out of the install, in a folder per
+# version, to name a crash report's frames later (tools/symbolize_crash.py).
+keep_symbols() { # <platform>
+    local from="build-$1/symbols" version to
+    version=$(cat "$from/version.txt" 2>/dev/null) || { echo "warning: no $from/version.txt, symbols not kept"; return; }
+    to="${SYMBOLS_DIR:-release-symbols}/$version/$1"
+    rm -rf "$to"
+    mkdir -p "$to"
+    find "$from" -maxdepth 1 -type f \( -name '*.debug' -o -name '*.pdb' -o -name '*.exe' -o -name '*.dll' \) \
+        -exec cp -p {} "$to/" \;
+    echo "kept symbols in $to"
 }
 
 linux() { # <platform>

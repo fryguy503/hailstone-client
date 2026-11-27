@@ -47,6 +47,7 @@ PAGES = [
     ("Scripting and UI", [
         ("docs/plugins.md", "Plugins-and-Scripts"),
         ("docs/scripting-reference.md", "Scripting-Reference"),
+        ("docs/autoexec.md", "Startup-Command-Files"),
         ("docs/dev-ui.md", "Developer-UI"),
         ("docs/ui-api.md", "UI-API"),
         ("docs/ui-api-reference.md", "UI-API-Reference"),

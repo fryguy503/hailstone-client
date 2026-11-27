@@ -227,6 +227,7 @@ local function bar(n)
         ui.DrawRectFilled(bx, by, bx + sz, by + sz, C.accent[1], C.accent[2], C.accent[3], 0.16, 6 * s)
         ui.DrawRect(bx + 1, by + 1, bx + sz - 1, by + sz - 1, C.accent[1], C.accent[2], C.accent[3], 0.95, 6 * s, 2 * s)
       end
+      if info.unavailable then ui.DrawRectFilled(bx, by, bx + sz, by + sz, 0, 0, 0, 0.55, 6 * s) end
       if stack then
         cornerText(bx + sz - 3 * s, textBottom, stack, C.text, s, countScale)
       end

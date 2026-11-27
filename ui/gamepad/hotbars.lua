@@ -97,6 +97,7 @@ local function tile(window, n, i, x0, y0, size)
     ui.DrawRectFilled(x0, y0, x1, y1, C.accent[1], C.accent[2], C.accent[3], 0.18, r)
     T.outline(x0, y0, x1, y1, C.accent, 1, r, T.px(3))
   end
+  if info.unavailable then ui.DrawRectFilled(x0, y0, x1, y1, 0, 0, 0, 0.55, r) end
   T.outline(x0, y0, x1, y1, hovered and C.accent or C.edge, hovered and 0.9 or 1, r, hovered and T.px(2) or 1)
   if info.stackCount then T.hotbarCount(x0 + T.px(2), textBottom, x1 - T.px(3), y1 - T.px(1), info.stackCount, 1) end
   -- the key bound to it (Show Key Map: the button's text is its key, "" with the key map off)

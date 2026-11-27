@@ -17,6 +17,7 @@
 #include "app/addon_suggest.h"
 #include "app/ability_bulk.h"
 #include "app/window_icon.h"
+#include "app/box_refocus.h"
 #include "app/window_desc.h"
 #include "app/automation.h"
 #include "app/progress_ui.h"
@@ -67,6 +68,7 @@
 #include "core/ini_file.h"
 #include "core/log.h"
 #include "core/path_utf8.h"
+#include "core/server_profile.h"
 #include "core/wipe.h"
 #include "app/nameplate_layer.h"
 #include "app/nameplate_input.h"
@@ -82,6 +84,7 @@
 #include "game/collision.h"
 #include "game/zone_ladders.h"
 #include "game/combat.h"
+#include "game/accessibility.h"
 #include "game/picking.h"
 #include "game/zoning.h"
 #include "game/mechanics/character.h"
@@ -286,6 +289,9 @@ public:
         shader_dir_ = platform::shaders_dir();
         config_path_ = default_config_path();
         config_.load(config_path_);
+        // A box set's other windows keep their window's mode, size and place per character, never in hailstone.ini
+        // (core/config.h set_display_per_character; apply_character_window).
+        config_.set_display_per_character(opts_.box_child);
         if (opts_.clip_plane != 15) clip_plane_arg_ = opts_.clip_plane;
         if (opts_.max_fps > 0 || opts_.max_fps == kMaxFpsAuto) max_fps_arg_ = opts_.max_fps;
         // The asset folder: --game-dir or EQ_GAME_DIR, else hailstone.ini assets.path, else the picker asks.
@@ -475,6 +481,15 @@ public:
         aenv.server_name = [this] { return char_view_.server_name; };
         aenv.server_profile = [this] { return server_profile_.id; };
         aenv.profile_name = [this] { return server_profile_.name; };
+        // The .cfg files' server and character layers (app/autoexec.h): the folders the character's files use.
+        aenv.server_dir = [this]() -> std::filesystem::path {
+            if (server_profile_.id.empty() && char_view_.server_name.empty()) return {};
+            return profile_dir(files_profile(), login_view_.servers_dir);
+        };
+        aenv.character_dir = [this]() -> std::filesystem::path {
+            if (!conn_ || conn_->character_name().empty() || char_view_.server_name.empty()) return {};
+            return character_files(files_profile(), char_view_.server_name, conn_->character_name()).dir;
+        };
         aenv.window_open = [this](std::string_view w) { return ui_api_ && ui_api_->window_shown(w); };
         // Window.Child's reads, DoOpen / DoClose and the click methods (mq::Context): UiApi's windows are state
         // alone (UiHost and the connection), built with or without anything drawn.
@@ -1072,6 +1087,11 @@ private:
     bool set_video_option(std::string_view name, int value);
     // The window's mode at start (display.window_mode, display.resolution: shared, so only then).
     void apply_video_options();
+    // A box set's other window, its character's file attached: the window as that character keeps it (its mode, and
+    // in a window its size, place and maximized), when the file has its own.
+    void apply_character_window();
+    // window.*: the window's normal place and size and whether it is maximized (the character's, in a box window).
+    void remember_window_geometry();
     // Vertical sync, the frame caps and the field of view (apply_settings).
     void apply_frame_options();
     // Sets game_'s base folder (core/asset_folder_choice.h), running the asset-folder picker when nothing usable is
@@ -1362,6 +1382,7 @@ private:
     Clock::time_point server_hint_at_{};
     std::vector<std::string> worlds_noted_; // the worlds the login server listed, as set_listed_worlds() last had them
     platform::ChildProcesses box_clients_; // the box set's other windows
+    BoxRefocus box_refocus_;               // takes the focus back once they have opened (app/box_refocus.h)
     platform::ChildProcesses tools_;       // the tool add-ons the player started (left running when Hailstone quits)
     // The updater (app/client_app_update.cpp, docs/updater.md): null when updates are off for this run.
     std::unique_ptr<Updater> updater_;
@@ -1696,6 +1717,10 @@ private:
     bool target_plate_through_walls_ = false; // Hailstone: the target's name shown behind walls (display.target_plate_through_walls)
     bool target_plate_highlight_ = true; // Hailstone: the target's name on a dark plate with a marker (display.target_plate_highlight)
     game::PlateStyle plate_style_;    // Hailstone: the name plates' font, size, edge and shrink (game/nameplate_style.h)
+    // Hailstone: colour vision, con labels, minimum text size and screen effects (game/accessibility.h), also put in
+    // force for the process (game::set_accessibility) and the UI layer (ui::ImGuiLayer::set_min_text_size).
+    game::Accessibility accessibility_;
+    void apply_accessibility();
     int show_names_ = 4;              // __ShowNames (/shownames 1..6, display.show_names): the player name sprite's parts
     bool spell_effects_ = true;       // ShowSpellEffects (/showspelleffects, display.spell_effects): spell particles
     // EnvironmentParticleDensity (/particledensity and the Options window's combo; display.environment_particle_density,

@@ -388,6 +388,11 @@ local RING_CONS = {
   { "Dark Blue Con", "dark blue" }, { "White Con", "white (even)" }, { "Yellow Con", "yellow" }, { "Red Con", "red" },
 }
 
+-- Minimum Text Size's choices (game/accessibility.h: 0 off, else 10..24 points).
+local MIN_TEXT_SIZES = { 0, 10, 11, 12, 13, 14, 16, 18, 20, 24 }
+local MIN_TEXT_NAMES = {}
+for i, v in ipairs(MIN_TEXT_SIZES) do MIN_TEXT_NAMES[i] = v == 0 and "Off" or (v .. " pt") end
+
 local function displayTab()
   section("Window", function()
     combo("window_mode", "Display Mode", { "Windowed", "Borderless Fullscreen", "Fullscreen" },
@@ -562,6 +567,26 @@ local function displayTab()
       "Hailstone: hot buttons of the Actions window's skills show their timers, Melee Attack lights while auto attack is on, Sit while sitting.")
     check("offer_layout_copy", "Offer Layouts to New Characters",
       "Hailstone: a character's first time in the world opens Copy Layout, to start from another character's windows, hot buttons and settings.")
+  end)
+  -- Hailstone's accessibility options (game/accessibility.h; docs/dev-ui.md "Accessibility"), the player's own
+  -- (hailstone.ini accessibility.*, shared by every character).
+  section("Accessibility", function()
+    T.RefreshColourVision() -- this UI's meaning colours follow a change at once (lib/palettes.lua colourVision)
+    local modes = API.settings.OptionChoices("colour_vision")
+    if modes and #modes > 0 then
+      combo("colour_vision", "Colour Vision", modes,
+        "Hailstone: colours chosen to stay apart for that kind of colour blindness: the con colours (target, names, "
+        .. "map, chat) and this UI's health, good and bad colours. Red-green modes use Okabe and Ito's set, "
+        .. "blue-yellow Paul Tol's.")
+    end
+    check("con_labels", "Con Labels",
+      "Hailstone: your target's con colour is also written out (Red, Light Blue, ...) next to its name.")
+    combo("min_text_size", "Minimum Text Size", MIN_TEXT_NAMES,
+      "Hailstone: no text in the windows is drawn smaller than this. Windows made for smaller text may crowd.",
+      MIN_TEXT_SIZES)
+    slider("screen_effects", "Screen Effects", 0, 100, pct,
+      "Hailstone: how strongly full-screen effects show: the lightning's flash, the camera shaking and being drunk "
+      .. "warping the view. 0 % turns them off.")
   end)
   -- Hailstone's name plate text (game/nameplate_style.h; docs/graphics.md "Name plates"): the names over heads in
   -- their own face and size. Changes show at once.

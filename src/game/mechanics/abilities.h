@@ -281,6 +281,20 @@ std::optional<SkillMessage> check_hide_moved(const SkillContext& ctx, SkillState
 // Backstab, ...), else the profile's (Bard). GetAdjustedSkill itself is not hooked.
 std::int32_t adjusted_skill(const Character& ch, std::uint32_t skill);
 
+// Whether the current form has the innate Slam (InitInnates' slot 11, below). CSkillsSelectWnd::SetTypesToDisplay
+// @0x756ce0 lists Slam (skill 0x6f) in the skill picker on that slot alone, without Bash. The slot follows the
+// current form in the original too: EQPlayer::SetHeights @0x5a3f40 reruns InitInnates(GetRace()), keeping slot 10,
+// and EQPlayer::do_change_form @0x596b20 and EQ_Character::eqspa_change_form @0x43e2a0 call it. Zero current_race
+// uses the profile race.
+bool has_innate_slam(const Character& ch, std::uint32_t current_race);
+
+// Whether Slam's attack can go out: the innate Slam (EQ_Character::InitInnates @0x44d4d0: slot 11, profile +0x325c,
+// set for races 2 / 90, 9 / 92 and 10 / 93), and for races 90, 92 and 93 the Bash skill too, since
+// PlayerZoneClient::CanUseCombatSkill @0x5a2f10 waives Bash (and the shield) only for GetRace 2, 9 and 10. The
+// shield it would still ask of 90, 92 and 93 is left out (a deliberate change, docs/mechanics.md "Slam").
+// Zero current_race uses the profile race.
+bool can_slam(const Character& ch, std::uint32_t current_race);
+
 // The Actions window's lists: skills the player has (CharacterZoneClient::HasSkill @0x44a1b0: adjusted skill
 // above 0) that the original activates through UseSkill; combat = SkillCombatType 1 or 2.
 // current_race is the player spawn's current appearance race (which can change with illusions).

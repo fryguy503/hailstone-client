@@ -15,6 +15,7 @@
 #include "ui/layout_profile.h"
 #include "ui/lua/lua_draw_scope.h"
 #include "ui/lua/lua_host.h"
+#include "ui/text_floor.h"
 #include "ui/texture_ids.h"
 #include "core/lua_keep.h"
 
@@ -125,10 +126,40 @@ void apply_pending_collapse(const char *name) {
 
 // ImGui 1.92 dropped SetWindowFontScale with the obsolete API. The UI packs still scale a window's text through
 // ui.SetWindowFontScale, so keep its behaviour: the window's own multiplier, applied to the current font size.
+// The current font's size before the window's scale and ImGui's rounding (UpdateCurrentFontSize's global factors).
+float UnscaledFontSize() {
+	const ImGuiContext &g = *GImGui;
+	return g.FontSizeBase * g.Style.FontScaleMain * g.Style.FontScaleDpi;
+}
+
+// The minimum text size (ui/text_floor.h): a window scale that would draw the current font below the floor is raised
+// to reach it.
 void SetWindowFontScaleCompat(float scale) {
 	IM_ASSERT(scale > 0.0f);
-	ImGui::GetCurrentWindow()->FontWindowScale = scale;
+	ImGuiWindow *window = ImGui::GetCurrentWindow();
+	window->FontWindowScale = scale;
 	ImGui::UpdateCurrentFontSize(0.0f);
+	const float floor = text_floor_px();
+	if (floor > 0.0f && ImGui::GetFontSize() < floor) {
+		// From the size before ImGui rounds it, so the rounded result is not a pixel short.
+		window->FontWindowScale = floor_text_scale(UnscaledFontSize() * scale, scale, floor);
+		ImGui::UpdateCurrentFontSize(0.0f);
+	}
+}
+
+// ImGui::PushFont at the font's own size, or larger where that would draw below the minimum text size (the window's
+// scale counted); PopFont restores the size before it.
+void PushFontFloored(ImFont *font) {
+	ImGui::PushFont(font, font ? font->LegacySize : 0.0f); // size 0 keeps the current one
+	const float floor = text_floor_px();
+	const float size = ImGui::GetFontSize();
+	if (floor <= 0.0f || size >= floor || size <= 0.0f) return;
+	// The base size that reaches the floor under the window's scale and the global factors, from the unrounded size.
+	const float base = GImGui->FontSizeBase;
+	const ImGuiWindow *window = GImGui->CurrentWindow;
+	const float unrounded = UnscaledFontSize() * (window ? window->FontWindowScale : 1.0f);
+	ImGui::PopFont();
+	ImGui::PushFont(font, floor_text_scale(unrounded, base, floor));
 }
 
 struct Floor {
@@ -1341,12 +1372,14 @@ int DrawTriangleFilled(lua_State *L) {
 		ImGui::GetColorU32(Color(L, 7)));
 	return 0;
 }
-// ui.DrawText(x, y, r, g, b, a, text [, size])   -- size: the font's pixel height (default the current font's)
+// ui.DrawText(x, y, r, g, b, a, text [, size])   -- size: the font's pixel height (default the current font's; never
+// below the minimum text size, ui/text_floor.h)
 int DrawText(lua_State *L) {
 	if (lua_isnoneornil(L, 8))
 		DrawTarget()->AddText(ImVec2(F(L, 1), F(L, 2)), ImGui::GetColorU32(Color(L, 3)), S(L, 7));
 	else
-		DrawTarget()->AddText(ImGui::GetFont(), F(L, 8), ImVec2(F(L, 1), F(L, 2)), ImGui::GetColorU32(Color(L, 3)), S(L, 7));
+		DrawTarget()->AddText(ImGui::GetFont(), floor_text_px(F(L, 8), text_floor_px()), ImVec2(F(L, 1), F(L, 2)),
+			ImGui::GetColorU32(Color(L, 3)), S(L, 7));
 	return 0;
 }
 // ui.CaptureKeyboard()   -- the keyboard is the UI's next frame, not the game's (a window that takes key presses)
@@ -1372,14 +1405,12 @@ int GetCursorScreenPos(lua_State *L) {
 }
 // ui.PushFont(fontIndex) / ui.PopFont()   -- EQ UI font 1..6; an unknown number keeps the current font
 int PushFont(lua_State *L) {
-	ImFont *font = ui_font(static_cast<int>(I(L, 1, 3)));
-	ImGui::PushFont(font, font ? font->LegacySize : 0.0f); // size 0 keeps the current one
+	PushFontFloored(ui_font(static_cast<int>(I(L, 1, 3))));
 	return 0;
 }
 // ui.PushChatFont(index)   -- a chat window's font 0..10 (/chatfontsize; the original's font list); pop with PopFont
 int PushChatFont(lua_State *L) {
-	ImFont *font = chat_font(static_cast<int>(I(L, 1, 2)));
-	ImGui::PushFont(font, font ? font->LegacySize : 0.0f);
+	PushFontFloored(chat_font(static_cast<int>(I(L, 1, 2))));
 	return 0;
 }
 // px = ui.ChatFontSize(index)   -- that font's cell height in pixels at UI scale 1 (0 outside 0..10)

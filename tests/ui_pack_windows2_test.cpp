@@ -3,6 +3,124 @@
 
 #include "ui_pack_session.h"
 
+TEST_CASE("UI packs: clicking the target of target health bar requests and applies the new target") {
+    using namespace std::chrono_literals;
+
+    constexpr std::uint32_t first_target = 101, second_target = 102, unknown_target = 999;
+    for (const std::string_view pack : {"modern", "gamepad"}) {
+        CAPTURE(pack);
+        test::ScratchDir scratch("ui_pack_target_of_target");
+        const auto dir = scratch.path();
+        fs::create_directories(dir / "game");
+        const auto source = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
+        fs::copy(source, dir / pack, fs::copy_options::recursive);
+
+        std::unique_ptr<ImGuiContext, void(*)(ImGuiContext*)> context(ImGui::CreateContext(), ImGui::DestroyContext);
+        auto& io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+
+        auto options = test::quick_options();
+        options.servers_dir = dir / "servers";
+        test::Rig rig(test::MockConfig::standard(), options);
+        REQUIRE(rig.to_zone());
+        REQUIRE(rig.conn.world().spawns.contains(first_target));
+        REQUIRE(rig.conn.world().spawns.contains(second_target));
+        rig.conn.set_target(first_target);
+
+        auto saw_target = [&](net::Op op, std::uint32_t id) {
+            return std::any_of(rig.server.zone_log.begin(), rig.server.zone_log.end(), [&](const net::AppPacket& packet) {
+                return net::is_op(packet, op) && net::decode_target(packet) == id;
+            });
+        };
+        REQUIRE(rig.until([&] { return saw_target(net::Op::TargetMouse, first_target); }));
+
+        Session s(dir, std::string(pack));
+        s.host.conn = &rig.conn;
+        s.api.show("TargetWindow", true);
+        s.lua.set_entry_scripts({pack == "modern" ? "target.lua" : "hud.lua"});
+        lua_State* L = s.lua.state();
+        REQUIRE(luaL_dostring(L, R"lua(
+local invisible = ui.InvisibleButton
+ui.InvisibleButton = function(id, ...)
+  local pressed = invisible(id, ...)
+  if id == "##tot" then
+    local x0, y0, x1, y1 = ui.GetItemRect()
+    targetOfTargetCenter = { (x0 + x1) / 2, (y0 + y1) / 2 }
+  end
+  return pressed
+end
+)lua") == LUA_OK);
+
+        auto frame = [&]() -> std::optional<ImVec2> {
+            lua_pushnil(L);
+            lua_setglobal(L, "targetOfTargetCenter");
+            s.frames(1);
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            lua_getglobal(L, "targetOfTargetCenter");
+            std::optional<ImVec2> center;
+            if (lua_istable(L, -1)) {
+                lua_rawgeti(L, -1, 1);
+                lua_rawgeti(L, -2, 2);
+                center.emplace(static_cast<float>(lua_tonumber(L, -2)), static_cast<float>(lua_tonumber(L, -1)));
+                lua_pop(L, 2);
+            }
+            lua_pop(L, 1);
+            return center;
+        };
+        auto click = [&](ImVec2 center, ImGuiMouseButton button) {
+            io.AddMousePosEvent(center.x, center.y);
+            frame();
+            io.AddMouseButtonEvent(button, true);
+            frame();
+            io.AddMouseButtonEvent(button, false);
+            frame();
+        };
+        auto target_of_target = [&](std::uint32_t id) {
+            ByteWriter payload;
+            payload.le(id);
+            rig.server.zone.send_reliable(net::make_packet(net::Op::TargetHoTT, std::move(payload)));
+            REQUIRE(rig.until([&] { return rig.conn.target_of_target() == id; }));
+        };
+
+        CHECK_FALSE(frame());
+        target_of_target(second_target);
+        const auto visible_center = frame();
+        REQUIRE(visible_center);
+        const char* window = pack == "modern" ? "###modern.TargetWindow" : "HUD Target of Target";
+        REQUIRE(ImGui::FindWindowByName(window));
+
+        target_of_target(unknown_target);
+        CHECK_FALSE(frame());
+        click(*visible_center, ImGuiMouseButton_Left);
+        target_of_target(0);
+        CHECK_FALSE(frame());
+        rig.run_for(15ms);
+        CHECK(test::MockEqServer::count(rig.server.zone_log, net::Op::TargetCommand) == 0);
+        CHECK(rig.conn.world().target_id == first_target);
+
+        target_of_target(second_target);
+        const auto center = frame();
+        REQUIRE(center);
+        click(*center, ImGuiMouseButton_Left);
+        REQUIRE(rig.until([&] { return saw_target(net::Op::TargetCommand, second_target); }));
+        CHECK(rig.conn.world().target_id == first_target);
+        CHECK_FALSE(saw_target(net::Op::TargetMouse, second_target));
+
+        rig.server.zone.send_reliable(net::encode_target(true, second_target));
+        REQUIRE(rig.until([&] { return saw_target(net::Op::TargetMouse, second_target); }));
+        CHECK(rig.conn.world().target_id == second_target);
+
+        target_of_target(first_target);
+        const auto next_center = frame();
+        REQUIRE(next_center);
+        click(*next_center, ImGuiMouseButton_Right);
+        rig.run_for(15ms);
+        CHECK(test::MockEqServer::count(rig.server.zone_log, net::Op::TargetCommand) == 1);
+        CHECK(rig.conn.world().target_id == second_target);
+    }
+}
+
 TEST_CASE("UI packs: each draws the login, server select and character select screens in the client's place") {
     for (const char* pack : {"modern", "gamepad"}) {
         INFO(pack);

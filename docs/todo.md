@@ -52,10 +52,14 @@ The steps are in `docs/plan.md` "Road to 1.0". This section maps items to steps;
 - [ ] **Write the checklist.**
   - Its own doc, played on the stock PEQ test server, both packs, a physical controller.
   - What a GM character can script goes in `tests/live/*.quest`, run by `tools/live_smoke.sh` (docs/ci.md "Live smoke
-    tests"): zoning, items and NPCs so far. Loot All, merchants, trades with players and the UCS reconnect need new
+    tests"), which the nightly run plays: zoning, items, NPCs, combat and spells so far (spells with
+    `HAILSTONE_LIVE_CASTER` set). Loot All, merchants, trades with players and the UCS reconnect need new
     `tools/quest_probe.h` steps first.
   - Built from the live items of "Combat and spells", "Movement", "Items and commerce", "Social and friends", "Navigation", "Item comparison", "Isometric camera" and "Check live".
 - [ ] Play it and fix what it finds.
+- [x] Live smoke scripts for combat and casting: spawn a mob, melee it, loot it; memorize, cast, buff and fade
+  (`tests/live/combat.quest`, `spells.quest`; the `melee`, `memorize`, `cast`, `expect-buff`, `fade` and `click-off`
+  steps of `tools/quest_probe.h`).
 - [ ] Shadow step (SPA 379): the zone collision `land_spell` needs ("Combat and spells").
 - [ ] The collision radius, too wide for doorways ("Movement").
 - [ ] Verify leave and follow-up requests in live play ("Adventures").
@@ -78,6 +82,10 @@ The steps are in `docs/plan.md` "Road to 1.0". This section maps items to steps;
 - [ ] Session-long caches evicting ("Code health"); freed appearances' texture slots are freed already ("Check live").
 - [ ] An hour in a busy hub with zoning, and several clients on the shared asset cache.
 - [ ] Golden-image tests for a few zones (docs/plan.md section 5).
+- [x] Nightly performance scenes: a Release client's `--bench` in four zones in the viewer and logged in, each night's
+  frame times and memory compared with the last seven (`tools/perf_track.py`, docs/ci.md "Nightly performance").
+  - Open: a busy scene for the logged-in client (a hub with many spawns; it is timed wherever the character stands),
+    and the history read once a few weeks of nights have built up, to tune the thresholds.
 
 ### 1.0 RC
 
@@ -417,6 +425,14 @@ Server-dependent systems stock EQEmu never sends keep their live checks open pas
 - [x] The player's own rename: the character name change (0x4d5a10). The connection's character name and the profile's take the new name, so every reader follows it.
 - [ ] OP_LevelAppearance's flag-on emitter takes the actor's turn (vf126 @0x1003a950; unknowns.md). It takes the world's axes.
 
+- [x] A login right after camping out: not a camp problem. Ten back-to-back `--bench` logins of one GM character on the
+  stock PEQ test server (2026-11-27, 0-2 s apart) all camped out and zoned in cleanly. The closed zone-ins of
+  2026-11-26 were the zone kicking a session in play ("Dropped by world CLE subsystem") when the same account logged
+  in again from a second process: EQEmu's world drops an account's older session on each EnterWorld
+  (`ServerOP_ZoneIncClient` / `ServerOP_DropClient`). The client then did what RoF2 does after a link death (3 s, 16 s,
+  character select; connection-and-network notes §6.4). `tools/perf_track.py` no longer waits between runs.
+  Only a GM's instant camp was run back to back; a player's 30 s camp (OP_Logout) was not.
+
 ### Real estate (player housing, guild halls)
 - [x] The packets, the manager (catalog, records, access, item rows, owned lists, areas, placed objects, occupancy), result messages, upkeep time left.
 - [x] Buy / sell / transfer checks, the offer dialog, escrow deposit from and withdrawal to the cursor, /realestate, /leaverealestate, the windows' keys.
@@ -573,6 +589,8 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [x] The box set's other windows (`--box-child`) have no updater and fetch no add-ons: only the first window downloads and installs (tests/updater_test.cpp).
 - [ ] A lock between Hailstone windows the client did not start (two copies opened by hand): each still has its own updater and add-on manager on the same `download/` and `addons/` files.
 - [ ] A release job in CI (packages, manifest, signature, upload).
+- [x] **Crash reports of release builds name functions:** release and nightly builds keep their debug information aside (`HAILSTONE_SEPARATE_SYMBOLS`, `release-symbols/<version>/<platform>/`), Linux reports carry the build ID, and `tools/symbolize_crash.py` names their frames (docs/hardening.md "Crash reports from release builds").
+- [ ] Crash symbols, open: a Windows minidump is read by hand in a debugger (nothing automates it); macOS keeps no symbols; a plugin's or SDL's frames are not named by the tool.
 - [x] **Release images pinned by digest.** `linux.Dockerfile` is pinned by digest with an apt snapshot date; MSVC 17.14 and SDK 10.0.26100 in `msvc_setup.sh` (docs/updater.md "Making a release").
 - [x] **macOS arm64 releases:** a plain folder like Linux's with MoltenVK beside the binary; built, tested and signed ad hoc by the macOS workflow (docs/ci.md "macOS arm64"), packed and signed into the manifest locally. No Developer ID or notarization, by choice: players clear the quarantine (README.md).
 - [ ] **macOS on a Mac.** Only the build and headless tests have run.
@@ -616,7 +634,8 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [x] **MQ's `Math` TLO (its Calculate arithmetic), `If` and `Range`,** and the rest of MQ's int, float and string members with MQ's edge cases (`mq/calc.h`).
 - [x] The TLO members E3 reads on `Me`, items, spells, `Target`, spawns and `Group` (aggro, AAs, disciplines, gem and cast timers, augments, item links, the client's own stacking rules for `StacksWith` / `WillLand`). Unit tests only; not tried with E3.
 - [x] MQ's `FindItemBank`, `FindItemBankCount` (the bank and shared bank, bags included, by name or id) and the top-level `AltAbility` (any AA the table holds; a name's rank: docs/unknowns.md). Unit tests only.
-- [ ] `Spell.StacksWithDiscs` (its spell column is not decoded) and other MQ plugins' TLOs (`DanNet`, `NetBots`, `MoveUtils.Stuck`) and `Defined`, which E3 also reads. (`MoveUtils.GM` is not needed.)
+- [x] `MoveUtils.Stuck` (MQ2MoveUtils' TLO), from the walk's own stall test. Unit tests only.
+- [ ] `Spell.StacksWithDiscs` (its spell column is not decoded) and other MQ plugins' TLOs (`DanNet`, `NetBots`) and `Defined`, which E3 also reads.
 - [x] `Window[name].Open` from the connection's state for the windows that mirror it (casting, spell book, loot, merchant, bank, trade, give, dialogs, `pack1`..`pack10`), with no UI needed. Unit tests only.
 - [x] **E3's /notify, UI-independent.** `/notify` (leftmouseup, rightmouseup, listselect, tabselect, newvalue) with MQ's child names (game/window_notify.h). What E3 presses runs from the client's state, UI or none, and the stock windows read the same state: the confirmation's question (`answer_confirmation_question`), the task offer and respawn option picked (`TaskOffers::selected`, `respawn_selected_option`), the merchant's item and Show All (`MerchantSession::considered`, `merchant_show_all`), the Alt. Currency pick and Display Missing, the quantity dialog's slider and box (`UiHost::quantity_entry`). Unit tests only; not tried with E3 or in game.
 - [x] **E3's window reads, UI-independent.** `Window.Child[name]` (`Text`, `Enabled`, `Value`, `List`, `Open`, `Name`) from the stock windows' own state (`UiApi::window_child`: the answers they draw with, nothing drawn needed), the methods `DoOpen`, `DoClose`, `LeftMouseUp` and `RightMouseUp` acting as they are read (a click as `/notify` sends it), and `/invoke`. Unit tests with no ImGui context or Lua; not tried with E3 or in game.
@@ -649,6 +668,23 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [x] **A `core` package does not write over an add-on's plugin folder:** its files in such a folder are left out of the install (5df5960; docs/addons.md).
 
 ## 3. UI
+
+- [x] **Accessibility** (presentation, so Hailstone's own, not a RoF2 rule; docs/dev-ui.md "Accessibility").
+  - [x] Colour Vision (deuteranopia, protanopia, tritanopia): the con colours everywhere `game::con_rgb` reaches, and
+    the packs' health, good and bad colours. Con Labels for the target.
+  - [x] A minimum text size: the UI and plate fonts, the Lua bridge's font calls and `ui.DrawText`.
+  - [x] Screen Effects: the lightning flash, OP_CameraEffect's shake, the drunken field-of-view warp.
+  - [ ] The map's labels under the minimum text size (`app/lua_ui_map.cpp` draws them at a zoom-scaled size).
+  - [ ] Chat channel colours: they are the player's user colours (Options > Colors); a colour-blind-safe preset for
+    them, and the target ring's con colours (its own colour pickers).
+  - [ ] Con Labels on the name plates and the extended target rows, not only the target windows.
+  - [ ] The drunkenness first-person switch and the knockout overhead view under Screen Effects (left as the game has
+    them: camera changes, not flashes).
+  - [ ] Seen with a colour-blind player, and in a live session (checked with unit tests and login-screen screenshots
+    of the minimum text size in both packs only).
+  - [ ] The extended consider chat colours a server may send (user colours 390..396) keep the default con set until
+    the chat colours load again after a Colour Vision change.
+  - [ ] Later: text-to-speech for chosen chat channels, behind a `platform/` interface.
 
 - [x] Trace and fix the upstream gamepad all-pack smoke test's cursor-extent assertion with ImGui debug checks enabled (docs/unknowns.md "UI").
 
@@ -820,6 +856,10 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [ ] **Untested GPU paths** (neither run on such hardware).
   - A GPU without a sampleable D32_SFLOAT depth attachment (the D32_SFLOAT_S8_UINT / D24_UNORM_S8_UINT fallback, with `separateDepthStencilLayouts`) under the validation layers.
   - ObjectRenderer's instance flush on a driver with non-coherent host memory.
+  - Forced on any GPU by `HAILSTONE_GPU_FALLBACKS` (docs/graphics.md "Forcing the GPU fallbacks"), drawn each night
+    under the validation layers (docs/ci.md "Nightly GPU fallbacks"). Open: a GPU that really has them. On AMD the
+    memory stays coherent under `non-coherent`, so a missing flush shows nothing there, and `depth-d24` cannot be
+    forced.
 
 - [ ] **The 60 Hz game clock in a live session.** Checked live 2026-11-18: jumps, falls and fall damage the same at 30, 60, 144 and uncapped; turning; a stalled zone load. Open: /follow and camera smoothness at each rate, strafing feel.
 - [ ] **The cameras 1..5 in a live session** (docs/mechanics.md "Cameras"). Each one's place, the wall sweep and sitting (the tether's bone 0) checked live 2026-11-18. Open: mouse look and the camera keys in each, doors, riding.

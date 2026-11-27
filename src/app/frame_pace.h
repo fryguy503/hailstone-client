@@ -13,7 +13,9 @@
 namespace hailstone::app {
 
 inline constexpr int kBackgroundNoDraw = -1; // display.background_fps: nothing drawn while unfocused
-inline constexpr int kBackgroundTickHz = 10;
+// The loop's floor in the background and minimised: the plugins' OnPulse, the scripts and the connection run this many
+// times a second at least (a box set's other windows run their automation at it). Hailstone's own.
+inline constexpr int kBackgroundTickHz = 30;
 inline constexpr int kLightScreenCap = 240; // display.max_fps 0 on a login/loading screen counts as this
 
 struct FramePace {

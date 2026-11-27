@@ -687,6 +687,11 @@ private:
 class TargetOfTargetWindow : public StockWindow {
 public:
     TargetOfTargetWindow() : StockWindow("TargetOfTargetWindow", false) {}
+    bool click(UiHost& host, std::string_view id, std::string_view button, bool outside) override {
+        return host.conn && !outside && id == "TargetOfTarget_HP" && button == "left" &&
+               host.conn->request_target_of_target();
+    }
+
     void child(UiHost& host, std::string_view id, Child& out) override {
         if (!host.conn) return;
         if (id == "TargetOfTarget_HPPercLabel" || id == "TargetOfTarget_HPLabel") {

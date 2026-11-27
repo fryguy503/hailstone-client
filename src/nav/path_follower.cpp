@@ -13,6 +13,7 @@ float flat(const glm::vec3& a, const glm::vec3& b) { return glm::length(glm::vec
 void PathFollower::start(std::vector<glm::vec3> points, float arrive, bool check_height) {
     paths_ = 0;
     unsticks_ = 0;
+    stuck_ = false;
     arrive_ = std::max(arrive, 0.5f);
     failure_.clear();
     replace(std::move(points), check_height);
@@ -39,6 +40,7 @@ void PathFollower::stop() {
     state_ = FollowState::Idle;
     points_.clear();
     next_ = 0;
+    stuck_ = false;
 }
 
 void PathFollower::forgive(double now) {
@@ -46,6 +48,7 @@ void PathFollower::forgive(double now) {
     unsticks_ = 0;
     paths_ = 0;
     unstick_until_ = -1.0;
+    stuck_ = false;
     target_changed(now);
 }
 
@@ -101,6 +104,7 @@ SteerOutput PathFollower::step(const glm::vec3& feet, double now) {
         ++next_;
         paths_ = 0;
         unsticks_ = 0;
+        stuck_ = false;
         target_changed(now);
     }
     const glm::vec3& target = points_[next_];
@@ -122,9 +126,13 @@ SteerOutput PathFollower::step(const glm::vec3& feet, double now) {
     // Progress counts height too (a fall, a dive, a climb up a column of water are progress), except for the
     // server's path, whose heights are not ours.
     float gap = check_height_ ? glm::distance(feet, target) : d;
-    if (gap < best_ - tune_.progress || best_ == std::numeric_limits<float>::max()) {
+    if (best_ == std::numeric_limits<float>::max()) { // the first measure toward a new corner or path
         best_ = gap;
         progress_at_ = now;
+    } else if (gap < best_ - tune_.progress) {
+        best_ = gap;
+        progress_at_ = now;
+        stuck_ = false;
     }
     out.active = true;
     out.yaw = std::atan2(target.y - feet.y, target.x - feet.x);
@@ -135,6 +143,7 @@ SteerOutput PathFollower::step(const glm::vec3& feet, double now) {
         return out;
     }
     if (now - progress_at_ >= tune_.stall_seconds) {
+        stuck_ = true;
         if (unsticks_ >= tune_.unsticks_per_path) {
             unsticks_ = 0;
             if (paths_ >= tune_.paths_without_corner) {

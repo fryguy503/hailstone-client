@@ -1676,7 +1676,7 @@ int HotButtonState(lua_State* L) {
 // faceCooldown (the face's cooldown), overlay, tooltip (nil otherwise); state (true where hs.HotButtonState gives
 // one: not empty) and with it checked, left, cooldown, top (with y0 / y1), and the spell gem's tint = {r, g, b,
 // iconAlpha} with iconAlpha (nil otherwise). The cool-down's colour is hs.CoolDownColor()'s. The color and tint
-// tables are refilled in place.
+// tables are refilled in place. `unavailable` is true for a Slam binding that the current form cannot use.
 int HotButtonInfoFn(lua_State* L) {
     auto& m = Impl::of(L);
     StockWindow* w = m.window(luaL_checkstring(L, 1));
@@ -1694,6 +1694,8 @@ int HotButtonInfoFn(lua_State* L) {
     // (the strings only when changed: no new ones each frame for a record the caller keeps)
     plugin::set_string_field(L, "kind", info.kind.c_str());
     plugin::set_string_field(L, "label", info.label.c_str());
+    lua_pushboolean(L, info.unavailable);
+    lua_setfield(L, -2, "unavailable");
     if (info.stack_count > 0) {
         lua_pushinteger(L, static_cast<lua_Integer>(info.stack_count));
         lua_setfield(L, -2, "stackCount");

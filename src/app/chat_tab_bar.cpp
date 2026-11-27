@@ -18,6 +18,7 @@
 #include "app/lua_ui.h"
 #include "ui/lua/lua_host.h"
 #include "ui/imgui_frame.h"
+#include "ui/text_floor.h"
 
 namespace hailstone::app {
 
@@ -100,7 +101,8 @@ bool draw_tab_strip(UiHost& host, const tabs::Group& group, ImVec2 pos, float wi
 
     ImGui::PushID("chat-tabs");
     ImFont* const tab_font = ui::ui_font(3);
-    ImGui::PushFont(tab_font, tab_font ? tab_font->LegacySize : 0.0f); // size 0 keeps the current one
+    // size 0 keeps the current one; never below the minimum text size (ui/text_floor.h)
+    ImGui::PushFont(tab_font, tab_font ? ui::floor_text_px(tab_font->LegacySize, ui::text_floor_px()) : 0.0f);
     const auto frame_title = group.tabs.size() == 1 ? group.title : std::string_view{};
     std::array<StripItem, tabs::kMaxSlots> items{};
     const auto count = group.tabs.size();

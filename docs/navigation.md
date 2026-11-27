@@ -331,6 +331,15 @@ Not yet: `/nav item`, waypoints (`/nav waypoint`, `/nav recordwaypoint`).
 it), `.ArrivalDist` (the distance above), `.Broken` (always FALSE: MQ2MoveUtils' walk ended by aggro or a hit, which
 Hailstone's never is). Not yet: `.UseWalk`, `.ArrivalDistY`, `.ArrivalDistX`, `.CampStopped`.
 
+`${MoveUtils}` (MQ2MoveUtils' TLO): `.Stuck` is TRUE while a `/moveto`'s or `/stick`'s walk has stalled: it made no
+progress toward its next corner for a second and is jumping and strafing, or asking for a new path. It is FALSE
+again once the walk gains ground (half a unit nearer the corner, or the corner reached), a door it waited on opens,
+or the walk ends. E3's follow reads it to fall back on `/nav`. Hailstone's test is its walk's own, not MQ2MoveUtils'
+(which counts a tenth of a unit moved per pulse), so it turns TRUE about a second into a stall where MQ2MoveUtils'
+would sooner. `.Command` and the text: the command walking, `STICK`, `MOVETO` or `NONE` (MQ2MoveUtils' `CIRCLE` and
+`MAKECAMP` are not in Hailstone). Not yet: its settings (`StuckLogic`, `PulseCheck`, `DistStuck` and the rest),
+`.Summoned`, `.Aggro`, `.MovePause`, `.GM`.
+
 **/stick** (MQ2MoveUtils' words; Hailstone's own walk, `NavControl::stick`) keeps to the target until `/stick off`, the
 player's own movement keys, or the spawn dying or leaving. Near enough it holds still and faces the spawn. Further, it
 walks, the path found again as the spawn moves: straight when the spot is within 40, in plain sight, and the straight
@@ -421,7 +430,13 @@ request unanswered after 10 s is dropped.
 - One unanswered after 10 s (our own number) is dropped and the next refresh goes out; the list shown stays.
 - A reply with nothing asked, or to a request whose window was closed or whose server policy changed since, is not
   shown.
-- Only a server extension's tracking rule or map policy keeps Tracking closed (docs/plugins.md).
+- If the window was reopened while a retired request was pending, it asks for a new list after that reply arrives
+  or the request times out, even with Auto Update off.
+- Eligible players can use Tracking in the zone through the camp countdown, as in RoF2: `Send_OP_Camp`
+  (@0x5317a0) sits, saves, sends OP_Camp and starts the camp timer without touching any window;
+  `CharacterZoneClient::UseSkill` (@0x45b2d0, case 0x35) refuses Tracking only while feigned (StandState 'f'); the
+  window goes at `CDisplay::DeactivateMainUI` (@0x4891b0) after OP_Logout. Server extensions can restrict access
+  through their tracking rule (docs/plugins.md).
 - The player's own death empties the list, as it ends every Find and walk (docs/unknowns.md).
 
 ### The Find window

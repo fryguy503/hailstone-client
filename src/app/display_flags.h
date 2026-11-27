@@ -35,6 +35,7 @@ inline std::optional<std::pair<std::string, std::string>> display_flag_setting(s
     if (is("--sharpness")) return as("display.sharpness", arg);
     if (is("--upscaler")) return as("display.upscaler", arg);
     if (is("--frame-gen")) return as("display.frame_gen", "1");
+    if (is("--no-vsync")) return as("display.vsync", "off");
     if (is("--view-distance")) return as("display.view_distance", arg);
     return std::nullopt;
 }

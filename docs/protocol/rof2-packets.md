@@ -228,7 +228,7 @@ own-corpse and leadership checks and the next zone's entry use it.
 | Packet | Dir | Opcode | Layout |
 |---|---|---|---|
 | TargetMouse | C→Z | 0x075d | 4 B: u32 new target (0 = none). Sent on every target change |
-| TargetCommand | both | 0x58e2 | 4 B: u32 target. The server echoes it when it accepts a target (and sends it for pets); refused targets get "You cannot see your target" |
+| TargetCommand | both | 0x58e2 | 4 B: u32 target. Clicking the target's target HP gauge requests this ID. The server echoes an accepted ID (and can send one for pets). The client selects a known spawn and sends TargetMouse when the selection changes; an ID of 0 or an unknown one leaves the selection alone (CEverQuest::HandleWorldMessage sets it only when GetSpawnByID finds the spawn). The server reports "You cannot see your target" on refusal and the selection stays in place. |
 | AutoAttack / AutoAttack2 | C→Z | 0x109d / 0x3526 | 4 B each: u32 1 on / 0 off; both sent when the attack flag changes. EQEmu reads byte 0 of AutoAttack and ignores AutoAttack2 |
 | Consider | both | 0x742b | 20 B: u32 player, u32 target, u32 faction, u32 level, u8 pvp, 3 B. See note 1 |
 | ConsiderCorpse | C→Z | 0x5204 | Same 20 B layout as Consider, with the player and corpse IDs and the remaining fields zero |
@@ -1589,7 +1589,8 @@ OP_CameraEffect (0x127f, zone → client; 8 bytes): u32 duration in ms, f32 inte
 camera effect (`game/camera_shake.h`): a stronger intensity replaces the current one (an equal one too, and only a
 longer duration moves the end), a weaker one or a NaN is ignored. Each frame adds a random offset of up to half the
 intensity each way to the drawn camera's position; the duration runs out, the clock going backwards wipes it, and a
-zone-in resets it (the original's zone-in path @0x4939b0). The player itself never moves.
+zone-in resets it (the original's zone-in path @0x4939b0). The player itself never moves. Hailstone's Screen
+Effects option scales the offset (docs/dev-ui.md "Accessibility"; 100 % as the original).
 
 The original adds the offset in the per-frame camera driver @0x796dd0 and hands the shaken position to its render
 camera; when that camera refuses the position (its vtable slot 0x38 returns nonzero) it falls back to the unshaken one.

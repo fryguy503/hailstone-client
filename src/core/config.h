@@ -66,6 +66,16 @@ public:
     // those taken only at start.
     static bool is_shared_key(std::string_view key);
 
+    // Hailstone: a box set's other windows (--box-child) keep the window's own settings per character, and never
+    // write them to hailstone.ini: display.window_mode, display.resolution and window.* (is_display_key). With it
+    // on, those are read from the character's file when it has them, else from hailstone.ini; and written to the
+    // character's file, or, before a character is attached, kept in memory (they go to the character's file when it
+    // attaches, unless it has its own).
+    void set_display_per_character(bool on) { display_per_character_ = on; }
+    static bool is_display_key(std::string_view key);
+    // The character's file has a value of its own for `key` (false with no character attached).
+    bool character_has(std::string_view key) const { return layer_ && layer_->stored(key).has_value(); }
+
 private:
     Config* layer_for(std::string_view key) const;
     std::optional<std::string> stored(std::string_view key) const; // get() without the run's overrides
@@ -78,6 +88,9 @@ private:
     std::unique_ptr<Config> layer_;        // the character's settings (attach_character), none when no character
     std::filesystem::path layer_path_;
     std::vector<std::pair<std::string, std::string>> run_overrides_; // set_run_override's, never saved
+    bool display_per_character_ = false;
+    bool per_character_display(std::string_view key) const { return display_per_character_ && is_display_key(key); }
+    std::vector<std::pair<std::string, std::string>> held_display_; // per_character_display keys with no character yet
 };
 
 // The settings file of the client: hailstone.ini in the data folder (platform::config_file()).

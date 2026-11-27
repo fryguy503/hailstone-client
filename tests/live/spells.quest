@@ -1,0 +1,31 @@
+# Live smoke test (tools/live_smoke.sh, docs/ci.md "Live smoke tests"): spells and buffs.
+# live-smoke: caster
+# Played as the caster character (a GM cleric of any level on the same account; LIVE_SMOKE_CASTER). Memorize a buff,
+# cast it on ourselves and click it off; memorize a short buff, cast it and let it wear off; memorize a nuke and cast
+# it on a spawned NPC. Gem 8 is used and keeps the last spell. Stock PEQ's Qeynos Hills.
+zone qeytoqrg
+# Level 1 cleric spells, scribed if the book lacks them (otherwise the server says it cannot, harmlessly).
+say #scribespell 202
+say #scribespell 210
+say #scribespell 14
+# Start with no buffs (#nukebuffs, on ourselves: nothing is targeted after a login), so none blocks the ones cast here.
+say #nukebuffs
+wait 2
+expect-no-buff 202
+memorize 202 8
+cast 8
+expect-buff 202
+click-off 202
+expect-no-buff 202
+# Yaulp lasts 4 ticks (about 24 s); the server's OP_Buff fade takes it off.
+memorize 210 8
+cast 8
+expect-buff 210
+fade 210 90
+expect-no-buff 210
+# A nuke on an NPC: the server lands it and reports its damage. #damage then kills the NPC (it has no loot).
+say #spawn Smoke_Target 1 5 0 5000
+wait 2
+memorize 14 8
+cast 8 Smoke_Target
+kill Smoke_Target

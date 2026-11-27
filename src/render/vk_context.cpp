@@ -2,6 +2,7 @@
 #include "render/vk_context.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -38,6 +39,21 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(VkDebugUtilsMessageSeverityFlagBit
         log::warn("vulkan: {}", data->pMessage);
     return VK_FALSE;
 }
+
+// VMA's view of the memory types under the non-coherent fallback (render/gpu_fallbacks.h): the driver's, with
+// HOST_COHERENT dropped. A plain function pointer, so the choice is a file-level flag; one VkContext sets it before
+// it creates its allocator.
+bool g_hide_coherent = false;
+VKAPI_ATTR void VKAPI_CALL memory_properties_without_coherent(VkPhysicalDevice device,
+                                                             VkPhysicalDeviceMemoryProperties* properties) {
+    vkGetPhysicalDeviceMemoryProperties(device, properties);
+    GpuFallbacks forced;
+    forced.non_coherent = g_hide_coherent;
+    for (std::uint32_t i = 0; i < properties->memoryTypeCount; ++i)
+        properties->memoryTypes[i].propertyFlags =
+            memory_flags_seen(properties->memoryTypes[i].propertyFlags, forced);
+}
+static_assert(kHostCoherentBit == VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
 bool has_layer(const char* name) {
     std::uint32_t count = 0;
@@ -283,6 +299,14 @@ VkContext::VkContext(platform::Window& window, bool validation, std::unique_ptr<
     : window_(window), provider_(std::move(upscaler)) {
     const char* benchmark = core::env("GPU_BENCHMARK");
     gpu_benchmark_ = benchmark && std::strcmp(benchmark, "1") == 0;
+    // A developer's setting (docs/graphics.md "Forcing the GPU fallbacks"): unset for every player.
+    if (const char* forced = core::env("GPU_FALLBACKS")) {
+        const GpuFallbackParse parsed = parse_gpu_fallbacks(forced);
+        for (const std::string& word : parsed.unknown)
+            log::warn("HAILSTONE_GPU_FALLBACKS: no fallback is called \"{}\"", word);
+        fallbacks_ = parsed.forced;
+        if (fallbacks_.any()) log::warn("GPU fallbacks forced: {}", gpu_fallback_names(fallbacks_));
+    }
     if (auto loader = window_.bundled_vulkan_loader())
         volkInitializeCustom(loader); // the MoltenVK a macOS release ships, as the window loaded it
     else
@@ -592,14 +616,15 @@ void VkContext::pick_physical_device() {
     vkGetPhysicalDeviceProperties(physical_, &props);
     VkPhysicalDeviceFeatures features;
     vkGetPhysicalDeviceFeatures(physical_, &features);
-    caps_.bc_textures = features.textureCompressionBC == VK_TRUE;
-    caps_.independent_blend = features.independentBlend == VK_TRUE;
+    // A forced fallback (fallbacks_) turns a capability off as a GPU without it reports it, before anything reads it.
+    caps_.bc_textures = features.textureCompressionBC == VK_TRUE && !fallbacks_.no_bc;
+    caps_.independent_blend = features.independentBlend == VK_TRUE && !fallbacks_.no_independent_blend;
     {
         VkFormatProperties fp{};
         vkGetPhysicalDeviceFormatProperties(physical_, VK_FORMAT_R8G8B8A8_SRGB, &fp);
         constexpr VkFormatFeatureFlags need = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT |
                                               VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
-        caps_.srgb_mip_blit = (fp.optimalTilingFeatures & need) == need;
+        caps_.srgb_mip_blit = (fp.optimalTilingFeatures & need) == need && !fallbacks_.no_mip_blit;
     }
     caps_.max_anisotropy = features.samplerAnisotropy ? props.limits.maxSamplerAnisotropy : 0.0f;
     // Frame generation's GPU time (the performance window): every graphics queue can time where this is set.
@@ -625,7 +650,8 @@ void VkContext::pick_physical_device() {
     f2.pNext = &f12;
     vkGetPhysicalDeviceFeatures2(physical_, &f2);
     // The texture arrays (render/descriptor_limits.h): update-after-bind where the device has it, for its limits.
-    caps_.update_after_bind = f12.descriptorBindingSampledImageUpdateAfterBind == VK_TRUE;
+    caps_.update_after_bind =
+        f12.descriptorBindingSampledImageUpdateAfterBind == VK_TRUE && !fallbacks_.no_update_after_bind;
     const VkPhysicalDeviceLimits& l = props.limits;
     caps_.max_sampled_images =
         caps_.update_after_bind
@@ -743,6 +769,12 @@ void VkContext::create_device() {
     VmaVulkanFunctions fns{};
     fns.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
     fns.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+    if (fallbacks_.non_coherent) {
+        // VMA reads the memory types once, here; from then on it treats host-visible memory as a GPU without coherent
+        // memory would have it. The memory itself is still coherent, so a missing flush shows no wrong pixels here.
+        g_hide_coherent = true;
+        fns.vkGetPhysicalDeviceMemoryProperties = memory_properties_without_coherent;
+    }
     VmaAllocatorCreateInfo ai{};
     ai.vulkanApiVersion = VK_API_VERSION_1_3;
     ai.physicalDevice = physical_;
@@ -751,11 +783,26 @@ void VkContext::create_device() {
     ai.pVulkanFunctions = &fns;
     vk_check(vmaCreateAllocator(&ai, &allocator_), "vmaCreateAllocator");
 
-    for (VkFormat f : {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT}) {
-        VkFormatProperties fp;
-        vkGetPhysicalDeviceFormatProperties(physical_, f, &fp);
-        constexpr VkFormatFeatureFlags kNeed = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
-        if ((fp.optimalTilingFeatures & kNeed) == kNeed) { depth_format_ = f; break; }
+    {
+        // D32_SFLOAT, else a format with stencil (render/gpu_fallbacks.h DepthCandidate's order); a forced fallback
+        // skips the preferred ones.
+        constexpr std::array<VkFormat, 3> kFormats{VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT,
+                                                   VK_FORMAT_D24_UNORM_S8_UINT};
+        std::array<bool, 3> usable{};
+        for (std::size_t i = 0; i < kFormats.size(); ++i) {
+            VkFormatProperties fp;
+            vkGetPhysicalDeviceFormatProperties(physical_, kFormats[i], &fp);
+            constexpr VkFormatFeatureFlags kNeed =
+                VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+            usable[i] = (fp.optimalTilingFeatures & kNeed) == kNeed;
+        }
+        const DepthChoice depth = choose_depth_format(usable, fallbacks_);
+        if (!depth.note.empty()) log::warn("GPU fallbacks: {}", depth.note);
+        if (depth.format) {
+            depth_format_ = kFormats[static_cast<std::size_t>(*depth.format)];
+            if (fallbacks_.depth_stencil || fallbacks_.depth_d24)
+                log::info("GPU fallbacks: depth format {}", depth_candidate_name(*depth.format));
+        }
     }
     if (depth_format_ == VK_FORMAT_UNDEFINED) throw std::runtime_error("no usable depth format");
     create_pipeline_cache();
@@ -2974,6 +3021,7 @@ constexpr VkPipelineStageFlags2 kDepthStages =
 
 void VkContext::create_shadow_resources() {
     for (VkFormat f : {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D16_UNORM}) {
+        if (f == VK_FORMAT_D32_SFLOAT && fallbacks_.shadow_d16) continue; // render/gpu_fallbacks.h
         VkFormatProperties fp;
         vkGetPhysicalDeviceFormatProperties(physical_, f, &fp);
         constexpr VkFormatFeatureFlags kNeed = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT |

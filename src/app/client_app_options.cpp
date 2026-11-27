@@ -3,6 +3,7 @@
 
 #include "app/client_app_internal.h"
 #include <algorithm>
+#include <limits>
 #include "app/frame_pace.h"
 #include "audio/individual_sounds.h"
 #include "core/ascii_case.h"
@@ -334,6 +335,11 @@ void ClientApp::apply_font_face() {
     ui_.set_font_face(files.regular, files.bold);
 }
 
+void ClientApp::apply_accessibility() {
+    game::set_accessibility(accessibility_);
+    ui_.set_min_text_size(static_cast<float>(accessibility_.min_text_size));
+}
+
 void ClientApp::apply_plate_font() {
     ui::FontFiles files;
     if (!plate_style_.face.empty()) {
@@ -370,6 +376,10 @@ std::vector<std::string> ClientApp::option_choices(std::string_view name) const 
         for (const auto& p : kLightTweakPresets) out.emplace_back(p.name);
         out.emplace_back("Custom");
     }
+    // Hailstone: the colour-vision modes (game/accessibility.h), in the option's order.
+    if (name == "colour_vision")
+        for (int i = 0; i < game::kColourVisionModes; ++i)
+            out.emplace_back(game::colour_vision_label(static_cast<game::ColourVision>(i)));
     // The texture packs (display.texture_folder): "Off", then each folder of textures/.
     if (name == "texture_pack") {
         out.push_back("Off");
@@ -472,6 +482,8 @@ std::optional<int> ClientApp::option_value(std::string_view o) const {
     // Hailstone: the name plates' text (game/nameplate_style.h); the face is its place in
     // option_choices("plate_font_face"), 0 the UI's, -1 one not in the list.
     if (auto v = game::plate_style_option(plate_style_, o)) return v;
+    // Hailstone: colour_vision, con_labels, min_text_size, screen_effects (game/accessibility.h).
+    if (auto v = game::accessibility_option(accessibility_, o)) return v;
     if (o == "plate_font_face") {
         if (plate_style_.face.empty()) return 0;
         auto choices = option_choices("plate_font_face");
@@ -675,6 +687,12 @@ void ClientApp::set_option_value(std::string_view o, int v) {
         apply_plate_font();
         return;
     }
+    if (game::set_accessibility_option(accessibility_, o, v)) {
+        game::store_accessibility(accessibility_, config_);
+        config_.save(config_path_);
+        apply_accessibility();
+        return;
+    }
     if (o == "target_plate_highlight") {
         target_plate_highlight_ = v != 0;
         config_.set_bool("display.target_plate_highlight", v != 0);
@@ -867,6 +885,8 @@ void ClientApp::apply_settings() {
     apply_font_face();
     plate_style_ = game::load_plate_style(config_);
     apply_plate_font();
+    accessibility_ = game::load_accessibility(config_);
+    apply_accessibility();
     actor_clip_plane_ = std::max(config_.get_int("display.actor_clip_plane", game::kDefaultActorClipPlane), 0);
     mouse_invert_y_ = config_.get_bool("mouse.invert_y", false);
     mouse_wheel_zoom_ = config_.get_bool("mouse.wheel_zoom", true);
@@ -908,10 +928,51 @@ void ClientApp::apply_connection_settings() {
 void ClientApp::use_character_settings(const std::filesystem::path& character_dir) {
     std::filesystem::path file = character_dir.empty() ? std::filesystem::path() : CharacterFiles{character_dir}.settings();
     if (file == config_.character_path()) return;
+    // A box window's size and place are its character's (set_display_per_character): kept for the character it leaves,
+    // as a quit keeps them, before it goes.
+    if (opts_.box_child && !config_.character_path().empty() && !opts_.window_size_given) {
+        remember_window_geometry();
+        config_.save(config_path_);
+    }
     if (!config_.attach_character(file)) log::warn("settings: {} could not be read or written", file.string());
     if (!file.empty()) log::info("settings: the character's, {}", file.string());
     else log::info("settings: hailstone.ini's");
     apply_settings();
+    if (opts_.box_child && !file.empty()) apply_character_window();
+}
+
+void ClientApp::remember_window_geometry() {
+    const platform::WindowGeometry g = window_.geometry();
+    config_.set_int("window.x", g.x);
+    config_.set_int("window.y", g.y);
+    config_.set_int("window.width", g.width);
+    config_.set_int("window.height", g.height);
+    config_.set_bool("window.maximized", g.maximized);
+}
+
+void ClientApp::apply_character_window() {
+    const bool own_mode = config_.character_has("display.window_mode");
+    const bool own_place = config_.character_has("window.width") && config_.character_has("window.height");
+    if (!own_mode && !own_place) return; // (its first entry: the window stays as it is, and is kept as its own at quit)
+    if (!opts_.screenshot.empty()) return; // screenshot runs keep the size asked for
+    const int mode = index_of(kWindowModes, 3, config_.get_string("display.window_mode", "windowed"), 0);
+    if (mode != 0) {
+        window_.set_mode(static_cast<platform::WindowMode>(mode),
+                         mode == 2 ? parse_resolution(config_.get_string("display.resolution", "")) : platform::DisplayMode{});
+        return;
+    }
+    window_.set_mode(platform::WindowMode::Windowed);
+    if (!own_place) return;
+    platform::WindowGeometry g;
+    g.width = std::max(320, config_.get_int("window.width", 1280));
+    g.height = std::max(240, config_.get_int("window.height", 720));
+    // (no place of its own: one on no display, which set_geometry leaves alone)
+    g.x = config_.get_int("window.x", std::numeric_limits<int>::min());
+    g.y = config_.get_int("window.y", std::numeric_limits<int>::min());
+    g.maximized = config_.get_bool("window.maximized", false);
+    window_.set_geometry(g);
+    log::info("box: the window as {} keeps it ({}x{}{})", conn_ ? conn_->character_name() : std::string(), g.width,
+              g.height, g.maximized ? ", maximized" : "");
 }
 
 bool ClientApp::play_sound_test(std::string_view option) {

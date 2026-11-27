@@ -221,8 +221,12 @@ Lua 5.5 state and runs as a coroutine resumed once a frame; `mq.delay` yields to
 - **Nested binds.** A bind whose commands start binds of the same script again
   (`mq.bind('/x', function() mq.cmd('/x') end)`) ends the script once they nest 16 deep.
 - **Command size.** A command of more than 1000 words for a bind is refused (a chat line), and the script runs on. An
-  `mq.cmd` line is at most 2047 bytes (MQ's command buffer; longer is an error). `/docommand`, `/noparse` and
-  `/squelch` nest at most 16 deep in one line (the rest is dropped, with a chat line).
+  `mq.cmd` line is at most 2047 bytes (MQ's command buffer; longer is an error). `/docommand`, `/noparse`,
+  `/squelch` and `/loadcfg` nest at most 16 deep in one line (the rest is dropped, with a chat line).
+- **`/loadcfg`.** A script or plugin names a `.cfg` file (looked up in the cfg folders, docs/autoexec.md); a path is
+  refused with a chat line, so code that cannot read files cannot run the data folder's other files as chat. A file
+  already running is not run inside itself, and one `/loadcfg` runs at most 1000 lines in all, its nested files'
+  included.
 - **Memory.** 256 MB a script; past it, "not enough memory".
 - **No finalizers.** `setmetatable` refuses `__gc` (finalizers cannot be stopped); an `mq.TLO` value's metatable is
   locked (`getmetatable` gives `"mq.TLO"`).
@@ -327,7 +331,7 @@ members are `EverQuest`'s, as in MQ, so `.Server` is the server's name), `Hailst
 `Heading[deg]`, `Int`, `Float`, `Bool`, `String`, `Select`, `Math`,
 `If`, `Range`, `LineOfSight[...]`, `Debuff` and `Debuff[pet]` (`.Count`, `.Poisoned`, `.Diseased`, `.Cursed`,
 `.Corrupted`: the counters on the player or the pet; `.Silenced`; docs/scripting-reference.md), `Navigation`, `Stick`,
-`MoveTo` and `AdvPath` (below).
+`MoveTo`, `MoveUtils` and `AdvPath` (below).
 Compiled plugins can add more.
 
 The data types use MQ's member names and inheritance:
@@ -649,9 +653,12 @@ paused, ended, error):
 - A script the rules do not allow is greyed, with the reason in its tooltip.
 - The server's own scripts show Stop and Pause greyed: the player cannot stop them.
 
-Scripts keep running through a zone change. Camping to character select makes the rules provisional again (only
-`login` scripts keep running); a disconnect stops every script. The autorun list is read once per login, so a script
-the player stopped stays stopped after zoning.
+Scripts keep running through a zone change, and compiled plugins stay loaded: the zone-in's rules hold until the
+character leaves the world, so a zone change neither stops, unloads, starts nor loads anything. A script the player
+stopped stays stopped, and a plugin the player unloaded stays unloaded, after zoning. Camping to character select
+makes the rules provisional again (only `login` scripts keep running); a disconnect stops every script. The autorun
+list is read once per login. The server's `run` scripts and required add-on scripts are started at the zone-in of
+each login too, so one that stopped or failed stays stopped until the next login, not the next zone.
 
 ## Lua socials
 
@@ -2237,7 +2244,7 @@ deny = off                ; on blocks Hailstone from entering the server (defaul
 [scripts]
 player = off              ; the player's own scripts: on / off (default off)
 player_caps = read,ui     ; what they may do when on (default all)
-run = hud, autoloot       ; the server's scripts started at each zone-in (/lua run)
+run = hud, autoloot       ; the server's scripts started at the zone-in of each login (/lua run)
 
 [plugins]
 player = off              ; the player's own compiled plugins (default off)
@@ -2353,7 +2360,7 @@ The built-in groups are:
 |---|---|
 | `non_rof2` | Hailstone's built-in extended commands |
 | `movement_automation` | `/nav`, `/afollow`, `/moveto`, `/stick`, `/face`, `/keypress` |
-| `command_helpers` | `/docommand`, `/echo`, `/noparse`, `/squelch`, `/timed` |
+| `command_helpers` | `/docommand`, `/echo`, `/loadcfg`, `/noparse`, `/squelch`, `/timed` |
 | `addon_commands` | Commands registered by add-ons |
 
 Use `default = deny` and `allow` or `allow_groups` for an allowlist. Without command rules, all commands retain
@@ -2736,6 +2743,10 @@ The roster is read with `get_raid_data_bulk` ("Buff, spawn, extended target, abi
 - `inspect_item_packet` (`read` and `ui`) shows that copied item without inventory change or a link request.
 - `HailstoneItem.serial`, `instance_id`, `augment_ids` and `configuration_complete` distinguish received instances and
   installed configurations. Bag contents are never reported as augment IDs.
+- `HailstoneItem.base_value_copper` gives the template's base value for one item, in copper. Merchant quotes depend on
+  the merchant session. Before reading the field in a callback, check that the supplied `size` reaches its end.
+  For records you pass to `get_item` or `decode_item_packet`, initialize the new field to zero before calling. The
+  host preserves the caller's `size` and older hosts leave the new field as supplied.
 - `item_flags`, `item_description_append`, `item_presentation_revision` and `loot_confirmation` let an active
   extension supply plain text metadata and an extra loot question. They do not suppress the stock no-drop
   confirmation.

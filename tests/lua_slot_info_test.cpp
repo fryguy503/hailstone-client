@@ -14,6 +14,7 @@
 
 #include "lua_ui_api_mock.h"
 
+#include "app/actions_ui.h"
 #include "app/gamepad.h"
 #include "app/lua_ui.h"
 #include "app/lua_ui_windows.h"
@@ -22,6 +23,8 @@
 #include "core/sha256.h"
 #include "game/hotbuttons.h"
 #include "game/lua_social.h"
+#include "game/mechanics/character.h"
+#include "game/mechanics/tables.h"
 #include "game/pet_buttons.h"
 #include "game/spells.h"
 #include "net/game_connection.h"
@@ -228,6 +231,98 @@ TEST_CASE("Lua slot reads: hs.HotButtonInfo, hs.GemInfo and hs.BuffSlot's overla
         lua_close(L);
     }
     ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("Actions: the skill picker lists Slam and saved Slam buttons work by the current form") {
+    namespace mech = game::mechanics;
+    test::ScratchDir scratch("slam_actions");
+    GameDir game(scratch.path());
+    net::GameConnection conn(game, {});
+    auto& world = conn.world_for_test();
+    world.player_id = 7;
+    auto& player = world.spawns[world.player_id];
+    player.id = world.player_id;
+    player.race = 5; // High Elf
+
+    mech::GameTables tables;
+    mech::CharacterSheet sheet;
+    sheet.race = player.race;
+    sheet.class_id = 13; // Magician
+    sheet.level = 1;
+    mech::Character character(sheet, tables, [](std::int32_t) -> const game::SpellData* { return nullptr; });
+    Config config;
+    app::ActionsUi actions(config, scratch.path() / "hailstone.ini");
+    auto& store = actions.hot_buttons();
+    app::UiHost host;
+    host.in_game = host.ui_ready = true;
+    host.conn = &conn;
+    host.character = &character;
+    host.actions = &actions;
+    host.hot_buttons = &store;
+    host.skill_name = [&](std::uint32_t skill) { return actions.skill_label(conn, skill); };
+    host.hot_button_label = [&](int bar, int button) { return actions.button_label(conn, store.current(bar, button)); };
+    int presses = 0;
+    host.run_button = [&](const game::HotButton&) { ++presses; };
+    host.press_hot_button = [&](int, int, bool) { ++presses; };
+    app::UiApi api(host);
+    std::unique_ptr<lua_State, decltype(&lua_close)> lua(luaL_newstate(), lua_close);
+    REQUIRE(lua.get() != nullptr);
+    luaL_openlibs(lua.get());
+    lua_newtable(lua.get());
+    api.register_functions(lua.get());
+    lua_setglobal(lua.get(), "hs");
+
+    constexpr std::string_view window = "ActionsWindow", slot = "ACP_FirstAbilityButton";
+    constexpr std::string_view picker = "SkillsSelectWindow", list = "SKSW_SkillSelectorList";
+    const std::vector<std::string> empty{"(none)"};
+    const std::vector<std::string> slam{"(none)", "Slam"};
+
+    REQUIRE(api.click_child(window, slot, "right"));
+    CHECK(api.list_texts(picker, list) == empty);
+    player.race = 90; // Barbarian citizen form: listed from the innate slot alone, as RoF2's picker lists it
+    CHECK(api.list_texts(picker, list) == slam);
+    player.race = 2; // Barbarian illusion grants Slam to the same Magician
+    REQUIRE(api.list_texts(picker, list) == slam);
+    player.race = 5;
+    CHECK_FALSE(api.click_list(picker, list, 1, 0)); // the previously displayed Slam row is gone
+    player.race = 2;
+    REQUIRE(api.list_texts(picker, list) == slam);
+    REQUIRE(api.click_list(picker, list, 1, 0));
+    CHECK(store.combat_skills[0] == mech::skill::kSlam);
+
+    store.current(0, 0) = {game::HotButtonType::CombatSkill, 0};
+    store.current(0, 1) = {game::HotButtonType::Skill, mech::skill::kSlam};
+    constexpr auto read_hotbars = R"(
+        return tostring(hs.HotButtonInfo('HotButtonWnd', 'HB_Button1').unavailable) .. ',' ..
+               tostring(hs.HotButtonInfo('HotButtonWnd', 'HB_Button2').unavailable)
+    )";
+    player.race = 5; // illusion wears off
+    CHECK(api.child_state(window, slot) == false);
+    CHECK(api.child_text(window, slot) == "Slam");
+    CHECK(run(lua.get(), read_hotbars) == "true,true");
+    CHECK_FALSE(api.click_child(window, slot));
+    CHECK(api.click_hot_button("HotButtonWnd", "HB_Button1"));
+    CHECK(api.click_hot_button("HotButtonWnd", "HB_Button2"));
+    CHECK(presses == 0);
+    CHECK(api.click_child(window, slot, "right")); // can still reassign or clear
+    CHECK(api.list_texts(picker, list) == empty);
+    api.show(picker, false);
+
+    player.race = 90; // the citizen form lists Slam but, without Bash, cannot use it: the saved buttons stay dimmed
+    CHECK(api.child_state(window, slot) == false);
+    CHECK(run(lua.get(), read_hotbars) == "true,true");
+    CHECK_FALSE(api.click_child(window, slot));
+    CHECK(api.click_hot_button("HotButtonWnd", "HB_Button1"));
+    CHECK(presses == 0);
+
+    player.race = 9; // Troll illusion re-enables the same saved assignments
+    CHECK(api.child_state(window, slot) == true);
+    CHECK(run(lua.get(), read_hotbars) == "false,false");
+    CHECK(api.click_child(window, slot));
+    CHECK(api.click_hot_button("HotButtonWnd", "HB_Button1"));
+    CHECK(api.click_hot_button("HotButtonWnd", "HB_Button2"));
+    CHECK(presses == 3);
+    CHECK(store.combat_skills[0] == mech::skill::kSlam);
 }
 
 TEST_CASE("Lua slot reads: both packs' hot bars, spell gems and buff trays draw over them without script errors") {

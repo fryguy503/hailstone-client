@@ -320,6 +320,8 @@ FrameBuffers::FrameBuffers(VkContext& vk, VkDeviceSize size, VkBufferUsageFlags 
         buffers_[i].size = size;
         mapped_[i] = info.pMappedData;
         std::memset(mapped_[i], 0, static_cast<std::size_t>(size));
+        // write() flushes only what it writes; the zeros past it must reach a GPU without coherent memory too.
+        vmaFlushAllocation(vk_.allocator(), buffers_[i].allocation, 0, VK_WHOLE_SIZE);
     }
 }
 

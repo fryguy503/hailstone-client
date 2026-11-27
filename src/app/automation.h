@@ -53,6 +53,10 @@ struct AutomationEnv {
     std::function<std::string()> server_name;
     std::function<std::string()> server_profile; // the saved server's id (servers/<id>/), "" for a test login
     std::function<std::string()> profile_name;   // the saved server's name as the player knows it ("" none)
+    // The .cfg files' server and character layers (app/autoexec.h): servers/<profile>/ and the character's folder
+    // under it, the folders the cfg/ folders are in. Empty, or null: that layer is not looked in.
+    std::function<std::filesystem::path()> server_dir;
+    std::function<std::filesystem::path()> character_dir;
     std::function<bool(std::string_view window)> window_open;  // a stock window shows (hs API)
     // Window.Child's reads and MQ's window methods (mq::Context::window_child, window_act); null: none.
     std::function<std::optional<mq::WindowChild>(std::string_view, std::string_view, bool)> window_child;

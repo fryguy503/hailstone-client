@@ -199,6 +199,81 @@ TEST_CASE("Settings files: a character's settings over hailstone.ini") {
     CHECK(disk.get_string("display.render_scale") == "60");
 }
 
+TEST_CASE("Settings files: a box window keeps its window's mode, size and place per character, never in hailstone.ini") {
+    test::ScratchDir tmp("box_window_settings");
+    const fs::path shared_file = tmp.path() / "hailstone.ini";
+    const fs::path one = tmp.path() / "servers" / "s" / "characters" / "w" / "One" / "hailstone.ini";
+    const fs::path two = tmp.path() / "servers" / "s" / "characters" / "w" / "Two" / "hailstone.ini";
+    {
+        Config shared;
+        shared.set("display.window_mode", "borderless");
+        shared.set("window.width", "1920");
+        shared.set("window.height", "1080");
+        shared.set("display.msaa", "4");
+        REQUIRE(shared.save(shared_file));
+    }
+    CHECK(Config::is_display_key("display.window_mode"));
+    CHECK(Config::is_display_key("display.resolution"));
+    CHECK(Config::is_display_key("window.maximized"));
+    CHECK_FALSE(Config::is_display_key("display.msaa"));
+
+    Config c;
+    REQUIRE(c.load(shared_file));
+    c.set_display_per_character(true);
+    // At the login screen: hailstone.ini's, and a change stays in this window (it is not written there).
+    CHECK(c.get_string("display.window_mode") == "borderless");
+    c.set("window.width", "800");
+    CHECK(c.get_int("window.width", 0) == 800);
+    REQUIRE(c.save(shared_file));
+    {
+        Config disk;
+        REQUIRE(disk.load(shared_file));
+        CHECK(disk.get_int("window.width", 0) == 1920);
+    }
+
+    // The first character: what this window set goes to it; the rest still reads hailstone.ini's.
+    REQUIRE(c.attach_character(one));
+    CHECK_FALSE(c.character_has("display.window_mode"));
+    CHECK(c.character_has("window.width"));
+    CHECK(c.get_int("window.width", 0) == 800);
+    CHECK(c.get_int("window.height", 0) == 1080);
+    c.set("display.window_mode", "windowed");
+    c.set("window.height", "600");
+    c.set("display.msaa", "2"); // not a window key: shared as before
+    REQUIRE(c.save(shared_file));
+    {
+        Config disk;
+        REQUIRE(disk.load(shared_file));
+        CHECK(disk.get_string("display.window_mode") == "borderless");
+        CHECK(disk.get_int("window.width", 0) == 1920);
+        CHECK(disk.get_int("window.height", 0) == 1080);
+        CHECK(disk.get_int("display.msaa", 0) == 2);
+        Config own;
+        REQUIRE(own.load(one));
+        CHECK(own.get_string("display.window_mode") == "windowed");
+        CHECK(own.get_int("window.width", 0) == 800);
+        CHECK(own.get_int("window.height", 0) == 600);
+    }
+
+    // Another character with none of its own: hailstone.ini's; back to the first: its own again.
+    REQUIRE(c.attach_character(two));
+    CHECK(c.get_string("display.window_mode") == "borderless");
+    CHECK(c.get_int("window.width", 0) == 1920);
+    REQUIRE(c.attach_character(one));
+    CHECK(c.get_string("display.window_mode") == "windowed");
+    CHECK(c.get_int("window.height", 0) == 600);
+
+    // A window that is not a box window writes them to hailstone.ini as always.
+    Config plain;
+    REQUIRE(plain.load(shared_file));
+    REQUIRE(plain.attach_character(one));
+    plain.set("window.width", "1024");
+    REQUIRE(plain.save(shared_file));
+    Config disk;
+    REQUIRE(disk.load(shared_file));
+    CHECK(disk.get_int("window.width", 0) == 1024);
+}
+
 TEST_CASE("Settings files: a command-line flag's value holds for the run and is never saved") {
     test::ScratchDir tmp("run_override");
     const fs::path shared_file = tmp.path() / "hailstone.ini";

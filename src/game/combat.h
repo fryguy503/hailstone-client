@@ -58,7 +58,7 @@ Con con_level(const Spawn& target, int my_level, std::int32_t pvp_rules);
 std::uint32_t con_chat_color(Con con);
 // The server's OP_Consider level field (ConsiderColor) as a Con.
 Con con_from_server(std::uint32_t level);
-// Screen colour for UI (0xRRGGBB).
+// Screen colour for UI (0xRRGGBB), in the colour-vision mode in force (game/accessibility.h; off: the client's own).
 std::uint32_t con_rgb(Con con);
 // The colour an NPC's name is drawn in when display.con_name_colour is on (a deliberate difference, docs/graphics.md
 // "Name plates"): its consider colour. nullopt for everything else, and for every spawn while the option is off, so

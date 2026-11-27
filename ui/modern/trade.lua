@@ -77,7 +77,7 @@ local function offer(title, who, first, last, mine, s, width, ready, flash)
   W.SlotGrid(WINDOW, "TRDW_TradeSlot", first, last, size, perRow, gap)
   ui.Dummy(0, 4 * s)
   if mine then
-    TC.MoneyButtons(WINDOW, MY_MONEY, s,
+    TC.FittedMoneyButtons(WINDOW, MY_MONEY, s,
       "Pick up coin in your inventory, then click here to offer it", width)
   else
     ui.TextColored(C.muted[1], C.muted[2], C.muted[3], 1, "Coin")

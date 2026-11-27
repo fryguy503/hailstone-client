@@ -484,7 +484,8 @@ void ClientApp::update_player(float dt) {
     }
     // The widening follows the ticks, but a value below 70 (a sudden reset too) drops it at once.
     if (!conn_ || game::drunkenness_fov_offset(conn_->drunkenness()) == 0.0f) drunk_fov_offset_ = 0.0f;
-    camera_.fov_offset_units = drunk_fov_offset_;
+    // Hailstone's Screen Effects (game/accessibility.h) tones the warp down; the first-person switch at 70 stays.
+    camera_.fov_offset_units = drunk_fov_offset_ * game::screen_effect_scale(accessibility_.screen_effects);
     // Behind the loading screen (zone_settle_) the keys and the pad do not reach the world.
     bool keys = !ui_.wants_keyboard() && !zone_settling();
     const auto& in = window_.input();

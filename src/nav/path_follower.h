@@ -83,6 +83,10 @@ public:
     // The flat length left: from `feet` through the corners still ahead.
     float remaining(const glm::vec3& feet) const;
     const std::string& failure() const { return failure_; }
+    // Stuck (MQ2MoveUtils' MoveUtils.Stuck, for /moveto and /stick): a stall was found and the walk has made no
+    // progress since (a corner reached, the gap to the next one shrunk by the tuning's `progress`, or forgive()).
+    // Only while the walk goes on (Moving or NeedsPath).
+    bool stuck() const { return stuck_ && (state_ == FollowState::Moving || state_ == FollowState::NeedsPath); }
 
 private:
     void target_changed(double now);
@@ -99,6 +103,7 @@ private:
     int unstick_side_ = 1;
     int unsticks_ = 0;
     int paths_ = 0;               // replacements since a corner was last reached
+    bool stuck_ = false;          // a stall found, no progress since (stuck())
     std::string failure_;
 };
 

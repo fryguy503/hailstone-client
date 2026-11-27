@@ -64,6 +64,7 @@ TEST_CASE("display flags: the client takes them as its display settings") {
     CHECK(display_flag_setting("--exposure", "-0.5") == Setting{"display.exposure", "-0.5"});
     CHECK(display_flag_setting("--shadows", "0") == Setting{"display.shadows", "0"});
     CHECK(display_flag_setting("--light-shadows", "2") == Setting{"display.light_shadows", "2"});
+    CHECK(display_flag_setting("--no-vsync") == Setting{"display.vsync", "off"}); // --bench runs (tools/perf_track.py)
     CHECK(display_flag_setting("--no-ao") == Setting{"display.ao", "0"});
     CHECK(display_flag_setting("--depth-prepass") == Setting{"display.depth_prepass", "1"});
     CHECK(display_flag_setting("--bloom", "0.2") == Setting{"display.bloom", "0.2"});

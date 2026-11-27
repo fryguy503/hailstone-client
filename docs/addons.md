@@ -123,6 +123,8 @@ of it itself.
 Hailstone folder (`hailstone.ini`, `textures/`, its own settings).
 
 - It is left running when Hailstone quits.
+- It starts with no standard input or output (`/dev/null`, or `NUL` on Windows), even when Hailstone runs from a
+  terminal; a tool that wants a log writes its own file.
 - A server whose opted-in add-on policy refuses the tool (docs/plugins.md "Opt-in add-on policies") refuses Start
   while that server is picked or played on. A tool already running goes on.
 
@@ -587,8 +589,8 @@ ui-addons/<addon>/ an installed interface add-on (its ui/<pack>/ folders, UI pac
 | `addons.suggest_never.<profile>` | | the suggestions put away for good on that server, `owner/repo` with `\|` between |
 
 Nothing is fetched when the system has no HTTPS (Linux and macOS without libcurl) or on test runs (`--frames`,
-`--screenshot`); the list still shows what is installed, a removal works, and the ceilings apply. The client sends
-nothing but the `Hailstone/<version>` User-Agent.
+`--bench`, `--screenshot`); the list still shows what is installed, a removal works, and the ceilings apply. The
+client sends nothing but the `Hailstone/<version>` User-Agent.
 
 For screenshots: `test.login=addons` in `ui/settings/<pack>.txt` (in the Hailstone folder) opens the panel as the
 login screen first appears. In the Modern pack `test.addontab=store` (or `mine`) picks its tab.

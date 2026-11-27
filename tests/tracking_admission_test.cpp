@@ -7,9 +7,13 @@
 #include <vector>
 #include "plugin/hooks.h"
 
+#include "app/actions_ui.h"
 #include "app/lua_ui.h"
 #include "app/lua_ui_api.h"
 #include "core/byte_io.h"
+#include "core/config.h"
+#include "game/mechanics/abilities.h"
+#include "game/mechanics/character.h"
 #include "game/server_ext.h"
 #include "mock_server/harness.h"
 #include "mq_test_world.h"
@@ -99,6 +103,150 @@ TEST_CASE("Tracking admission: stock eligibility uses real skill caps rather tha
     profile.class_ = 1; CHECK_FALSE(connection.tracking_admitted()); // this fixture supplies no Warrior skill cap
     profile.class_ = 4; profile.skills[53] = 0; CHECK(connection.tracking_admitted()); // MinLevel 1 grants adjusted rank 1
     profile.skills[53] = 200; CHECK(connection.tracking_admitted());
+}
+
+TEST_CASE("Tracking stays usable through the camp countdown and cancellation") {
+    TrackingRig test;
+    auto& connection = test.rig.conn;
+    net::GameConnectionTestAccess::tracking_skill_fixture(connection);
+    app::UiHost host;
+    host.in_game = host.ui_ready = true;
+    host.conn = &connection;
+    app::UiApi api(host);
+    constexpr auto window = "TrackingWnd";
+    constexpr auto list = "TRW_TrackingList";
+    const auto packet_count = [&](net::Op op) { return test::MockEqServer::count(test.rig.server.zone_log, op); };
+
+    REQUIRE(api.show_window(window, true));
+    test.publish();
+    REQUIRE(api.list_rows(window, list).size() == 1);
+    REQUIRE(api.click_list(window, list, 0, 0));
+    const auto revision = connection.tracking().revision;
+    connection.send_track();
+
+    connection.camp();
+    REQUIRE(connection.state() == net::ConnectionState::Camping);
+    REQUIRE(test.rig.until([&] { return test.rig.server.camp_requests == 1; }));
+    REQUIRE(api.window_shown(window));
+    CHECK(api.list_rows(window, list).size() == 1);
+    CHECK(connection.tracking().revision == revision);
+    REQUIRE(net::GameConnectionTestAccess::has_tracking_request(connection));
+    test.publish();
+    CHECK(connection.tracking().revision != revision);
+
+    connection.set_track_auto_update(true);
+    REQUIRE(test.rig.until([&] { return packet_count(net::Op::Track) == 3; }));
+    test.publish();
+    connection.set_track_auto_update(false);
+    REQUIRE(api.list_rows(window, list).size() == 1);
+    REQUIRE(api.click_list(window, list, 0, 0));
+    auto& actor = net::GameConnectionTestAccess::world(connection).spawns.at(101);
+    ++actor.incarnation;
+    REQUIRE(api.click_child(window, "TRW_TrackButton"));
+    CHECK(connection.tracking().tracked == 0);
+    connection.send_track();
+    test.publish();
+    REQUIRE(api.list_rows(window, list).size() == 1);
+    REQUIRE(api.click_list(window, list, 0, 0));
+    REQUIRE(api.click_child(window, "TRW_TrackButton"));
+    CHECK(connection.tracking().tracked == 101);
+    CHECK_FALSE(api.window_shown(window));
+
+    connection.send_command("/stoptracking");
+    CHECK(connection.tracking().tracked == 0);
+    REQUIRE(test.rig.until([&] { return packet_count(net::Op::TrackTarget) == 3; }));
+    std::vector<std::uint32_t> targets;
+    for (const auto& packet : test.rig.server.zone_log) if (net::is_op(packet, net::Op::TrackTarget)) {
+        ByteReader reader(packet.data);
+        targets.push_back(reader.le<std::uint32_t>());
+    }
+    CHECK(targets == std::vector<std::uint32_t>{101, 0, 0});
+
+    Config config;
+    app::ActionsUi actions(config, test.rig.dir.path() / "hailstone.ini");
+    game::HotButton button;
+    button.type = game::HotButtonType::Skill;
+    button.slot = game::mechanics::skill::kTracking;
+    net::GameConnectionTestAccess::with_character(connection, [&](game::mechanics::Character& source) {
+        game::mechanics::Character character(source.sheet(), net::GameConnectionTestAccess::tables(connection), source.spells());
+        actions.run_button(connection, &character, app::AbilityView{}, button);
+    });
+    REQUIRE(api.window_shown(window));
+    test.publish();
+    connection.set_sitting(false);
+    REQUIRE(connection.state() == net::ConnectionState::InZone);
+    CHECK(api.window_shown(window));
+    CHECK(api.list_rows(window, list).size() == 1);
+}
+
+TEST_CASE("Tracking retires the window and pending list when the camp logs out") {
+    TrackingRig test;
+    auto& connection = test.rig.conn;
+    connection.open_tracking();
+    test.publish();
+    connection.send_track();
+    REQUIRE(net::GameConnectionTestAccess::has_tracking_request(connection));
+
+    test.rig.server.drop_on_logout = false;
+    connection.camp();
+    REQUIRE(connection.state() == net::ConnectionState::Camping);
+    connection.set_fast_camp(true);
+    REQUIRE(test.rig.until([&] { return test.rig.server.logouts == 1; }));
+    REQUIRE(connection.state() == net::ConnectionState::Camping);
+    CHECK_FALSE(connection.tracking_admitted());
+    CHECK_FALSE(connection.tracking().open);
+    test.publish();
+    CHECK_FALSE(net::GameConnectionTestAccess::has_tracking_request(connection));
+    CHECK(connection.tracking_lines().empty());
+    connection.open_tracking();
+    CHECK_FALSE(connection.tracking().open);
+    CHECK_FALSE(net::GameConnectionTestAccess::has_tracking_request(connection));
+
+    test.rig.server.zone.send_disconnect();
+    REQUIRE(test.rig.until_state(net::ConnectionState::Disconnected));
+    REQUIRE(connection.camped_out());
+    CHECK(*connection.camped_out() == 0);
+    CHECK_FALSE(connection.tracking_admitted());
+}
+
+TEST_CASE("Tracking reopened during camp refreshes after an old request drains or times out") {
+    TrackingRig test;
+    auto& connection = test.rig.conn;
+    connection.camp();
+    REQUIRE(connection.state() == net::ConnectionState::Camping);
+    connection.open_tracking();
+    connection.set_track_auto_update(false);
+    REQUIRE(net::GameConnectionTestAccess::has_tracking_request(connection));
+
+    int expected_requests = 2;
+    SUBCASE("The retired reply arrives") {
+        connection.close_tracking();
+        connection.open_tracking();
+        test.publish();
+    }
+    SUBCASE("The retired request times out") {
+        connection.close_tracking();
+        connection.open_tracking();
+        net::GameConnectionTestAccess::expire_tracking_request(connection);
+    }
+    SUBCASE("Picking a target closed the window with a refresh in flight") {
+        test.publish();
+        connection.send_track();
+        connection.track_spawn(101);
+        REQUIRE(connection.tracking().tracked == 101);
+        REQUIRE_FALSE(connection.tracking().open);
+        connection.open_tracking();
+        test.publish();
+        expected_requests = 3;
+    }
+
+    REQUIRE(connection.tracking().open);
+    CHECK(connection.tracking_lines().empty());
+    REQUIRE(test.rig.until([&] {
+        return test::MockEqServer::count(test.rig.server.zone_log, net::Op::Track) == expected_requests;
+    }));
+    test.publish();
+    CHECK(connection.tracking_lines().size() == 1);
 }
 
 TEST_CASE("Tracking admission: old source replies never reopen or lend a list to a replacement source") {

@@ -42,6 +42,8 @@ into `tools/checks.sh`, not into the workflow alone.
     `is_player_path` refuses, and refuses a binary without the release key; `release_options.sh` names that key.
   - `tests/test_release_tools.py`: the release packers' versions, names and contents (`tools/make_addon.py` and
     `tools/make_update.py`).
+  - `tests/test_perf_track.py`: `tools/perf_track.py` reads the client's `bench:` line and flags a rise against the
+    last nights only past both of its thresholds ("Nightly performance").
 
 One workflow builds: `.github/workflows/macos.yml` ("macOS arm64" below), for the platform Linux cannot build,
 started by hand or by a push to a `macos/**` branch.
@@ -131,7 +133,7 @@ Each fix left behaviour unchanged; they explain rules in AGENTS.md.
 | MSVC under Wine | Recorded vectors CSpellBookWnd::GetSpellMemTicksLeft: `calc_dex() + calc_int()` called INT first | the calls as separate statements, in the original's order; the other query calls an operator or argument list ordered too |
 | MSVC under Wine | "http_get: cancelled ends a transfer stalled waiting for the answer" takes about 21 s (note 2) | not a client fault (note 2) |
 | MSVC under Wine | The build stops for good at `hailstone_engine.lib` (note 3) | `CMAKE_NINJA_FORCE_RESPONSE_FILE` when building for Windows on another host: the objects go in a response file |
-| MSVC under Wine (the release containers) | Now and then a large build stops with an internal compiler error (C1001, in `p0io.c`) and LNK1104 on an object, at a different file each time; the same build carried on passes | not a client fault; `tools/nightly.sh` tries a failed package build once more |
+| MSVC under Wine (the release containers) | Now and then a large build stops with an internal compiler error (C1001, in `p0io.c`) and LNK1104 on an object, at a different file each time; the same build carried on passes | not a client fault; it came with 20 jobs, not with build.sh's default 8. `tools/nightly.sh` builds Windows with 8 and tries a failed package build once more |
 | MSVC under Wine | 33 shared-cache, mapped-archive and animation tests: the cache never mapped (note 4) | `platform/shared_file.cpp` accepts a LocalSystem entry beside the user's (note 4) |
 | Linux, Windows | CI set-up only (SDL3 dev packages; the glslang asset name and executable name) | see the workflow |
 
@@ -173,17 +175,40 @@ variable `HAILSTONE_SELF_HOSTED` is `true`, since a job with no runner waits in 
 
 `tools/live_smoke.sh HOST[:PORT] USER PASS CHARACTER [script ...]` plays each `tests/live/*.quest` with
 `playprobe --quest` (`tools/quest_probe.h`, which lists the steps) against a test server, and prints a PASS or FAIL
-line for each. It exits 1 when any fails. The scripts need a GM character (they use `#zone`, `#goto`, `#summonitem`
-and `#damage`) and a stock PEQ database. `EQ_GAME_DIR` must be set; `PLAYPROBE` picks the binary (default
-`build/playprobe`) and `LIVE_SMOKE_LOGS` the log folder (default `build/live-smoke/<time>`).
+line for each. It exits 1 when any fails. The scripts need a GM character (they use `#zone`, `#goto`, `#summonitem`,
+`#damage`, `#spawn`, `#npcloot` and `#nukebuffs`) and a stock PEQ database. `EQ_GAME_DIR` must be set; `PLAYPROBE`
+picks the binary (default `build/playprobe`) and `LIVE_SMOKE_LOGS` the log folder (default
+`build/live-smoke/<time>`).
 
 - `zoning.quest`: after each zone-in the client's possessions match the server's; `#goto` moves within a zone.
 - `items.quest`: a summoned item reaches the inventory and stays after a zone-in.
 - `npc.quest`: hail an NPC, trade it an item it hands back, kill an NPC.
+- `combat.quest`: `#spawn` an NPC and give it an item to drop (`#npcloot add`), kill it with auto attack and loot
+  the item. The melee step passes only when the server reports our hits (OP_Damage from us to it, or the killing
+  blow in OP_Death) and it dies.
+- `spells.quest`: clear the buffs (`#nukebuffs`), memorize Courage, cast it on ourselves, see the buff arrive and
+  click it off (OP_BuffRemoveRequest, answered by the server); memorize Yaulp, cast it and wait for the server's fade
+  (OP_Buff, about 24 s on); memorize Strike and cast it on a spawned NPC. A cast passes when the server lands the
+  spell (OP_Action from us with its id) without an interrupt or fizzle.
 
+`spells.quest` is played as a second character, `LIVE_SMOKE_CASTER`: a GM cleric of any level on the same account
+(the script scribes its three level 1 spells with `#scribespell` when the book lacks them). Without it the script is
+skipped, with a `SKIP` line, not a failure. Each memorize forgets the spell first where it is already memorized, so
+the memorize always runs; gem 8 is used and keeps the last spell. Scripts are marked for the caster with a
+`# live-smoke: caster` line.
+
+`items.quest`, `npc.quest` and `combat.quest` end with `#nukeitem` on the item they summon or loot, and check that
+the client saw it go, so nightly runs do not fill the character's bags.
+
+The runner waits 20 seconds between scripts (`LIVE_SMOKE_PAUSE`), so the last script's zone has shut down, and
+gives each playprobe 480 seconds (`--seconds`); a run still going then camps out all the same. A script that ran no step never reached the world (the server refused the login, or answered "That zone is not available"
+while the last script's zone shut down): it is played once more after 30 seconds, and its line says so.
+`tests/test_live_smoke.py` checks the runner against a stand-in playprobe (CI's checks run it).
 A script starts with `zone <name>`, which passes at once when the character is already there, so it does not
 depend on where the last session ended. Scripts and the runner name no server, account or password: pass them on the
-command line. Nothing runs them automatically; they are the scripted part of the 0.10 live checklist (docs/todo.md).
+command line. A run camps out to the desktop when its steps are done, so the character is not left link-dead. The
+nightly run plays them when a test server is set ("Nightly run" below); they are the scripted part of the 0.10 live
+checklist (docs/todo.md).
 A failure is a lead, not proof of a client bug: check the server's log and state too.
 
 ## Nightly run
@@ -196,21 +221,77 @@ machine:
    something.
 2. The libFuzzer targets (`HAILSTONE_LIBFUZZER`, Clang; docs/hardening.md), all at once, one core each, for
    `--fuzz-seconds` (default 1800). Their corpora are kept between nights, and a crash's input is kept for the morning.
-3. With `--publish`, and only after a night with no failure, the nightly build ("Nightly builds" below).
-4. A summary: printed, kept in the night's log folder, and posted to Discord when a webhook is set. The posted text
+3. With a test server set, the live smoke tests ("Live smoke tests" above), played by the sanitizer build's
+   `playprobe`. A sanitizer report in a script's log fails it too.
+4. The performance scenes ("Nightly performance" below): reported, never a failure.
+   Then the forced GPU fallbacks ("Nightly GPU fallbacks" below): a validation error fails the night.
+5. With `--publish`, and only after a night with no failure, the nightly build ("Nightly builds" below).
+6. A summary: printed, kept in the night's log folder, and posted to Discord when a webhook is set. The posted text
    names no local path; after a publish it ends with the release's link.
 
 It exits 1 when a step fails. Options: `--fuzz-seconds N`, `--jobs N` (default 20, also the package containers' CPU
-limit), `--no-fuzz`, `--no-post`, `--package` (step 3 without the upload), `--publish`, `--ref REF`.
+limit), `--no-fuzz`, `--no-live`, `--no-perf`, `--no-gpu-fallbacks`, `--no-post`, `--package` (step 5 without the
+upload), `--publish`, `--ref REF`.
 
 - Settings go in `${XDG_CONFIG_HOME:-~/.config}/hailstone/nightly.env`, which it sources: `EQ_GAME_DIR`,
-  `HAILSTONE_VECTORS_DIR` and, optionally, `HAILSTONE_NIGHTLY_WEBHOOK` (a Discord webhook URL). Never commit them.
+  `HAILSTONE_VECTORS_DIR` and, optionally, `HAILSTONE_NIGHTLY_WEBHOOK` (a Discord webhook URL) and the live smoke
+  tests' server and GM character (`HAILSTONE_LIVE_SERVER=HOST[:PORT]`, `HAILSTONE_LIVE_USER`,
+  `HAILSTONE_LIVE_PASSWORD`, `HAILSTONE_LIVE_CHARACTER`, and `HAILSTONE_LIVE_CASTER` for the caster). Never commit
+  them. The summary names none of the server
+  settings.
 - Everything it writes is under `${XDG_CACHE_HOME:-~/.cache}/hailstone-nightly`: the checkout it tests (a detached
   worktree of the repository, reset to the ref each night and cleaned of all but its build folders and the
-  containers' compiler caches in `.docker/`), the corpora (`corpus/<target>`), crash inputs (`crashes/<target>`)
-  and a log folder per night (`logs/<time>`, with `summary.txt`).
+  containers' compiler caches in `.docker/`), the corpora (`corpus/<target>`), crash inputs (`crashes/<target>`),
+  the performance history (`perf.csv`) and a log folder per night (`logs/<time>`, with `summary.txt`).
 - The server plugins' clones join the build when the main checkout has them. A lock keeps two runs apart.
 - A crash input replays with `build-fuzz/<target> <file>` in the checkout.
+
+### Nightly performance
+
+`tools/perf_track.py` runs a Release build of the client (`build-perf`, target `hailstone`) with `--bench`
+(docs/dev-ui.md "The performance window") in fixed scenes and keeps one row per scene and night in `perf.csv`:
+
+- `viewer:<zone>`: the zone viewer at the zone's start point, at noon, without sound, with the client's default
+  lighting (`--lighting modern`: the viewer's own default draws no shadows and takes a tenth of the time), for each of
+  `--zones` (default `qeytoqrg`, `qeynos2`, `gfaydark`, `poknowledge`). No server: the zone's renderers alone.
+- `client:<zone>`: with a test server set, the client logged in as the live smoke tests' character, timed where the
+  character stands once the zone has settled (after the live smoke tests, the zone their last script left). Its rows
+  are named by the zone, so nights in different zones are not compared. Each run camps out to the desktop when done
+  and the next starts at once; a run without a result is tried once more (a second login of the same account from
+  elsewhere ends the older session, see `run_client`).
+
+Each scene runs once uncounted (the first run after a build fills the pipeline and terrain caches and was a quarter
+slower), then three times at 1920x1080 with `--no-vsync`, 600 frames each in the viewer and 3000 in the client, and
+keeps each measure's median. The
+window is SDL's offscreen video driver (Vulkan's `VK_EXT_headless_surface`): the timer's service has no display, and
+a compositor's pacing would differ from night to night. Its settings are the build tree's own `hailstone.ini`
+(docs/layout.md), not the player's.
+
+Each scene's mean and p99 frame time, resident memory and GPU allocations are compared with the median of its last
+seven nights (none before three). The client scene's frame times are only recorded: on one build they ran from 3 to 7
+ms mean in four runs (spawns walking through the view), against about 10 % in the viewer and 1 % for memory, so the
+client scene is flagged on memory alone. A rise past both a share and an amount (mean: 10 % and 0.25 ms; p99: 15 %
+and 0.5 ms; resident: 5 % and 48 MiB; GPU: 5 % and 32 MiB) is a `REGRESSION` line in the summary. It does not fail
+the night or hold back the packages: frame times are noisy, and a rise is a lead to look at. A night with no scene
+measured fails. Frame times compare only on one machine with one driver: a new GPU, driver or kernel moves them all,
+so read the CSV's history around such a change.
+
+Run it by hand with `tools/perf_track.py --hailstone build-perf/hailstone/hailstone --csv /tmp/perf.csv` (and
+`--live HOST[:PORT]` with `HAILSTONE_LIVE_USER`, `_PASSWORD` and `_CHARACTER` in the environment). `--display` uses
+the desktop instead of the offscreen driver; don't mix such rows with the nightly's.
+
+### Nightly GPU fallbacks
+
+The paths only a weaker GPU takes (docs/graphics.md "Forcing the GPU fallbacks") are drawn on the nightly machine's
+GPU: the Release zone viewer (`build-perf`) in `qeytoqrg` at noon with modern lighting, 300 frames on the offscreen
+driver with `--validation`, once with nothing forced and once with each word of `HAILSTONE_GPU_FALLBACKS` alone
+(`all` is not run: each word's errors are named apart). Each run's log is `logs/<night>/fallbacks/<word>.log`.
+
+- A validation error (`[error] vulkan:`) or a run that does not end by itself fails the night and names the word.
+- Validation warnings (performance hints among them) are counted in the summary, not failed.
+- A word this GPU cannot force (`depth-d24` on AMD) is named in the summary; its run still draws, with the normal
+  choice.
+- Without the validation layer installed the step is noted as not checked.
 
 ### Nightly builds
 
@@ -226,14 +307,27 @@ them to one rolling pre-release, tagged `nightly`, on GitHub.
 - The containers do not run the tests (the Linux one cannot run the browser tests, Windows' Wine fails some): the
   Linux package's `hailstone_tests` run on this machine before the upload, in 8 parts at once. They leave out the
   cases that start the real CEF helper (`browser host: the CEF helper*`, `browser host: CEF's other processes*`),
-  which time out on some desktops with release builds too. The Windows package is built only.
+  which time out on some desktops with release builds too.
+- The Windows package is then started under Wine (a copy, with the night's log folder as its data folder): it logs
+  in to the live smoke tests' server with their character, enters the world and stops after 3600 frames at 60 per
+  second, with a screenshot (`windows.png`). Not reaching the world fails the night. It runs on a 1280x720 screen
+  of its own (`kwin_wayland --virtual --xwayland`), not the desktop's: with the monitor switched off at night the
+  desktop has no outputs and SDL under Wine finds no display. It needs Wine, `kwin_wayland` and the
+  `HAILSTONE_LIVE_*` settings; without them the summary says it was not started. Its Wine prefix is kept in the
+  cache folder.
+- The tests run without the desktop's display (`DISPLAY` and `WAYLAND_DISPLAY` unset), so the browser tests use
+  headless Chromium: CEF's helper can fail to draw on a busy desktop session's display.
 - Each night moves the `nightly` tag to the commit built (a forced update of that one tag, never of a branch),
   uploads the new downloads, removes the previous night's and rewrites the notes. A plain `git fetch` leaves a clone's
   old copy of the tag alone; `git fetch --tags` refuses to move it, which is harmless.
-- A failed package build is tried once more, and the summary says so (MSVC under Wine, "Problems the first runs
-  showed" above).
+- The Windows package builds with no more than 8 jobs, as a release does: at 20, MSVC under Wine failed most large
+  builds ("Problems the first runs showed" above). A failed package build is tried once more, and the summary says
+  so.
 - It needs `gh` signed in with write access, Docker, and the MSVC install `tools/docker/build.sh windows-x64` uses.
 - `--package` does all but the upload, leaving the zips in the checkout's `release-nightly/`.
+- Each package's symbol files (docs/hardening.md "Crash reports from release builds") go to
+  `~/.cache/hailstone-nightly/symbols/<version>/<platform>/`, not to `release-nightly/`, so they are never uploaded. A
+  night's folder is removed after 90 days.
 
 ### The timer
 
@@ -288,7 +382,9 @@ cmake --install build-windows --prefix dist/hailstone            # the client's 
 
 - It needs clang-cl, lld-link, llvm-lib, llvm-rc and llvm-mt (an LLVM install has them) and the build machine's
   glslang for the shaders.
-- RelWithDebInfo writes `hailstone.pdb`; beside `hailstone.exe` it lets a crash report name the function.
+- RelWithDebInfo writes `hailstone.pdb`; beside `hailstone.exe` it lets a crash report name the function. A Release
+  with `-DHAILSTONE_SEPARATE_SYMBOLS=ON` writes it to `build-windows/symbols/` (docs/hardening.md "Crash reports
+  from release builds").
 - The tests run under Wine (`wine build-windows/hailstone_tests.exe`, with a `WINEPREFIX` of its own).
 
 The compiler wrapper `clang-cl-xwin.sh` puts the target and the SDK's headers on every compile (CEF's CMake files set

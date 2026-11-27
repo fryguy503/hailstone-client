@@ -30,6 +30,8 @@ struct NavStatus {
     // (MoveTo.Stopped: MQ2MoveUtils' StoppedMoveto, cleared by the next /moveto, not by /moveto off).
     bool moveto = false;
     bool moveto_arrived = false;
+    // A /moveto's or /stick's walk has stalled and not moved on since (PathFollower::stuck; MoveUtils.Stuck).
+    bool stuck = false;
     // /afollow (NavControl::afollow): the spawn followed, 0 none; how near it stops; the trail's points left and their
     // length (with the gap to the spawn); waiting where the spawn warped.
     std::uint32_t afollow_spawn = 0;

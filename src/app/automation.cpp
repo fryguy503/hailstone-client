@@ -11,6 +11,7 @@
 #include <imgui.h>
 
 #include "app/addon_install.h"
+#include "app/autoexec.h"
 #include "core/log.h"
 #include "core/path_utf8.h"
 #include "game/eq_names.h"
@@ -38,6 +39,10 @@ std::vector<fs::path> search_dirs(const fs::path& data, const fs::path& install)
     std::error_code ec;
     if (!install.empty() && fs::is_directory(install, ec) && !fs::equivalent(data, install, ec)) dirs.push_back(install);
     return dirs;
+}
+
+mq::CfgLoad to_mq(CfgFile&& file) {
+    return mq::CfgLoad{path_utf8(file.file), std::move(file.lines), std::move(file.refused)};
 }
 } // namespace
 
@@ -68,6 +73,14 @@ struct Automation::Impl {
     // approvals file, so it is asked once a second (and at once after a button there), not every frame.
     std::vector<plugin::NativePlugins::Info> dev_plugins;
     std::optional<std::chrono::steady_clock::time_point> dev_plugins_at;
+    // MacroQuest's .cfg files (app/autoexec.h, docs/autoexec.md): the names to run at the next frame() and at the
+    // one after (zoned.cfg, which MacroQuest runs delayed), run there rather than inside the hook that raised them.
+    plugin::Hooks::Owner cfg_owner = 0;
+    std::vector<std::string> cfg_now, cfg_next;
+    int cfg_state = plugin::kGameStatePreCharSelect;
+    bool cfg_autoexec_done = false; // AutoExec.cfg: once a run
+    bool cfg_from_select = false;   // character select seen: the next world entry runs InGame.cfg and the rest
+    bool cfg_zone_pending = false;  // a zone-in came before the game state said "in game" (the first one)
 
     net::GameConnection* conn() const { return env.connection ? env.connection() : nullptr; }
 
@@ -162,6 +175,69 @@ struct Automation::Impl {
         if (s.empty() && env.server_name) s = env.server_name();
         return s.empty() ? std::string("this server") : s;
     }
+    CfgFolders cfg_folders() const {
+        CfgFolders f;
+        f.data = env.data_dir;
+        f.global = env.data_dir / "cfg";
+        if (fs::path dir = env.server_dir ? env.server_dir() : fs::path(); !dir.empty()) f.server = dir / "cfg";
+        if (fs::path dir = env.character_dir ? env.character_dir() : fs::path(); !dir.empty()) f.character = dir / "cfg";
+        return f;
+    }
+
+    // MQ's PluginsSetGameState: AutoExec once (at the first character select or world entry), CharSelect at each
+    // character select, and after one InGame, <server>_<character> and <Class> (GetClassDesc: the stock names).
+    void cfg_game_state(int state) {
+        cfg_state = state;
+        if (state == plugin::kGameStatePreCharSelect) cfg_zone_pending = false;
+        if (state != plugin::kGameStateCharSelect && state != plugin::kGameStateInGame) return;
+        if (!cfg_autoexec_done) {
+            cfg_autoexec_done = true;
+            cfg_now.emplace_back("AutoExec");
+        }
+        if (state == plugin::kGameStateCharSelect) {
+            cfg_from_select = true;
+            cfg_now.emplace_back("CharSelect");
+            return;
+        }
+        if (cfg_from_select) {
+            cfg_from_select = false;
+            cfg_now.emplace_back("InGame");
+            if (net::GameConnection* c = conn()) {
+                const std::string server = env.server_name ? env.server_name() : std::string();
+                if (!server.empty() && !c->character_name().empty())
+                    cfg_now.push_back(server + "_" + c->character_name());
+                if (c->profile()) cfg_now.push_back(game::stock_class_name(c->profile()->class_));
+            }
+        }
+        if (std::exchange(cfg_zone_pending, false)) cfg_zoned();
+    }
+
+    // MQ's PluginsEndZone, in game: zoned.cfg delayed (the next pulse), then the zone's own at once, so the zone's
+    // lines run first, as in MacroQuest.
+    void cfg_zoned() {
+        cfg_next.emplace_back("zoned");
+        if (net::GameConnection* c = conn(); c && !c->world().zone_short_name.empty())
+            cfg_now.push_back(c->world().zone_short_name);
+    }
+
+    // The names due, each its most specific file's lines run as the player's typed lines, under one line budget.
+    void run_cfgs() {
+        std::vector<std::string> names = std::exchange(cfg_now, std::move(cfg_next));
+        cfg_next.clear();
+        if (names.empty()) return;
+        const CfgFolders folders = cfg_folders();
+        std::vector<mq::CfgLoad> files;
+        for (const std::string& name : names) {
+            const auto file = find_cfg(folders, name);
+            if (!file) continue;
+            auto loaded = read_cfg(*file);
+            if (!loaded) continue;
+            log::info("cfg: running {} ({} lines)", path_utf8(*file), loaded->lines.size());
+            files.push_back(to_mq(std::move(*loaded)));
+        }
+        if (!files.empty()) commands->run_cfg_files(files);
+    }
+
     void dev_window();
     void consent_window();
     void refresh_consent() {
@@ -210,7 +286,19 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     };
     ce.face = m.env.face;
     ce.keypress = m.env.keypress;
+    ce.load_cfg = [&m](std::string_view name, bool typed) -> std::optional<mq::CfgLoad> {
+        auto file = load_cfg(m.cfg_folders(), name, typed);
+        if (!file) return std::nullopt;
+        return to_mq(std::move(*file));
+    };
     m.commands = std::make_unique<mq::Commands>(ce);
+    m.cfg_owner = m.hooks.new_owner("cfg");
+    m.hooks.on_game_state(m.cfg_owner, [&m](int state) { m.cfg_game_state(state); });
+    m.hooks.on_zone(m.cfg_owner, [&m](plugin::ZonePhase phase) {
+        if (phase != plugin::ZonePhase::End) return;
+        if (m.cfg_state == plugin::kGameStateInGame) m.cfg_zoned();
+        else m.cfg_zone_pending = true;
+    });
 
     std::error_code ec;
     mq::ScriptEnv se;
@@ -250,6 +338,7 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
         const InstalledAddon* a = find_addon(addons, name);
         return a && a->kind == AddonKind::Plugin;
     };
+    se.started = [&m](const std::string& script) { m.cfg_now.push_back(script + "-AutoExec"); };
     fs::create_directories(se.dirs.front(), ec);
     m.scripts = std::make_unique<mq::ScriptHost>(se);
 
@@ -289,6 +378,7 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     ne.cache_dir = m.env.data_dir / "cache" / "plugins";
     ne.config_dir = m.env.data_dir / "plugins";
     ne.scripts_config_dir = se.config_dir; // the scripts' settings folder, as MacroQuest.Path[config]
+    ne.loaded = [&m](const std::string& name) { m.cfg_now.push_back(name + "-AutoExec"); };
     fs::create_directories(ne.dirs.front(), ec);
     m.plugins = std::make_unique<plugin::NativePlugins>(ne);
 }
@@ -389,6 +479,7 @@ void Automation::frame() {
     if (connection) mq::update_map_filter_target_path(m.map_filters, *connection, m.map_filter_target_path, now);
     m.hooks.pulse();
     m.scripts->pulse();
+    m.run_cfgs();
 }
 
 void Automation::imgui(bool dev) {

@@ -30,6 +30,7 @@
 #include "render/temporal.h"
 #include "render/upscaler_provider.h"
 #include "render/gpu.h"
+#include "render/gpu_fallbacks.h"
 #include "render/zone_fog.h"
 
 namespace hailstone::platform { class Window; }
@@ -442,6 +443,8 @@ public:
     VkSampleCountFlagBits scene_samples() const { return scene_samples_; }
     VkFormat depth_format() const { return depth_format_; }
     const DeviceCaps& caps() const { return caps_; }
+    // The fallbacks HAILSTONE_GPU_FALLBACKS forces (render/gpu_fallbacks.h); none for a player.
+    const GpuFallbacks& forced_fallbacks() const { return fallbacks_; }
     // What a set holding a bindless texture array adds (DeviceCaps::update_after_bind): to the array's binding, its
     // layout and the pool it comes from. The array's binding also takes VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT.
     VkDescriptorBindingFlags texture_array_binding_flags() const {
@@ -580,6 +583,7 @@ private:
                    VkPipelineLayout layout, VkDescriptorSet set, const void* push, std::uint32_t push_size);
 
     VkFormat depth_format_ = VK_FORMAT_UNDEFINED;
+    GpuFallbacks fallbacks_;
     SceneOptions scene_options_;
     VkSampleCountFlagBits scene_samples_ = VK_SAMPLE_COUNT_1_BIT;
     Image scene_msaa_;     // the multisampled colour target (msaa > 1 only)

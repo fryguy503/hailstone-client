@@ -113,6 +113,47 @@ TEST_CASE("Spell casts require sight only for spells that check the selected tar
     REQUIRE(rig.until([&] { return casts() == 1; }));
 }
 
+TEST_CASE("/cast by gem, by the start of a memorized spell's name, or =its whole name (MacroQuest's Cast)") {
+    MockConfig cfg = MockConfig::standard();
+    cfg.characters[0].class_ = 2;
+    Rig rig(cfg);
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    // Two self-cast heals (no target, no sight), the first's name the start of the second's.
+    auto table = std::make_shared<game::SpellTable>();
+    auto heal = [](int id, const char* name) {
+        // (122, 213, 214: the travel type and "can cast in / out of combat", as the cast tests above set them)
+        return spell_line({{0, std::to_string(id)}, {1, name}, {9, "100"}, {13, "1000"}, {83, "1"}, {98, "6"}, {105, "1"},
+                           {122, "3"}, {213, "1"}, {214, "1"}});
+    };
+    REQUIRE(table->parse(heal(6901, "Minor Healing") + "\n" + heal(6902, "Minor Healing Ward")) == 2);
+    conn.set_spell_table_for_test(table);
+    auto& spells = A::spells(conn);
+    spells.gems[0].spell = 6901;
+    spells.gems[2].spell = 6902;
+    auto cast = [&](const std::string& line) { // the spell the line started casting, 0 none
+        spells.casting = {};
+        spells.pending = 0; // the last cast's request, which would hold the next one (cast_gem refuses while pending)
+        for (auto& gem : spells.gems) gem.ready = 0;
+        spells.recovery_ready = 0;
+        rig.chat();
+        conn.send_command(line);
+        return spells.casting.casting() ? spells.casting.spell : 0u;
+    };
+    CHECK(cast("/cast 3") == 6902u);                           // RoF2's gem number
+    CHECK(cast("/cast \"Minor\"") == 6901u);                   // the first gem whose spell starts with it
+    CHECK(cast("/cast minor healing w") == 6901u);             // unquoted: only the first word, "minor", ...
+    CHECK(cast("/cast \"minor healing w\"") == 6902u);         // ... quoted: the whole run, any case
+    CHECK(cast("/cast \"=Minor Healing Ward\"") == 6902u);     // =: the whole name
+    CHECK(cast("/cast \"=minor healing\"") == 6901u);
+    CHECK(cast("/cast \"Healing\"") == 0u);                    // not the start of either name
+    const auto said = rig.chat();
+    CHECK(std::any_of(said.begin(), said.end(), [](const ChatEvent& e) {
+        return e.text == "You do not seem to have that spell memorized.";
+    }));
+    CHECK(cast("/cast \"=Minor\"") == 0u);                     // =: no whole name is "Minor"
+}
+
 TEST_CASE("CastSpell over the live adapter: SPA 129 range focus from a worn item lets a cast past Range go out") {
     // A detrimental single-target nuke with Range 100 (cleric level 1), and a 5% range focus (SPA 129) on an
     // earring: GetFocusRangeModifier gives 100 x 5 x 0.01 = 5, so the reach is 105 (under the 5 x Range cap).

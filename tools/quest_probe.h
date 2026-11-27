@@ -31,6 +31,17 @@
 //   snapshot            keeps the possessions as the client sees them now
 //   expect-snapshot     the possessions are what the snapshot kept (after a zone, the server's own inventory)
 //   expect-at SLOT SUB ITEMID   possessions slot SLOT (bag slot SUB, -1 the slot itself) holds ITEMID (0: empty)
+//   melee NAME          near NAME, then auto attack it (facing it, following it) until it dies: checks that our hits
+//                       landed (OP_Damage from us to it, or OP_Death's killing blow) and it died; reports the lowest
+//                       HP the server showed
+//   memorize SPELLID GEM   memorizes SPELLID from the book into gem GEM (1-based), forgetting it first where it is
+//                       already memorized, so the memorize always runs: checks that the gem holds it
+//   cast GEM [NAME]     casts gem GEM on NAME (near it first) or, without one, on ourselves: checks that the server
+//                       landed the spell (OP_Action from us with its id) without an interrupt or fizzle
+//   expect-buff SPELLID / expect-no-buff SPELLID   our buff slots hold (or do not hold) SPELLID
+//   fade SPELLID SECONDS   waits up to SECONDS for our buff SPELLID to wear off: checks that the server's OP_Buff
+//                       fade for it came and the buff is gone
+//   click-off SPELLID   clicks off our buff SPELLID (OP_BuffRemoveRequest): checks that it went
 
 #include <algorithm>
 #include <cctype>
@@ -46,10 +57,15 @@
 
 #include <glm/geometric.hpp>
 
+#include "game/combat.h"
 #include "game/coords.h"
+#include "game/spells.h"
 #include "game/world_state.h"
 #include "game/zoning.h"
 #include "net/game_connection.h"
+#include "net/opcodes.h"
+#include "net/spell_packets.h"
+#include "net/zone_packets.h"
 
 namespace hailstone::probe {
 
@@ -80,12 +96,62 @@ public:
     bool busy() const { return active_ && !done_; }
 
     void chat(const std::string& text) {
-        if (active_) chat_.push_back(lower(text));
+        if (!active_) return;
+        chat_.push_back(lower(text));
+        // A cast step's failures (the client's own lines for OP_InterruptCast and a fizzle).
+        const std::string l = lower(text);
+        if (l.rfind("your spell", 0) == 0 && (l.find("interrupted") != std::string::npos || l.find("fizzle") != std::string::npos))
+            cast_trouble_ = text;
+    }
+
+    // The zone's packets (playprobe's zone_packet_tap): our melee hits and the spells we land.
+    void tap(const net::AppPacket& p) {
+        if (!active_ || !player_) return;
+        const net::Op op = net::from_wire(p.opcode);
+        if (op == net::Op::Damage) {
+            const auto d = net::decode_combat_damage(p);
+            if (!d || d->source != player_ || d->target != (target_ & 0xffffu)) return;
+            if (d->type == 231) {
+                if (cast_spell_ != game::kNoSpell && d->spell_id == cast_spell_ && d->damage > 0) spell_damage_ += d->damage;
+            } else if (d->damage > 0) {
+                ++hits_;
+                damage_ += d->damage;
+            } else {
+                ++misses_;
+            }
+        } else if (op == net::Op::Death) {
+            // A killing blow comes in OP_Death, not OP_Damage.
+            const auto d = net::decode_death(p);
+            if (d && (d->killer_id & 0xffffu) == player_ && d->spawn_id == target_ && d->damage > 0) {
+                ++hits_;
+                damage_ += d->damage;
+            }
+        } else if (op == net::Op::Buff) {
+            const auto b = net::decode_buff(p);
+            if (!b || (b->entity_id & 0xffffu) != player_) return;
+            const auto spell = static_cast<std::uint32_t>(b->buff.spell_id);
+            if (fade_spell_ != game::kNoSpell) {
+                std::printf("  QUEST: OP_Buff slot %u spell %d tics %u fade %u\n", b->slot, static_cast<int>(b->buff.spell_id),
+                            b->buff.duration, b->fade);
+                if (spell == fade_spell_ && b->fade != 0) server_faded_ = true;
+            }
+        } else if (op == net::Op::BuffCreate && fade_spell_ != game::kNoSpell) {
+            const auto b = net::decode_buff_icons(p);
+            if (!b || (b->entity_id & 0xffffu) != player_) return;
+            std::printf("  QUEST: OP_BuffCreate all %u:", b->all_buffs);
+            for (const auto& e : b->entries) std::printf(" [slot %u spell %d tics %d]", e.slot, static_cast<int>(e.spell_id), e.tics);
+            std::printf("\n");
+        } else if (op == net::Op::Action) {
+            const auto a = net::decode_action(p);
+            if (a && a->type == 231 && a->source == player_ && cast_spell_ != game::kNoSpell && a->spell_id == cast_spell_)
+                landed_ = true;
+        }
     }
 
     void zone_in(net::GameConnection& conn) {
         if (!active_) return;
         if (const auto* me = conn.world().player()) pos_ = me->position;
+        player_ = conn.world().player_id & 0xffffu;
         if (!handler_set_) {
             handler_set_ = true;
             // A request for the zone we are in (#goto) moves us without zoning, as DoTeleportB does; another zone
@@ -128,8 +194,19 @@ public:
             std::printf("  QUEST [%zu] %s\n", index_ + 1, lines_[index_].c_str());
             started_ = now;
         }
-        if (now - started_ > std::chrono::seconds(cmd == "zone" ? 60 : cmd == "kill" ? 30 * std::max(1, count_arg(rest)) : 20)) {
+        if (now - started_ > std::chrono::seconds(step_seconds(cmd, rest))) {
             check(false, "timed out");
+            if (cmd == "melee") {
+                // Kill it all the same: an NPC still hitting us would stand us up from every camp.
+                conn.set_auto_attack(false);
+                if (conn.world().spawns.count(target_) && !conn.world().spawns.at(target_).is_corpse) {
+                    conn.set_target(target_);
+                    conn.say("#damage 2000000000");
+                }
+            }
+            if (cmd == "memorize") end_memorize(conn);
+            if (cmd == "fade") print_buffs(conn);
+            fade_spell_ = game::kNoSpell;
             next();
             return;
         }
@@ -230,6 +307,18 @@ private:
                 }
                 phase_ = 3;
                 wait_until_ = now + std::chrono::milliseconds(700);
+            } else if (phase_ == 6) {
+                if (!moved_) return;
+                phase_ = 3;
+                wait_until_ = now + std::chrono::milliseconds(500);
+            } else if (phase_ == 3 && !reapproached_ && conn.world().spawns.count(target_) &&
+                       glm::distance(conn.world().spawns.at(target_).position, pos_) > 15.0f) {
+                // A patrolling NPC walks off while the item is picked up, and the client cancels a trade out of
+                // reach: go beside it again, once, before opening the trade.
+                reapproached_ = true;
+                moved_ = false;
+                conn.say(goto_text(conn.world().spawns.at(target_).position + glm::vec3(3.0f, 0.0f, 0.0f)));
+                phase_ = 6;
             } else if (phase_ == 3) {
                 conn.give_to(target_);
                 phase_ = 4;
@@ -372,6 +461,57 @@ private:
             check(got == id, "slot " + std::to_string(slot) + "/" + std::to_string(sub) + " holds " + std::to_string(got) +
                                  (got == id ? "" : ", wanted " + std::to_string(id)));
             next();
+        } else if (cmd == "melee") {
+            melee(conn, rest, now);
+        } else if (cmd == "memorize") {
+            memorize(conn, rest, now);
+        } else if (cmd == "cast") {
+            cast(conn, rest, now);
+        } else if (cmd == "expect-buff" || cmd == "expect-no-buff") {
+            const auto id = static_cast<std::uint32_t>(std::strtoul(rest.c_str(), nullptr, 10));
+            const int slot = buff_slot(conn, id);
+            check(cmd == "expect-buff" ? slot >= 0 : slot < 0,
+                  spell_name(conn, id) + (slot >= 0 ? " in buff slot " + std::to_string(slot) : " not among the buffs"));
+            if (failed_last_) print_buffs(conn);
+            next();
+        } else if (cmd == "fade") {
+            const auto id = static_cast<std::uint32_t>(std::strtoul(rest.c_str(), nullptr, 10));
+            if (phase_ == 0) {
+                if (buff_slot(conn, id) < 0) {
+                    check(false, spell_name(conn, id) + " is not among the buffs to fade");
+                    next();
+                    return;
+                }
+                fade_spell_ = id;
+                server_faded_ = dropped_early_ = false;
+                phase_ = 1;
+            } else if (!server_faded_ && buff_slot(conn, id) < 0 && !dropped_early_) {
+                // A lead, not a failure: the client's own countdown ended first (its OP_Buff to the server).
+                dropped_early_ = true;
+                std::printf("  QUEST: the client dropped %s after %lld s, before the server's fade\n", spell_name(conn, id).c_str(),
+                            static_cast<long long>(std::chrono::duration_cast<std::chrono::seconds>(now - started_).count()));
+            } else if (server_faded_ && buff_slot(conn, id) < 0) {
+                // The server's fade, not the client's own countdown (which can end a tick before the server's).
+                check(true, spell_name(conn, id) + " faded (the server's OP_Buff) after " +
+                                std::to_string(std::chrono::duration_cast<std::chrono::seconds>(now - started_).count()) + " s");
+                fade_spell_ = game::kNoSpell;
+                pause(now, 1000);
+            }
+        } else if (cmd == "click-off") {
+            const auto id = static_cast<std::uint32_t>(std::strtoul(rest.c_str(), nullptr, 10));
+            const int slot = buff_slot(conn, id);
+            if (phase_ == 0) {
+                if (slot < 0) {
+                    check(false, spell_name(conn, id) + " is not among the buffs to click off");
+                    next();
+                    return;
+                }
+                conn.remove_buff(slot);
+                phase_ = 1;
+            } else if (slot < 0) {
+                check(true, spell_name(conn, id) + " clicked off");
+                pause(now, 1000);
+            }
         } else if (cmd == "cancel") {
             if (const game::Task* t = find_task(conn, rest)) conn.cancel_task(t->type, t->sequence);
             pause(now, 2000);
@@ -473,6 +613,209 @@ private:
             check(find_item(conn, item).has_value(), "looted " + std::to_string(item));
             pause(now, 1000);
         }
+    }
+
+    // Auto attack, as a player fights: face the target, stay in reach, and let the server's rounds kill it.
+    void melee(net::GameConnection& conn, const std::string& name, Clock::time_point now) {
+        const auto& w = conn.world();
+        if (phase_ == 0) {
+            if (!go_near(conn, name)) {
+                check(false, "nobody named \"" + name + "\" here");
+                next();
+                return;
+            }
+            phase_ = 1;
+            return;
+        }
+        if (phase_ == 1 || phase_ == 4) {
+            if (!moved_) return;
+            if (phase_ == 1) {
+                conn.set_target(target_);
+                hits_ = misses_ = 0;
+                damage_ = 0;
+                lowest_hp_ = 100;
+            }
+            phase_ = 2;
+            wait_until_ = now + std::chrono::milliseconds(600);
+            return;
+        }
+        auto it = w.spawns.find(target_);
+        if (it == w.spawns.end() || it->second.is_corpse) {
+            conn.set_auto_attack(false);
+            // Our hits are what count: a strong character can kill it before the server's next HP update.
+            const bool ok = hits_ > 0;
+            check(ok, "melee killed " + name + ": " + std::to_string(hits_) + " hits for " + std::to_string(damage_) +
+                          " damage, " + std::to_string(misses_) + " misses, its HP down to " +
+                          std::to_string(lowest_hp_) + "% before it died");
+            pause(now, 1500);
+            return;
+        }
+        const auto& foe = it->second;
+        if (foe.hp_known) lowest_hp_ = std::min<int>(lowest_hp_, foe.hp_percent);
+        glm::vec3 d = foe.position - pos_;
+        d.z = 0.0f;
+        if (glm::length(d) > 10.0f) {
+            // It moved off (an NPC flees at low HP): go beside it again.
+            moved_ = false;
+            conn.say(goto_text(foe.position + glm::vec3(3.0f, 0.0f, 0.0f)));
+            phase_ = 4;
+            return;
+        }
+        conn.set_player_motion(pos_, game::heading_to(pos_, foe.position), glm::vec3(0.0f), false);
+        if (conn.target() != target_) conn.set_target(target_);
+        if (!conn.auto_attack()) conn.set_auto_attack(true);
+        phase_ = 3;
+        wait_until_ = now + std::chrono::milliseconds(500);
+    }
+
+    void memorize(net::GameConnection& conn, const std::string& rest, Clock::time_point now) {
+        const auto& st = conn.spell_state();
+        std::istringstream in(rest);
+        std::uint32_t id = 0;
+        int gem = 0;
+        in >> id >> gem;
+        --gem;
+        if (phase_ == 0) {
+            if (gem < 0 || gem >= conn.usable_gems()) {
+                check(false, "gem " + std::to_string(gem + 1) + " is not usable (" + std::to_string(conn.usable_gems()) + " gems)");
+                next();
+                return;
+            }
+            book_slot_ = -1;
+            for (int slot = 0; slot < game::kSpellBookSize; ++slot)
+                if (st.book[static_cast<std::size_t>(slot)] == id) book_slot_ = slot;
+            if (book_slot_ < 0) {
+                check(false, spell_name(conn, id) + " is not in the spell book");
+                next();
+                return;
+            }
+            forget_gem_ = -1;
+            for (int g = 0; g < game::kSpellGems; ++g)
+                if (st.gems[static_cast<std::size_t>(g)].spell == id) forget_gem_ = g;
+            if (forget_gem_ >= 0) {
+                std::printf("  QUEST: %s is in gem %d; forgetting it first\n", spell_name(conn, id).c_str(), forget_gem_ + 1);
+                conn.forget_gem(forget_gem_);
+            }
+            phase_ = 1;
+            wait_until_ = now + std::chrono::milliseconds(500);
+        } else if (phase_ == 1) {
+            if (st.pending > 0 || st.casting.casting() ||
+                (forget_gem_ >= 0 && st.gems[static_cast<std::size_t>(forget_gem_)].spell != game::kNoSpell))
+                return;
+            if (!conn.sitting()) conn.set_sitting(true); // the book works sitting
+            phase_ = 2;
+            wait_until_ = now + std::chrono::milliseconds(500);
+        } else if (phase_ == 2) {
+            conn.memorize(book_slot_, gem);
+            if (!st.memorizing) return; // refused for now (something pending): try again next frame
+            mem_started_ = now;
+            phase_ = 3;
+        } else if (st.gems[static_cast<std::size_t>(gem)].spell == id && !st.memorizing) {
+            end_memorize(conn);
+            check(true, "memorized " + spell_name(conn, id) + " into gem " + std::to_string(gem + 1) + " in " +
+                            std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(now - mem_started_).count()) +
+                            " ms");
+            pause(now, 1000);
+        }
+    }
+
+    static void end_memorize(net::GameConnection& conn) {
+        if (conn.spell_book_open()) conn.close_spell_book();
+        if (conn.sitting()) conn.set_sitting(false);
+    }
+
+    void cast(net::GameConnection& conn, const std::string& rest, Clock::time_point now) {
+        const auto& st = conn.spell_state();
+        std::istringstream in(rest);
+        int gem = 0;
+        std::string name;
+        in >> gem >> name;
+        --gem;
+        if (gem < 0 || gem >= game::kSpellGems || st.gems[static_cast<std::size_t>(gem)].spell == game::kNoSpell) {
+            check(false, "gem " + std::to_string(gem + 1) + " holds no spell");
+            next();
+            return;
+        }
+        const std::uint32_t id = st.gems[static_cast<std::size_t>(gem)].spell;
+        if (phase_ == 0) {
+            if (!name.empty()) {
+                if (!go_near(conn, name)) {
+                    check(false, "nobody named \"" + name + "\" here");
+                    next();
+                    return;
+                }
+            } else {
+                target_ = conn.world().player_id;
+                moved_ = true;
+            }
+            phase_ = 1;
+        } else if (phase_ == 1) {
+            if (!moved_) return;
+            const auto* s = conn.spell_table().get(id);
+            if (!(s && s->target_type == game::kTargetSelf && name.empty())) conn.set_target(target_);
+            if (conn.sitting()) conn.set_sitting(false);
+            phase_ = 2;
+            wait_until_ = now + std::chrono::milliseconds(600);
+        } else if (phase_ == 2) {
+            // The gem's recast and the global recovery first.
+            if (!st.gem_castable(gem, net::GameConnection::eq_time()) || st.casting.casting() || st.pending > 0) return;
+            cast_trouble_.clear();
+            landed_ = false;
+            cast_spell_ = id;
+            spell_damage_ = 0;
+            std::printf("  QUEST: casting %s from gem %d\n", spell_name(conn, id).c_str(), gem + 1);
+            conn.cast_gem(gem);
+            mem_started_ = now;
+            phase_ = 3;
+        } else if (!cast_trouble_.empty()) {
+            check(false, "cast " + spell_name(conn, id) + ": " + cast_trouble_);
+            cast_spell_ = game::kNoSpell;
+            pause(now, 1000);
+        } else if (landed_ && !st.casting.casting() && st.pending == 0) {
+            check(true, "cast " + spell_name(conn, id) + ": landed after " +
+                            std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(now - mem_started_).count()) +
+                            " ms" + (spell_damage_ > 0 ? ", " + std::to_string(spell_damage_) + " damage" : ""));
+            cast_spell_ = game::kNoSpell;
+            pause(now, 1000);
+        } else if (!landed_ && !st.casting.casting() && st.pending == 0 && now - mem_started_ > std::chrono::seconds(4) &&
+                   phase_ == 3) {
+            // The cast ended without the server's OP_Action: give it a moment more, then fail.
+            phase_ = 4;
+            wait_until_ = now + std::chrono::seconds(2);
+        } else if (phase_ == 4) {
+            check(false, "cast " + spell_name(conn, id) + ": the server never landed it");
+            cast_spell_ = game::kNoSpell;
+            pause(now, 1000);
+        }
+    }
+
+    static int buff_slot(const net::GameConnection& conn, std::uint32_t id) {
+        const auto& st = conn.spell_state();
+        for (int i = 0; i < game::kBuffSlots; ++i)
+            if (st.buffs[static_cast<std::size_t>(i)].spell == id) return i;
+        return -1;
+    }
+
+    static std::string spell_name(const net::GameConnection& conn, std::uint32_t id) {
+        const auto* s = conn.spell_table().get(id);
+        return (s ? s->name : "spell") + " (" + std::to_string(id) + ")";
+    }
+
+    static void print_buffs(const net::GameConnection& conn) {
+        const auto& st = conn.spell_state();
+        std::printf("  QUEST: buffs:");
+        for (int i = 0; i < game::kBuffSlots; ++i)
+            if (!st.buffs[static_cast<std::size_t>(i)].empty())
+                std::printf(" [%d %s]", i, spell_name(conn, st.buffs[static_cast<std::size_t>(i)].spell).c_str());
+        std::printf("\n");
+    }
+
+    static int step_seconds(const std::string& cmd, const std::string& rest) {
+        if (cmd == "zone" || cmd == "memorize") return 60;
+        if (cmd == "kill") return 30 * std::max(1, count_arg(rest));
+        if (cmd == "melee") return 120;
+        if (cmd == "fade") return count_arg(rest) + 5;
+        return 20;
     }
 
     // #goto beside the nearest living spawn named NAME (case-insensitive; '_' or ' '); remembers it in target_.
@@ -588,6 +931,7 @@ private:
     void next() {
         if (index_ < lines_.size()) ++index_;
         phase_ = 0;
+        reapproached_ = false;
     }
 
     void finish_run() {
@@ -618,9 +962,19 @@ private:
     int phase_ = 0;
     int kills_ = 0;
     int passed_ = 0, failed_ = 0;
-    bool active_ = false, done_ = false, handler_set_ = false, moved_ = false, zoned_ = false;
+    bool active_ = false, done_ = false, handler_set_ = false, moved_ = false, zoned_ = false, reapproached_ = false;
     bool stop_on_fail_ = false, failed_last_ = false;
     std::uint32_t target_ = 0, corpse_ = 0, object_ = 0;
+    std::uint32_t player_ = 0;                     // our spawn id as OP_Damage and OP_Action carry it
+    int hits_ = 0, misses_ = 0, lowest_hp_ = 100;  // melee: OP_Damage from us to the target, its lowest HP %
+    std::int64_t damage_ = 0, spell_damage_ = 0;
+    int book_slot_ = -1, forget_gem_ = -1;         // memorize
+    std::uint32_t cast_spell_ = game::kNoSpell;    // cast: the spell whose OP_Action we wait for
+    bool landed_ = false;
+    std::uint32_t fade_spell_ = game::kNoSpell;    // fade: the buff whose OP_Buff fade we wait for
+    bool server_faded_ = false, dropped_early_ = false;
+    std::string cast_trouble_;                     // cast: an interrupt or fizzle line
+    Clock::time_point mem_started_{};
     glm::vec3 pos_{0.0f};
     Clock::time_point wait_until_{}, started_{}, since_{};
 };

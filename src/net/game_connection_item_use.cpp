@@ -20,6 +20,7 @@
 #include "game/mechanics/character.h"
 #include "game/server_ext.h"
 #include "game/slash_commands.h"
+#include "net/use_item.h"
 #include "net/item_packets.h"
 
 namespace hailstone::net {
@@ -309,28 +310,61 @@ void GameConnection::handle_apply_poison(const ApplyPoison& r) {
 }
 
 void GameConnection::useitem_command(const std::string& args) {
-    // Cmd_useitem @0x479200: /useitem <slot 0..32> [index in the bag], numbers only.
-    std::string_view rest = args;
-    const std::string a = game::next_cmd_arg(rest);
-    const bool numeric = !a.empty() && std::all_of(a.begin(), a.end(), [](char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; });
-    if (!numeric) {
+    // Cmd_useitem @0x479200: /useitem <slot 0..32> [index in the bag], numbers only. Hailstone adds MacroQuest's name
+    // form and an item id (net/use_item.h); the slot form is the original's.
+    const UseItemLine line = parse_use_item(args);
+    // MacroQuest's name form: the first carried item (worn, the general slots and their bags, in slot order, as
+    // find_possession takes them) whose name matches.
+    std::optional<ItemSlot> named;
+    if (line.kind == UseItemLine::Kind::Name)
+        for (std::int16_t slot = 0; slot <= kSlotGeneral10 && !named; ++slot) {
+            const Item* item = inventory_.at(ItemSlot::possessions(slot));
+            if (!item) continue;
+            if (use_item_name_matches(item->name, line.name, line.exact)) {
+                named = ItemSlot::possessions(slot);
+                break;
+            }
+            for (const auto& c : item->contents)
+                if (use_item_name_matches(c.item.name, line.name, line.exact)) {
+                    named = ItemSlot::possessions(slot, static_cast<std::int16_t>(c.index));
+                    break;
+                }
+        }
+    // No item of that name: RoF2's usage text when the name was not quoted (any word but a number had it before the
+    // name form, "-1" too); nothing for a quoted one, as in MacroQuest.
+    if (line.kind == UseItemLine::Kind::Usage || (line.kind == UseItemLine::Kind::Name && !named && !line.exact)) {
         static constexpr const char* kSlots[] = {"Charm", "Left Ear", "Head", "Face", "Right Ear", "Neck", "Shoulders",
                                                  "Arms", "Back", "Left Wrist", "Right Wrist", "Range", "Hands",
                                                  "Primary", "Secondary", "Left Ring", "Right Ring", "Chest", "Legs",
                                                  "Feet", "Waist", "Power Source", "Ammo"};
         chat(ChatEvent::Kind::System, "usage: /useitem <slot> <subindex>");
         chat(ChatEvent::Kind::System, "slot definitions:");
-        for (int i = 0; i < 23; ++i) chat(ChatEvent::Kind::System, std::format("       {} = {}", kSlots[i], i));
-        for (int i = 23; i < 33; ++i) chat(ChatEvent::Kind::System, std::format("       Bag Slot {} = {}", i - 22, i));
+        for (int i = 0; i < kSlotGeneral1; ++i) chat(ChatEvent::Kind::System, std::format("       {} = {}", kSlots[i], i));
+        for (int i = kSlotGeneral1; i <= kSlotGeneral10; ++i)
+            chat(ChatEvent::Kind::System, std::format("       Bag Slot {} = {}", i - kSlotGeneral1 + 1, i));
         chat(ChatEvent::Kind::System,
              "subindex: Only used if slot is a bag. Bag slot number starting at 0, left to right, top to bottom.");
+        chat(ChatEvent::Kind::System, "or: /useitem <item name>, /useitem \"<item name>\" or /useitem <item id>");
         return;
     }
-    const unsigned long n = std::strtoul(a.c_str(), nullptr, 10);
-    if (n > 0x20) {
+    if (line.kind == UseItemLine::Kind::Name) {
+        if (named) use_item(*named);
+        return;
+    }
+    // Hailstone's: one number past the slots (the last is kSlotGeneral10) that a carried item's id is (the original
+    // has no such form, and says the slot is invalid, as it still does when no item has that id).
+    if (line.alone && line.number > kSlotGeneral10 && line.number <= UINT32_MAX)
+        if (const auto at = find_possession(static_cast<std::uint32_t>(line.number))) {
+            use_item(*at);
+            return;
+        }
+    if (line.number > kSlotGeneral10) {
         chat(ChatEvent::Kind::System, "That is an invalid slot index.", 0, 0xf);
         return;
     }
+    const auto n = static_cast<unsigned long>(line.number);
+    std::string_view rest = args;
+    game::next_cmd_arg(rest); // the slot
     ItemSlot at = ItemSlot::possessions(static_cast<std::int16_t>(n));
     std::int32_t sub = -1;
     if (const std::string b = game::next_cmd_arg(rest); !b.empty() &&

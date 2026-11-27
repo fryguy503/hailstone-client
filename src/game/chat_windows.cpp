@@ -97,6 +97,8 @@ constexpr ChatFilterItem kFilterItems[] = {
     {M::Filters, 7, 6636},   // Shout
     {M::Filters, 8, 6637},   // Emotes
     {M::Filters, 49, 5870},  // System Messages
+    // Hailstone: the plugins' and scripts' own lines (kChatChannelCode), after System Messages
+    {M::Filters, kChatChannelCode, 0, "Plugins and Scripts"},
     // (then the Chat Channel, Melee and Spells submenus)
     {M::Filters, 11, 6641},  // Skills
     {M::Filters, 42, 3343},  // Randoms

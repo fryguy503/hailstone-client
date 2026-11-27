@@ -3,11 +3,13 @@
 #include <doctest/doctest.h>
 
 #include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -183,6 +185,60 @@ TEST_CASE("Crash log: the report's name and text") {
                                  "log: /x/logs/hailstone.log\n"
                                  "last log lines:\n"
                                  "[info] one\n[warn] two\n");
+
+    platform::format_crash_report(report, sizeof report, 0, "test", "", "", "0.7.3-beta (abc1234)", "00ff");
+    CHECK(std::string(report) == "Hailstone crash report\n"
+                                 "build: 0.7.3-beta (abc1234)\n"
+                                 "build-id: 00ff\n"
+                                 "time: 1970-01-01 00:00:00 UTC\n"
+                                 "what: test\n"
+                                 "last log lines:\n");
+}
+
+namespace {
+// An ELF note as it lies in memory: name size, descriptor size, type in the machine's order, then the padded name
+// and descriptor.
+void put_note(std::vector<unsigned char>& out, std::uint32_t type, std::string_view name,
+              const std::vector<unsigned char>& desc, std::size_t align) {
+    auto word = [&](std::uint32_t v) {
+        unsigned char b[4];
+        std::memcpy(b, &v, 4);
+        out.insert(out.end(), b, b + 4);
+    };
+    auto pad = [&] { while (out.size() % align) out.push_back(0); };
+    word(static_cast<std::uint32_t>(name.size()));
+    word(static_cast<std::uint32_t>(desc.size()));
+    word(type);
+    out.insert(out.end(), name.begin(), name.end());
+    pad();
+    out.insert(out.end(), desc.begin(), desc.end());
+    pad();
+}
+} // namespace
+
+TEST_CASE("Crash log: the GNU build ID in a note segment") {
+    const std::vector<unsigned char> id = {0xde, 0xad, 0xbe, 0xef, 0x01};
+    for (std::size_t align : {std::size_t{4}, std::size_t{8}}) {
+        std::vector<unsigned char> notes;
+        put_note(notes, 5, std::string_view("GNU\0", 4), {1, 2, 3, 4, 5, 6, 7, 8}, align); // a property note first
+        put_note(notes, 3, std::string_view("XYZ\0", 4), {9, 9}, align);                   // another vendor's type 3
+        put_note(notes, 3, std::string_view("GNU\0", 4), id, align);
+        const unsigned char* found = nullptr;
+        REQUIRE(platform::find_gnu_build_id(notes.data(), notes.size(), align, &found) == id.size());
+        CHECK(std::vector<unsigned char>(found, found + id.size()) == id);
+        // Cut short anywhere, it reads nothing past the end.
+        for (std::size_t n = 0; n < notes.size() - 7; ++n)
+            CHECK(platform::find_gnu_build_id(notes.data(), n, align, &found) == 0);
+    }
+    std::vector<unsigned char> none;
+    put_note(none, 1, std::string_view("GNU\0", 4), {1, 2, 3, 4}, 4); // NT_GNU_ABI_TAG
+    CHECK(platform::find_gnu_build_id(none.data(), none.size(), 4, nullptr) == 0);
+    std::vector<unsigned char> huge;
+    put_note(huge, 3, std::string_view("GNU\0", 4), id, 4);
+    huge[4] = 0xff; // a descriptor size past the end
+    huge[5] = 0xff;
+    CHECK(platform::find_gnu_build_id(huge.data(), huge.size(), 4, nullptr) == 0);
+    CHECK(platform::find_gnu_build_id(huge.data(), huge.size(), 3, nullptr) == 0); // not an alignment
 }
 
 namespace {
@@ -237,6 +293,11 @@ TEST_CASE("Crash log: the last log lines and the report file") {
     CHECK(text.find("build: ") != std::string::npos);
 #if defined(__linux__)
     CHECK(text.find("\nstack:\n") != std::string::npos);
+    // The tests are linked with --build-id (cmake/SeparateSymbols.cmake), as the client is.
+    const std::string build_id = platform::crash_build_id();
+    CHECK(build_id.size() >= 16);
+    CHECK(build_id.find_first_not_of("0123456789abcdef") == std::string::npos);
+    CHECK(text.find("\nbuild-id: " + build_id + "\n") != std::string::npos);
 #endif
     platform::set_crash_report_dir({});
     CHECK_FALSE(platform::write_crash_report("nowhere"));
