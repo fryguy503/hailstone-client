@@ -234,7 +234,7 @@ if ($LASTEXITCODE -ne 1 -or 'status=error' -cnotin $helperOutput) {
 Compress-Archive -Path (Join-Path $helperStage '*') -DestinationPath (Join-Path $release 'hailstone-update-helper-windows-x64.zip')
 
 Assert-ReleaseSource
-Invoke-ReleaseTool 'git' @('-C', $source, 'archive', '--format=zip', "--prefix=hailstone-$version/",
+Invoke-ReleaseTool 'git' @('-c', 'core.autocrlf=false', '-C', $source, 'archive', '--format=zip', "--prefix=hailstone-$version/",
     "--output=$(Join-Path $release "Hailstone-$version-Source.zip")", $ExpectedCommit)
 
 $files = [ordered]@{}
