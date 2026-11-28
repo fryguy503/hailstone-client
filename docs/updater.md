@@ -76,6 +76,9 @@ hailstone_update setup <scratch-dir> <scratch-dir> <feed-url> <public-key-hex> 0
   signed `bastion-channel` record must match. Each channel can promote the same ZIP with its own signature. For an
   existing installation supplied with version `0.0.0`, `check` reports `recognized` only if `hailstone.exe` matches
   the current manifest's signed `bastion-runtime-sha256` record.
+- Bastion's Production launcher can use the signed `hailstone-update.txt` on the public `bastion-production-feed`
+  branch of `fryguy503/hailstone-client`. Setup and runtime ZIP downloads use the matching versioned GitHub Release
+  and remain bound to the signed manifest hashes. The dedicated feed is independent of GitHub Latest.
 - `apply` checks the feed again and downloads the selected package from beside the feed. It verifies the signature,
   package size and hashes of the package and extracted executable before changing files. It returns `installed`,
   `current` or `busy`. Installation defers while a

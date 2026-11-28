@@ -41,6 +41,8 @@ std::string_view scheme_of(const std::string& url) {
 
 bool is_2xx(int status) { return status >= 200 && status < 300; }
 
+bool is_redirect(int status) { return status == 301 || status == 302 || status == 303 || status == 307 || status == 308; }
+
 std::string status_error(int status) { return "the server answered HTTP " + std::to_string(status); }
 
 } // namespace
@@ -55,6 +57,15 @@ std::wstring widen(const std::string& s) {
     if (n <= 0) return {};
     std::wstring out(static_cast<std::size_t>(n), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), out.data(), n);
+    return out;
+}
+
+std::string narrow(std::wstring_view s) {
+    if (s.empty()) return {};
+    int n = WideCharToMultiByte(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return {};
+    std::string out(static_cast<std::size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), out.data(), n, nullptr, nullptr);
     return out;
 }
 
@@ -212,6 +223,7 @@ HttpGetResult http_get(const std::string& url, const HttpGetOptions& options,
         if (request.finish()) {
             res.ok = false;
             res.error = "cancelled";
+            res.redirect_url.clear();
         }
         return res;
     };
@@ -226,6 +238,13 @@ HttpGetResult http_get(const std::string& url, const HttpGetOptions& options,
         return ok != FALSE;
     };
     // WinHTTP follows redirects itself and by default never from https to http (WINHTTP_OPTION_REDIRECT_POLICY).
+    if (!options.follow_redirects) {
+        DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+        if (!winhttp("WinHttpSetOption", [&](HINTERNET h) {
+                return WinHttpSetOption(h, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof(policy));
+            }))
+            return done(r);
+    }
     if (!winhttp("WinHttpSendRequest", [](HINTERNET h) {
             return WinHttpSendRequest(h, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
         }))
@@ -241,6 +260,23 @@ HttpGetResult http_get(const std::string& url, const HttpGetOptions& options,
     r.status = static_cast<int>(status);
     if (!is_2xx(r.status)) {
         r.error = status_error(r.status);
+        if (!options.follow_redirects && is_redirect(r.status)) {
+            DWORD location_size = 0;
+            BOOL ignored = FALSE;
+            if (!request.call([&](HINTERNET h) {
+                    return WinHttpQueryHeaders(h, WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX,
+                                               nullptr, &location_size, WINHTTP_NO_HEADER_INDEX);
+                }, &ignored))
+                return done(r);
+            if (location_size > 0) {
+                std::wstring location(location_size / sizeof(wchar_t), L'\0');
+                if (winhttp("WinHttpQueryHeaders", [&](HINTERNET h) {
+                        return WinHttpQueryHeaders(h, WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX,
+                                                   location.data(), &location_size, WINHTTP_NO_HEADER_INDEX);
+                    }))
+                    r.redirect_url = narrow(std::wstring_view(location).substr(0, location_size / sizeof(wchar_t)));
+            }
+        }
         return done(r);
     }
     if (options.allow_url) {
@@ -252,21 +288,14 @@ HttpGetResult http_get(const std::string& url, const HttpGetOptions& options,
             return done(r);
         std::wstring final_url(url_size / sizeof(wchar_t) + 1, L'\0');
         url_size = static_cast<DWORD>(final_url.size() * sizeof(wchar_t));
-        std::string narrow;
+        std::string address;
         if (winhttp("WinHttpQueryOption", [&](HINTERNET h) {
                 return WinHttpQueryOption(h, WINHTTP_OPTION_URL, final_url.data(), &url_size);
             })) {
-            final_url.resize(url_size / sizeof(wchar_t));
-            int n = WideCharToMultiByte(CP_UTF8, 0, final_url.data(), static_cast<int>(final_url.size()), nullptr, 0,
-                                        nullptr, nullptr);
-            if (n > 0) {
-                narrow.resize(static_cast<std::size_t>(n));
-                WideCharToMultiByte(CP_UTF8, 0, final_url.data(), static_cast<int>(final_url.size()), narrow.data(), n,
-                                    nullptr, nullptr);
-            }
+            address = narrow(std::wstring_view(final_url).substr(0, url_size / sizeof(wchar_t)));
         }
         if (r.error == "cancelled") return done(r);
-        if (narrow.empty() || !options.allow_url(narrow)) {
+        if (address.empty() || !options.allow_url(address)) {
             r.error = "the download was sent to an address it may not come from";
             return done(r);
         }
@@ -349,6 +378,7 @@ constexpr int kOptProtocolsStr = 10318;      // CURLOPT_PROTOCOLS_STR (STRINGPOI
 constexpr int kOptRedirProtocolsStr = 10319; // CURLOPT_REDIR_PROTOCOLS_STR (STRINGPOINT, 319)
 constexpr int kInfoResponseCode = 0x200002;  // CURLINFO_RESPONSE_CODE (CURLINFO_LONG 0x200000 + 2)
 constexpr int kInfoEffectiveUrl = 0x100001;  // CURLINFO_EFFECTIVE_URL (CURLINFO_STRING 0x100000 + 1)
+constexpr int kInfoRedirectUrl = 0x10001f;   // CURLINFO_REDIRECT_URL (CURLINFO_STRING 0x100000 + 31)
 constexpr long kProtoHttp = 1L << 0;         // CURLPROTO_HTTP
 constexpr long kProtoHttps = 1L << 1;        // CURLPROTO_HTTPS
 constexpr long kGlobalDefault = 3;           // CURL_GLOBAL_DEFAULT (CURL_GLOBAL_SSL | CURL_GLOBAL_WINSOCK)
@@ -429,9 +459,19 @@ struct Transfer {
 std::size_t on_write(char* data, std::size_t size, std::size_t count, void* user) {
     auto& t = *static_cast<Transfer*>(user);
     const std::size_t n = size * count;
-    // A redirect's own body never reaches here; any other answer that is not 2xx stops the transfer.
+    // A followed redirect's body never reaches here. Discard a small unfollowed redirect's body so libcurl
+    // can finish the response and report its redirect URL without giving those bytes to the caller.
     long status = 0;
     t.c->easy_getinfo(t.h, kInfoResponseCode, &status);
+    if (!t.options->follow_redirects && is_redirect(static_cast<int>(status))) {
+        constexpr std::uint64_t max_redirect_body = 64 * 1024;
+        if (n > max_redirect_body - t.received) {
+            t.too_large = true;
+            return 0;
+        }
+        t.received += n;
+        return n;
+    }
     if (!is_2xx(static_cast<int>(status))) {
         t.bad_status = true;
         return 0;
@@ -526,7 +566,7 @@ HttpGetResult http_get(const std::string& url, const HttpGetOptions& options,
     // Downloads run on several threads at once: without this libcurl may use SIGALRM for the resolver timeout,
     // which is not thread safe (the libcurl docs, CURLOPT_NOSIGNAL).
     c.easy_setopt(h, kOptNoSignal, 1L);
-    c.easy_setopt(h, kOptFollowLocation, 1L);
+    c.easy_setopt(h, kOptFollowLocation, options.follow_redirects ? 1L : 0L);
     c.easy_setopt(h, kOptMaxRedirs, 10L);
     c.easy_setopt(h, kOptConnectTimeout, static_cast<long>(std::max(1, options.connect_timeout_s)));
     c.easy_setopt(h, kOptLowSpeedLimit, 1L);
@@ -551,6 +591,10 @@ HttpGetResult http_get(const std::string& url, const HttpGetOptions& options,
         r.error = "cancelled";
     } else if (t.bad_status || (code == kOk && !is_2xx(r.status))) {
         r.error = status_error(r.status);
+        if (!options.follow_redirects && is_redirect(r.status)) {
+            char* location = nullptr;
+            if (c.easy_getinfo(h, kInfoRedirectUrl, &location) == kOk && location) r.redirect_url = location;
+        }
     } else if (code != kOk) {
         const char* text = c.easy_strerror(code);
         r.error = text ? text : "libcurl error " + std::to_string(code);

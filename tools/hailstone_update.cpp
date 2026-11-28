@@ -142,14 +142,28 @@ int run(std::string_view operation, const fs::path& install, const fs::path& dat
     // Only this run's verified manifest can select packages for installation, even if a previous feed left a
     // ready.txt with the same version. The package cache is still reused when its hashes match.
     env.reuse_staged = false;
-    const app::UpdateFetch fetch = [](const std::string& url, const auto& sink, const auto& progress, const auto& cancelled) {
+    const bool github = feed == app::kBastionGitHubFeed;
+    const app::UpdateFetch fetch = [github](const std::string& url, const auto& sink, const auto& progress, const auto& cancelled) {
         platform::HttpGetOptions options;
         options.user_agent = "HailstoneUpdate";
         options.cancelled = cancelled;
-        options.allow_url = [&url](std::string_view final_url) { return final_url == url; };
-        auto fetched = platform::http_get(url, options, sink, progress);
-        fetched.ok = fetched.ok && fetched.status == 200;
-        return fetched;
+        options.follow_redirects = !github;
+        const bool github_asset = github && url.starts_with(app::kBastionGitHubAssets);
+        std::string target = url;
+        constexpr int max_redirects = 3;
+        for (int redirects = 0; ; ++redirects) {
+            options.allow_url = [&](std::string_view final_url) {
+                return redirects == 0 ? final_url == target : app::bastion_github_asset_redirect_allowed(final_url);
+            };
+            auto fetched = platform::http_get(target, options, sink, progress);
+            fetched.ok = fetched.ok && fetched.status == 200;
+            if (!github_asset || fetched.redirect_url.empty()) return fetched;
+            if (redirects == max_redirects || !app::bastion_github_asset_redirect_allowed(fetched.redirect_url)) {
+                fetched.error = "the GitHub download was sent to an address it may not come from";
+                return fetched;
+            }
+            target = std::move(fetched.redirect_url);
+        }
     };
     env.fetch = fetch;
     app::Updater updater(std::move(env));
@@ -160,7 +174,8 @@ int run(std::string_view operation, const fs::path& install, const fs::path& dat
         return result("error", current, "The Hailstone release feed returned an older release.", current);
     if (status.state == app::UpdateState::Failed) {
         if (status.fetch_failure_status == 404)
-            return result("error", current, "The Hailstone release manifest is missing from the server.", current);
+            return result("error", current, github ? "The Hailstone Production manifest is missing from GitHub."
+                                                  : "The Hailstone release manifest is missing from the server.", current);
         if (status.fetch_failure_status)
             return result("error", current, "Could not reach the Hailstone release feed. Try again.", current);
         return result("error", current, "Could not verify the Hailstone release manifest.", current);
@@ -170,7 +185,7 @@ int run(std::string_view operation, const fs::path& install, const fs::path& dat
             return result("error", status.version, "This Hailstone release does not include Setup for Windows x64.");
         Progress progress;
         progress.report(0);
-        const std::string error = app::download_bastion_setup(install, feed, *status.bastion_setup, fetch,
+        const std::string error = app::download_bastion_setup(install, feed, status.version, *status.bastion_setup, fetch,
             [&](std::uint64_t received, std::uint64_t total) {
                 progress.report(static_cast<int>(99 * received / total));
                 return true;
@@ -204,6 +219,8 @@ int run(std::string_view operation, const fs::path& install, const fs::path& dat
     }
     updater.wait();
     status = updater.status();
+    if (github && status.state == app::UpdateState::Failed && status.fetch_failure_status == 404)
+        return result("error", current, "The Hailstone update ZIP is missing from the GitHub release.", current);
     if (status.state != app::UpdateState::Ready || !status.runtime_sha256)
         return result("error", current, "Could not download and verify the Hailstone update.", current);
     progress.report(70);
@@ -226,11 +243,9 @@ int main(int argc, char** argv) {
     if (operation != "check" && operation != "apply" && operation != "prepare" && operation != "setup")
         return result("error", {}, "Unknown Hailstone update operation.");
     const std::string feed = argv[4];
-    const std::string_view channel = feed.ends_with("/preview/hailstone-update.txt") ? "preview"
-                                   : feed.ends_with("/stable/hailstone-update.txt") ? "stable" : "";
+    const std::string_view channel = app::managed_update_channel(feed);
     const auto key = hex_decode<32>(argv[5]);
-    if (!feed.starts_with("https://") || channel.empty() || feed.find_first_of("?#\r\n\t ") != std::string::npos || !key ||
-        !parse_version(argv[6]))
+    if (channel.empty() || !key || !parse_version(argv[6]))
         return result("error", {}, "Invalid Hailstone update feed, key or release.");
     try {
         return run(operation, utf8_path(argv[2]), utf8_path(argv[3]), feed, channel, *key, argv[6]);

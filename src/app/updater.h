@@ -15,6 +15,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 
 #include "core/ed25519.h"
@@ -66,9 +67,18 @@ using UpdateFetch = std::function<platform::HttpGetResult(
     const std::string& url, const std::function<bool(std::span<const std::byte>)>& sink,
     const std::function<bool(std::uint64_t, std::uint64_t)>& progress, const std::function<bool()>& cancelled)>;
 
+inline constexpr std::string_view kBastionGitHubFeed =
+    "https://raw.githubusercontent.com/fryguy503/hailstone-client/bastion-production-feed/hailstone-update.txt";
+inline constexpr std::string_view kBastionGitHubAssets =
+    "https://github.com/fryguy503/hailstone-client/releases/download/bastion-v";
+
+std::string_view managed_update_channel(std::string_view feed);
+std::string update_asset_url(const std::string& feed, const std::string& version, const std::string& file);
+bool bastion_github_asset_redirect_allowed(std::string_view url);
+
 // Stage the installer described by an already verified Bastion manifest in a launcher-owned empty folder.
 // The final executable name appears only after its size and digest have been checked.
-std::string download_bastion_setup(const std::filesystem::path& scratch, const std::string& feed,
+std::string download_bastion_setup(const std::filesystem::path& scratch, const std::string& feed, const std::string& version,
                                    const BastionSetupPackage& setup, const UpdateFetch& fetch,
                                    const std::function<bool(std::uint64_t, std::uint64_t)>& progress);
 
@@ -108,7 +118,7 @@ struct UpdateStatus {
     std::string seen;           // FeedBehind: the newest release seen before
     std::string notes;          // its page
     std::string error;          // Failed: why
-    std::optional<int> fetch_failure_status; // only when the manifest could not be fetched (0: no HTTP response)
+    std::optional<int> fetch_failure_status; // when the manifest or an asset was not fetched (0: no HTTP response)
     bool has_package = false;   // Available: this platform has a package (else the player downloads it by hand)
     bool skipped = false;       // Available: the player chose to skip this release (update.skip)
     std::uint64_t done = 0, total = 0; // Downloading: bytes so far, all of them (0 unknown)

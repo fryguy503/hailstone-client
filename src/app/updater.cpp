@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iterator>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -38,11 +39,17 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr std::uint64_t kMaxManifestBytes = 64 * 1024;
+constexpr std::string_view kBastionPreviousStableFeed = "https://patcher.bastiongame.com/hailstone/stable/hailstone-update.txt";
 
-// The address of a file beside the manifest: GitHub's releases/latest/download/<name> is the same release's asset.
-std::string beside(const std::string& feed, const std::string& file) {
-    const auto slash = feed.rfind('/');
-    return (slash == std::string::npos ? std::string() : feed.substr(0, slash + 1)) + file;
+bool bastion_release_version(std::string_view version, const Version& parsed) {
+    return parsed.pre.size() == 2 && parsed.pre[0] == "bastion" && parsed.pre[1].front() != '0' &&
+           parsed.pre[1].find_first_not_of("0123456789") == std::string::npos && parsed.to_string() == version;
+}
+
+bool same_update_feed(std::string_view a, std::string_view b) {
+    // Carry the Production record across the move to GitHub without sharing it with Preview.
+    return a == b || (a == kBastionGitHubFeed && b == kBastionPreviousStableFeed) ||
+           (b == kBastionGitHubFeed && a == kBastionPreviousStableFeed);
 }
 
 bool newer(const std::string& release, const std::string& running) {
@@ -89,9 +96,41 @@ struct SetupStaging {
 
 } // namespace
 
-std::string download_bastion_setup(const fs::path& scratch, const std::string& feed, const BastionSetupPackage& setup,
-                                   const UpdateFetch& fetch,
+std::string_view managed_update_channel(std::string_view feed) {
+    if (!feed.starts_with("https://") || feed.find_first_of("?#\\") != std::string_view::npos ||
+        std::any_of(feed.begin(), feed.end(), [](unsigned char c) { return c <= ' ' || c == 127; }))
+        return {};
+    if (feed == kBastionGitHubFeed || feed.ends_with("/stable/hailstone-update.txt")) return "stable";
+    return feed.ends_with("/preview/hailstone-update.txt") ? "preview" : "";
+}
+
+std::string update_asset_url(const std::string& feed, const std::string& version, const std::string& file) {
+    if (feed == kBastionGitHubFeed) {
+        const auto parsed = parse_version(version);
+        // The asset name has already passed the signed manifest parser. Keep this URL construction closed to paths.
+        if (!parsed || !bastion_release_version(version, *parsed) || file.empty() || file.front() == '.' ||
+            file.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.") != std::string::npos)
+            return {};
+        return std::string(kBastionGitHubAssets) + version + "/" + file;
+    }
+    const auto slash = feed.rfind('/');
+    return (slash == std::string::npos ? std::string() : feed.substr(0, slash + 1)) + file;
+}
+
+bool bastion_github_asset_redirect_allowed(std::string_view url) {
+    constexpr std::string_view hosts[] = {
+        "https://release-assets.githubusercontent.com/", "https://objects.githubusercontent.com/"};
+    return std::any_of(std::begin(hosts), std::end(hosts), [url](std::string_view host) {
+               return url.size() > host.size() && url.starts_with(host) && url[host.size()] != '?';
+           }) &&
+           std::none_of(url.begin(), url.end(), [](unsigned char c) { return c <= ' ' || c == 127 || c == '\\' || c == '#'; });
+}
+
+std::string download_bastion_setup(const fs::path& scratch, const std::string& feed, const std::string& version,
+                                   const BastionSetupPackage& setup, const UpdateFetch& fetch,
                                    const std::function<bool(std::uint64_t, std::uint64_t)>& progress) {
+    const std::string url = update_asset_url(feed, version, setup.file);
+    if (url.empty()) return "Hailstone Setup has an invalid release download address.";
     const fs::path staging = scratch / ".setup-download";
     std::error_code ec;
     if (!platform::ordinary_path(scratch) || !fs::is_empty(scratch, ec) || ec || !platform::make_private_dir(staging))
@@ -102,7 +141,7 @@ std::string download_bastion_setup(const fs::path& scratch, const std::string& f
     std::uint64_t written = 0;
     bool oversized = false;
     const auto got = fetch(
-        beside(feed, setup.file),
+        url,
         [&](std::span<const std::byte> piece) {
             if (piece.size() > setup.size - written) {
                 oversized = true;
@@ -117,7 +156,9 @@ std::string download_bastion_setup(const fs::path& scratch, const std::string& f
         }, {});
     out.close();
     if (!out) return "Could not save the Hailstone Setup download.";
-    if (got.status == 404) return "Hailstone Setup is missing from the release server.";
+    if (got.status == 404)
+        return feed == kBastionGitHubFeed ? "Hailstone Setup is missing from the GitHub release."
+                                        : "Hailstone Setup is missing from the release server.";
     if (oversized || (got.ok && !package_file_matches(temporary.partial, setup.size, setup.sha256)))
         return "The Hailstone Setup download does not match its signed release.";
     if (!got.ok) return "Could not download Hailstone Setup. Try again.";
@@ -152,9 +193,10 @@ std::string default_project_page() { return HAILSTONE_PROJECT_PAGE; }
 
 std::string newest_seen_release(const fs::path& data_dir, const std::string& feed) {
     if (data_dir.empty()) return {};
+    std::string newest;
     for (const auto& [version, address] : read_seen(data_dir))
-        if (address == feed) return version;
-    return {};
+        if (same_update_feed(address, feed) && (newest.empty() || newer(version, newest))) newest = version;
+    return newest;
 }
 
 bool remember_seen_release(const fs::path& data_dir, const std::string& feed, const std::string& version) {
@@ -162,7 +204,7 @@ bool remember_seen_release(const fs::path& data_dir, const std::string& feed, co
         return false;
     auto seen = read_seen(data_dir);
     for (const auto& [v, address] : seen)
-        if (address == feed && !newer(version, v)) return true; // as new, or newer, is kept already
+        if (same_update_feed(address, feed) && !newer(version, v)) return true; // as new, or newer, is kept already
     std::erase_if(seen, [&](const auto& e) { return e.second == feed; });
     seen.insert(seen.begin(), {version, feed});
     if (seen.size() > kMaxSeenFeeds) seen.resize(kMaxSeenFeeds);
@@ -264,6 +306,12 @@ void Updater::run_check() {
         set(s);
         return;
     }
+    if (env_.feed == kBastionGitHubFeed && !bastion_release_version(m->version_text, m->version)) {
+        s.state = UpdateState::Failed;
+        s.error = "the update manifest does not identify a tagged Bastion release";
+        set(s);
+        return;
+    }
     s.runtime_sha256 = m->bastion_runtime_sha256;
     s.bastion_setup = m->bastion_setup;
     // A feed that went back: a signed manifest older than one it showed before (an old release's manifest served
@@ -341,6 +389,7 @@ void Updater::run_download() {
         wanted.push_back(p);
     }
     s.state = UpdateState::Downloading;
+    s.fetch_failure_status.reset();
     s.done = 0;
     s.total = 0;
     for (const auto& p : wanted) s.total += p.size;
@@ -354,6 +403,13 @@ void Updater::run_download() {
     for (const auto& p : wanted) {
         const fs::path file = dir / p.file;
         if (!package_file_ok(file, p)) {
+            const std::string url = update_asset_url(env_.feed, m->version_text, p.file);
+            if (url.empty()) {
+                s.state = UpdateState::Failed;
+                s.error = "the update manifest has an invalid release download address";
+                set(s);
+                return;
+            }
             const fs::path part = dir / (p.file + ".part");
             // Replacing scrubbed names instead of truncating an old partial also avoids following a hard link.
             fs::remove(part, ec);
@@ -368,7 +424,7 @@ void Updater::run_download() {
             std::uint64_t written = 0;
             bool too_large = false;
             auto got = env_.fetch(
-                beside(env_.feed, p.file),
+                url,
                 [&](std::span<const std::byte> piece) {
                     // The manifest's size is the limit, checked as the bytes come (the progress callback runs only
                     // about once a second): a server sending more stops at once, before it fills the disk.
@@ -393,6 +449,7 @@ void Updater::run_download() {
             if (!got.ok || !package_file_ok(part, p)) {
                 fs::remove(part, ec);
                 s.state = UpdateState::Failed;
+                if (!got.ok) s.fetch_failure_status = got.status;
                 s.error = got.ok      ? p.file + " did not match the manifest"
                           : too_large ? p.file + " is larger than the manifest says"
                                       : got.error;

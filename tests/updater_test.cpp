@@ -235,15 +235,18 @@ TEST_CASE("managed update: Setup staging publishes only the verified installer")
     const test::ScratchDir scratch("signed_setup");
     const auto& folder = scratch.path();
     Feed feed;
+    const std::string github_feed(kBastionGitHubFeed);
+    const std::string version = "0.7.4-bastion.8";
     const std::string installer = "a fake installer";
     const std::string file = "Hailstone-0.7.4-bastion.8-012abcde-Windows-x64-Setup.exe";
-    const std::string url = std::string(kBase) + file;
+    const std::string url = "https://github.com/fryguy503/hailstone-client/releases/download/bastion-v0.7.4-bastion.8/" + file;
     const auto runtime = sha256("hailstone executable");
-    feed.files[kFeed] = sign(keys, "hailstone-update 1\nversion 0.7.4-bastion.8\nbastion-channel stable\n"
+    feed.files[github_feed] = sign(keys, "hailstone-update 1\nversion 0.7.4-bastion.8\nbastion-channel stable\n"
                                   "bastion-runtime-sha256 " + to_hex(runtime) + "\nbastion-setup " +
                                   std::to_string(installer.size()) + " " + to_hex(sha256(installer)) + " " + file + "\n" +
                                   package_line("core", "core.zip", "fake runtime package"));
     auto env = env_for(folder, feed, keys, "0.0.0");
+    env.feed = github_feed;
     env.channel = "stable";
     env.auto_download = false;
     Updater updater(std::move(env));
@@ -258,19 +261,94 @@ TEST_CASE("managed update: Setup staging publishes only the verified installer")
 
     for (const auto& body : {"bad", "a fake 1nstaller", "a fake installer plus bytes"}) {
         feed.files[url] = body;
-        CHECK_FALSE(download_bastion_setup(folder, kFeed, *status.bastion_setup, feed.fetch(), {}).empty());
+        CHECK_FALSE(download_bastion_setup(folder, github_feed, version, *status.bastion_setup, feed.fetch(), {}).empty());
         CHECK(fs::is_empty(folder));
     }
     feed.files.erase(url);
-    CHECK(download_bastion_setup(folder, kFeed, *status.bastion_setup, feed.fetch(), {}) ==
-          "Hailstone Setup is missing from the release server.");
+    CHECK(download_bastion_setup(folder, github_feed, version, *status.bastion_setup, feed.fetch(), {}) ==
+          "Hailstone Setup is missing from the GitHub release.");
     CHECK(fs::is_empty(folder));
     feed.files[url] = installer;
-    CHECK(download_bastion_setup(folder, kFeed, *status.bastion_setup, feed.fetch(), {}).empty());
+    CHECK(download_bastion_setup(folder, github_feed, version, *status.bastion_setup, feed.fetch(), {}).empty());
     CHECK(get(target) == installer);
     CHECK_FALSE(fs::exists(folder / ".setup-download"));
-    CHECK_FALSE(download_bastion_setup(folder, kFeed, *status.bastion_setup, feed.fetch(), {}).empty());
+    CHECK_FALSE(download_bastion_setup(folder, github_feed, version, *status.bastion_setup, feed.fetch(), {}).empty());
     CHECK(get(target) == installer);
+}
+
+TEST_CASE("managed update: GitHub uses the signed release tag and keeps prior Production history") {
+    test::ScratchDir dir("github_production_update");
+    const auto install = dir.path() / "client";
+    const auto data = dir.path() / "profile";
+    const std::string previous = "https://patcher.bastiongame.com/hailstone/stable/hailstone-update.txt";
+    const std::string preview = "https://patcher.bastiongame.com/hailstone/preview/hailstone-update.txt";
+    const std::string github(kBastionGitHubFeed);
+    const std::string version = "0.7.4-bastion.8";
+    const std::string file = "hailstone-0.7.4-bastion.8-windows-x64.zip";
+    const std::string tagged = "https://github.com/fryguy503/hailstone-client/releases/download/bastion-v0.7.4-bastion.8/" + file;
+    CHECK(managed_update_channel(github) == "stable");
+    CHECK(managed_update_channel(previous) == "stable");
+    CHECK(managed_update_channel(preview) == "preview");
+    CHECK(managed_update_channel(github + "?ref=other").empty());
+    CHECK(managed_update_channel("https://raw.githubusercontent.com/another/hailstone-client/bastion-production-feed/hailstone-update.txt").empty());
+    CHECK(update_asset_url(previous, version, file) == "https://patcher.bastiongame.com/hailstone/stable/" + file);
+    CHECK(update_asset_url(preview, version, file) == "https://patcher.bastiongame.com/hailstone/preview/" + file);
+    CHECK(update_asset_url(github, version, file) == tagged);
+    CHECK(update_asset_url(github, "v0.7.4-bastion.8", file).empty());
+    CHECK(update_asset_url(github, "0.7.4-bastion.8+meta", file).empty());
+    CHECK(update_asset_url(github, "0.7.4-bastion.0", file).empty());
+    CHECK(update_asset_url(github, version, "../" + file).empty());
+    CHECK(update_asset_url(github, version, "core.zip?ref=other").empty());
+
+    const Keys keys;
+    Feed feed;
+    const auto zip = zip_of({{"hailstone.exe", "promoted"}});
+    const std::string digest = "bastion-runtime-sha256 " + to_hex(sha256("promoted")) + "\n";
+    auto manifest = [&](const std::string& release) {
+        return sign(keys, "hailstone-update 1\nversion " + release + "\nbastion-channel stable\n" +
+                          digest + package_line("core", file, zip));
+    };
+    auto start = [&] {
+        auto env = env_for(install, feed, keys);
+        env.data_dir = data;
+        env.feed = github;
+        env.channel = "stable";
+        Updater updater(std::move(env));
+        updater.check();
+        updater.wait();
+        return updater.status();
+    };
+    feed.files[tagged] = zip;
+    feed.files[github] = manifest("0.7.4");
+    CHECK(start().state == UpdateState::Failed);
+    REQUIRE(remember_seen_release(data, previous, "0.7.4-bastion.7"));
+    REQUIRE(remember_seen_release(data, preview, "99.0.0-bastion.1"));
+    feed.files[github] = manifest("0.7.4-bastion.6");
+    CHECK(start().state == UpdateState::FeedBehind);
+    feed.files[github] = manifest(version);
+    CHECK(start().state == UpdateState::Ready);
+    CHECK(newest_seen_release(data, previous) == version);
+    CHECK(newest_seen_release(data, github) == version);
+    CHECK(newest_seen_release(data, preview) == "99.0.0-bastion.1");
+    CHECK(get(install / "update" / "download" / file) == zip);
+}
+
+TEST_CASE("managed update: GitHub package redirects may only reach the Release asset CDN") {
+    CHECK(bastion_github_asset_redirect_allowed("https://release-assets.githubusercontent.com/github-production-release-asset/asset?sig=token"));
+    CHECK(bastion_github_asset_redirect_allowed("https://objects.githubusercontent.com/github-production-release-asset/asset"));
+    for (const char* url : {"https://release-assets.githubusercontent.com/",
+                            "https://release-assets.githubusercontent.com/?empty=1",
+                            "https://release-assets.githubusercontent.com.evil.invalid/asset",
+                            "https://release-assets.githubusercontent.com@evil.invalid/asset",
+                            "https://release-assets.githubusercontent.com:443/asset",
+                            "http://release-assets.githubusercontent.com/asset",
+                            "https://release-assets.githubusercontent.com/asset#fragment",
+                            "https://release-assets.githubusercontent.com/space here",
+                            "https://release-assets.githubusercontent.com/\\broken",
+                            "https://github.com/fryguy503/hailstone-client/releases/latest/download/file.zip",
+                            "https://raw.githubusercontent.com/fryguy503/hailstone-client/main/file.zip",
+                            "https://127.0.0.1/asset"})
+        CHECK_FALSE_MESSAGE(bastion_github_asset_redirect_allowed(url), url);
 }
 
 TEST_CASE("update install: the player's files are never an update's") {

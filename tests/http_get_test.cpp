@@ -161,3 +161,66 @@ TEST_CASE("http_get: allow_url refuses an empty answer from an address it does n
     CHECK(seen == url);
     CHECK(allowed.ok);
 }
+
+TEST_CASE("http_get: the caller can check a redirect before it is followed") {
+    if (!http_available()) return;
+    TcpListener listener;
+    std::string error;
+    REQUIRE(listener.listen(Endpoint::v4(127, 0, 0, 1, 0), error));
+    const auto endpoint = listener.local_endpoint();
+    REQUIRE(endpoint);
+    const std::string base = "http://127.0.0.1:" + std::to_string(endpoint->port);
+    std::atomic<bool> finished{false};
+    std::atomic<int> landed{0};
+    std::thread server([&] {
+        std::optional<TcpSocket> peer;
+        std::string request;
+        std::vector<std::byte> buffer(1024);
+        while (!finished) {
+            if (!peer) {
+                peer = listener.accept();
+                request.clear();
+            }
+            if (peer)
+                if (auto n = peer->recv(buffer); n && *n) {
+                    request.append(reinterpret_cast<const char*>(buffer.data()), *n);
+                    if (request.find("\r\n\r\n") != std::string::npos) {
+                        const bool redirected = request.starts_with("GET /landing ");
+                        if (redirected) ++landed;
+                        const std::string answer = redirected
+                            ? "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                            : "HTTP/1.1 302 Found\r\nLocation: " + base +
+                              "/landing\r\nContent-Length: 5\r\nConnection: close\r\n\r\nmoved";
+                        peer->send(std::as_bytes(std::span(answer.data(), answer.size())));
+                        peer.reset();
+                    }
+                }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    });
+    HttpGetOptions options;
+    options.user_agent = "hailstone-test";
+    options.stall_timeout_s = 10;
+    options.follow_redirects = false;
+    std::string body;
+    auto sink = [&](std::span<const std::byte> piece) {
+        body.append(reinterpret_cast<const char*>(piece.data()), piece.size());
+        return true;
+    };
+    const auto redirect = http_get(base + "/redirect", options, sink, {});
+    const int requests_before_follow = landed.load();
+    const std::string first_body = body;
+    options.follow_redirects = true;
+    const auto followed = http_get(base + "/redirect", options, sink, {});
+    finished = true;
+    server.join();
+    CHECK_FALSE(redirect.ok);
+    CHECK(redirect.status == 302);
+    CHECK(redirect.redirect_url == base + "/landing");
+    CHECK(requests_before_follow == 0);
+    CHECK(first_body.empty());
+    CHECK(followed.ok);
+    CHECK(followed.redirect_url.empty());
+    CHECK(landed == 1);
+    CHECK(body == "ok");
+}

@@ -27,17 +27,19 @@ struct HttpGetOptions {
     // on the network too, not only between reads (WinHTTP's calls block until their timeouts): true ends it as
     // cancelled. Empty: only `sink` and `progress` cancel. It must be safe to call from any thread (an atomic flag).
     std::function<bool()> cancelled;
+    bool follow_redirects = true;   // false: return the first redirect and let the caller vet its destination
 };
 
 struct HttpGetResult {
     bool ok = false;    // a 2xx answer read to the end
     int status = 0;     // the final HTTP status (0: none)
     std::string error;  // why not, for the log and the player
+    std::string redirect_url; // Location of an unfollowed 301, 302, 303, 307 or 308 response, if present
 };
 
 // Blocking: call from a worker thread. `sink` gets the body in pieces; returning false cancels. `progress` (may be
-// empty) gets (received, total or 0 when unknown); returning false cancels. Redirects are followed (GitHub's
-// release links redirect to another host), at most 10, https only once started on https. Only http:// and
+// empty) gets (received, total or 0 when unknown); returning false cancels. Redirects are followed by default
+// (GitHub's release links redirect to another host), at most 10, https only once started on https. Only http:// and
 // https:// addresses are fetched. A body is passed to `sink` only for a 2xx answer.
 HttpGetResult http_get(const std::string& url, const HttpGetOptions& options,
                        const std::function<bool(std::span<const std::byte>)>& sink,
