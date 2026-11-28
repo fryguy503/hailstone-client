@@ -6,7 +6,7 @@ The fork builds a Windows x64 release from a `bastion-v*` tag on `bastion-releas
 
 1. Push the `bastion-release` branch to `fryguy503/hailstone-client`. Tags must point to reviewed commits reachable from that branch. GitHub branch and tag rules can restrict who can publish or move release references.
 2. Create a dedicated Bastion Ed25519 core updater key on an offline machine. Configure the repository Actions **variable** `BASTION_HAILSTONE_UPDATE_PUBLIC_KEY` with its 64-digit public key. Configure the same key in the launcher build. Keep the secret key outside the repositories and GitHub Actions. The upstream suggested add-on index keeps its own trust key.
-3. Provision `/hailstone/preview/` and `/hailstone/stable/` on the HTTPS updater host. Serve the manifest with revalidation and versioned ZIPs with immutable caching. Disable redirects for these locations. Keep the ZIP and manifest beside one another in each channel. Limit deployment access to release maintainers.
+3. Provision `/hailstone/preview/` and `/hailstone/stable/` on the HTTPS updater host. Serve the manifest with revalidation and versioned ZIP and Setup files with immutable caching. Disable redirects for these locations. Keep the ZIP, Setup and manifest beside one another in each channel. Limit deployment access to release maintainers.
 
 The Windows candidate workflow takes no release or deployment credentials. It builds on Windows Server 2022 with MSVC v143 14.44 and SDK 10.0.26100.0. It verifies pinned glslang and Inno Setup versions and uses the client's pinned dependencies. Tags trigger candidate builds without requiring a workflow on the fork's default branch.
 
@@ -44,7 +44,7 @@ Verify the helper ZIP against the chosen candidate's SHA-256 before embedding it
 
 Give the release its own version heading in `CHANGELOG.md` so the client’s **What's new** panel displays the reviewed player notes. The managed client uses the fork as its project page and leaves core update checks to the launcher.
 
-Configure the Production launcher with the verified helper ZIP and bootstrap identity from the same candidate. Use the dedicated Bastion update public key and the `stable` channel, which selects `https://patcher.bastiongame.com/hailstone/stable/hailstone-update.txt`. Sign the selected candidate offline with `-Channel stable`. Use the verified Windows Setup from that candidate for manual installation and repair.
+Configure the Production launcher with the verified helper ZIP and bootstrap identity from the same candidate. Use the dedicated Bastion update public key and the `stable` channel, which selects `https://patcher.bastiongame.com/hailstone/stable/hailstone-update.txt`. Sign the selected candidate offline with `-Channel stable`. The launcher uses this manifest for online installation and updates. The same Windows Setup also supports manual installation and repair.
 
 ## Sign and promote
 
@@ -57,7 +57,7 @@ Use an independently trusted `hailstone_sign` binary built from reviewed source 
     -SignTool $trustedSigner -SigningKey $offlineSecretKey -PublicKey $pinnedPublicKeyFile
 ```
 
-The signer verifies the candidate files and checks `runtimeSha256` against `hailstone.exe` inside the ZIP. It adds that hash as `bastion-runtime-sha256` to the signed channel manifest. The launcher can use this signed hash to recognize a new Setup install for enrollment because Setup ships the same executable. The publisher verifies the record against the ZIP before deployment. Transfer the signed manifest and ZIP to the deployment machine. Run the publication script on a machine with access to the updater web root and the public HTTPS endpoint:
+The signer verifies the candidate files and checks `runtimeSha256` against `hailstone.exe` inside the ZIP. It adds that hash as `bastion-runtime-sha256` and adds the Setup byte count, SHA-256 and filename as `bastion-setup`. The launcher verifies Setup before running it and uses the signed runtime hash to recognize the installed executable. Transfer the signed manifest, ZIP and Setup to the deployment machine. Run the following command on a machine with access to the updater web root and the public HTTPS endpoint.
 
 ```powershell
 ./packaging/bastion/Publish-WindowsRelease.ps1 `
@@ -66,6 +66,6 @@ The signer verifies the candidate files and checks `runtimeSha256` against `hail
     -SignTool $trustedVerifier -PublicKey $pinnedPublicKeyFile
 ```
 
-Use `-WhatIf` to verify the signed local input without deploying. A real promotion verifies the same bytes over HTTPS before replacing the manifest and checks the public manifest again afterward. Keep the approved candidate for Stable. Sign its identical package for `stable` into a fresh output directory, then publish to `stable` using the same command. A Preview signature is rejected at the Stable URI.
+Use `-WhatIf` to verify the signed local inputs without deploying. Promotion verifies the ZIP and Setup bytes over HTTPS before replacing the manifest, then checks the public manifest. Existing signed manifests without a `bastion-setup` record still support updates. Use a new release version to add Setup when a manifest for the current version is already live. Keep the approved candidate for Stable. Sign its identical package for `stable` into a fresh output directory, then publish to `stable` using the same command. A Preview signature is rejected at the Stable URI.
 
 To withdraw a candidate, stop further promotions. Release the last known-good code with a higher Bastion version if players already received the withdrawn version. Keep older immutable package bytes available for clients completing a staged download. The launcher and client updater handle local installation recovery.

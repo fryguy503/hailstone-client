@@ -16,6 +16,7 @@
 #include "core/version.h"
 #include "platform/crash_log.h"
 #include "platform/durable_file.h"
+#include "platform/private_file.h"
 
 #ifndef HAILSTONE_UPDATE_FEED
 #define HAILSTONE_UPDATE_FEED ""
@@ -76,7 +77,54 @@ std::vector<std::pair<std::string, std::string>> read_seen(const fs::path& data_
 
 bool package_file_ok(const fs::path& path, const UpdatePackage& p) { return package_file_matches(path, p.size, p.sha256); }
 
+struct SetupStaging {
+    fs::path directory;
+    fs::path partial;
+    ~SetupStaging() {
+        std::error_code ec;
+        fs::remove(partial, ec);
+        fs::remove(directory, ec);
+    }
+};
+
 } // namespace
+
+std::string download_bastion_setup(const fs::path& scratch, const std::string& feed, const BastionSetupPackage& setup,
+                                   const UpdateFetch& fetch,
+                                   const std::function<bool(std::uint64_t, std::uint64_t)>& progress) {
+    const fs::path staging = scratch / ".setup-download";
+    std::error_code ec;
+    if (!platform::ordinary_path(scratch) || !fs::is_empty(scratch, ec) || ec || !platform::make_private_dir(staging))
+        return "The Hailstone Setup download folder is unavailable.";
+    const SetupStaging temporary{staging, staging / "Setup.part"};
+    std::ofstream out(temporary.partial, std::ios::binary);
+    if (!out) return "Could not save the Hailstone Setup download.";
+    std::uint64_t written = 0;
+    bool oversized = false;
+    const auto got = fetch(
+        beside(feed, setup.file),
+        [&](std::span<const std::byte> piece) {
+            if (piece.size() > setup.size - written) {
+                oversized = true;
+                return false;
+            }
+            out.write(reinterpret_cast<const char*>(piece.data()), static_cast<std::streamsize>(piece.size()));
+            written += piece.size();
+            return static_cast<bool>(out);
+        },
+        [&](std::uint64_t received, std::uint64_t) {
+            return received <= setup.size && (!progress || progress(received, setup.size));
+        }, {});
+    out.close();
+    if (!out) return "Could not save the Hailstone Setup download.";
+    if (got.status == 404) return "Hailstone Setup is missing from the release server.";
+    if (oversized || (got.ok && !package_file_matches(temporary.partial, setup.size, setup.sha256)))
+        return "The Hailstone Setup download does not match its signed release.";
+    if (!got.ok) return "Could not download Hailstone Setup. Try again.";
+    if (!platform::sync_file(temporary.partial) || !platform::create_file_synced(temporary.partial, scratch / "Hailstone-Setup.exe", ec))
+        return "Could not save the verified Hailstone Setup download.";
+    return {};
+}
 
 UpdateSettings update_settings(const Config& config) {
     UpdateSettings s;
@@ -195,6 +243,7 @@ void Updater::run_check() {
     if (cancel_) return;
     if (!got.ok) {
         s.state = UpdateState::Failed;
+        s.fetch_failure_status = got.status;
         s.error = got.status == 404 ? "no release has an update manifest yet" : got.error;
         log::warn("Update check: {}", s.error);
         set(s);
@@ -216,6 +265,7 @@ void Updater::run_check() {
         return;
     }
     s.runtime_sha256 = m->bastion_runtime_sha256;
+    s.bastion_setup = m->bastion_setup;
     // A feed that went back: a signed manifest older than one it showed before (an old release's manifest served
     // again). newer() would refuse it anyway; what this adds is that the corner does not say "Up to date".
     if (const std::string seen = newest_seen_release(env_.data_dir, env_.feed); newer(seen, m->version_text)) {

@@ -37,6 +37,12 @@ struct UpdatePackage {
     std::string needs;     // a folder of the install it is for ("" always installed)
 };
 
+struct BastionSetupPackage {
+    std::uint64_t size = 0;
+    Sha256Digest sha256{};
+    std::string file;
+};
+
 struct UpdateManifest {
     Version version;
     std::string version_text; // as written
@@ -44,6 +50,7 @@ struct UpdateManifest {
     std::vector<UpdatePackage> packages;
     std::string bastion_channel; // a signed downstream promotion record ("" for upstream releases)
     std::optional<Sha256Digest> bastion_runtime_sha256;
+    std::optional<BastionSetupPackage> bastion_setup;
 };
 
 // The manifest in `text` when its signature is `key`'s and it parses; nullopt with *error why not.

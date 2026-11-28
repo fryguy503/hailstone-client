@@ -66,6 +66,12 @@ using UpdateFetch = std::function<platform::HttpGetResult(
     const std::string& url, const std::function<bool(std::span<const std::byte>)>& sink,
     const std::function<bool(std::uint64_t, std::uint64_t)>& progress, const std::function<bool()>& cancelled)>;
 
+// Stage the installer described by an already verified Bastion manifest in a launcher-owned empty folder.
+// The final executable name appears only after its size and digest have been checked.
+std::string download_bastion_setup(const std::filesystem::path& scratch, const std::string& feed,
+                                   const BastionSetupPackage& setup, const UpdateFetch& fetch,
+                                   const std::function<bool(std::uint64_t, std::uint64_t)>& progress);
+
 struct UpdaterEnv {
     std::filesystem::path install_dir;
     std::filesystem::path data_dir; // where the newest release seen is kept (platform::data_dir(); "" not kept)
@@ -102,11 +108,13 @@ struct UpdateStatus {
     std::string seen;           // FeedBehind: the newest release seen before
     std::string notes;          // its page
     std::string error;          // Failed: why
+    std::optional<int> fetch_failure_status; // only when the manifest could not be fetched (0: no HTTP response)
     bool has_package = false;   // Available: this platform has a package (else the player downloads it by hand)
     bool skipped = false;       // Available: the player chose to skip this release (update.skip)
     std::uint64_t done = 0, total = 0; // Downloading: bytes so far, all of them (0 unknown)
     std::vector<UpdatePackage> verified_packages; // packages selected from this check's signed manifest, when Ready
     std::optional<Sha256Digest> runtime_sha256; // a promoted Windows executable's signed digest
+    std::optional<BastionSetupPackage> bastion_setup; // for the fresh-install launcher action
 };
 
 class Updater {

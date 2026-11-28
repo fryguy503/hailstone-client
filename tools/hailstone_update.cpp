@@ -87,6 +87,10 @@ private:
 
 int run(std::string_view operation, const fs::path& install, const fs::path& data,
         const std::string& feed, std::string_view channel, const Ed25519PublicKey& key, std::string current) {
+    const bool setup = operation == "setup";
+    std::error_code folder_error;
+    if (setup && (install != data || current != "0.0.0" || !fs::is_empty(install, folder_error) || folder_error))
+        return result("error", {}, "The Hailstone Setup download folder is unavailable.");
     const auto state_dir = app::update_dir(install);
     if (install == install.root_path() || data == data.root_path() || !safe_directory(install) ||
         !safe_directory(data) || game_directory(install) || game_directory(data) || !safe_update_tree(state_dir) ||
@@ -96,7 +100,7 @@ int run(std::string_view operation, const fs::path& install, const fs::path& dat
 
     // Multiple launcher processes may check concurrently. Only a single one may write download or recovery state.
     std::optional<platform::ScopedFileLock> operation_lock;
-    if (operation != "check") {
+    if (operation != "check" && !setup) {
         std::error_code ec;
         fs::create_directories(state_dir, ec);
         if (ec) return result("error", current, "The Hailstone update folder is unavailable.");
@@ -138,18 +142,45 @@ int run(std::string_view operation, const fs::path& install, const fs::path& dat
     // Only this run's verified manifest can select packages for installation, even if a previous feed left a
     // ready.txt with the same version. The package cache is still reused when its hashes match.
     env.reuse_staged = false;
-    env.fetch = [](const std::string& url, const auto& sink, const auto& progress, const auto& cancelled) {
+    const app::UpdateFetch fetch = [](const std::string& url, const auto& sink, const auto& progress, const auto& cancelled) {
         platform::HttpGetOptions options;
         options.user_agent = "HailstoneUpdate";
         options.cancelled = cancelled;
-        return platform::http_get(url, options, sink, progress);
+        options.allow_url = [&url](std::string_view final_url) { return final_url == url; };
+        auto fetched = platform::http_get(url, options, sink, progress);
+        fetched.ok = fetched.ok && fetched.status == 200;
+        return fetched;
     };
+    env.fetch = fetch;
     app::Updater updater(std::move(env));
     updater.check();
     updater.wait();
     auto status = updater.status();
     if (status.state == app::UpdateState::FeedBehind)
         return result("error", current, "The Hailstone release feed returned an older release.", current);
+    if (status.state == app::UpdateState::Failed) {
+        if (status.fetch_failure_status == 404)
+            return result("error", current, "The Hailstone release manifest is missing from the server.", current);
+        if (status.fetch_failure_status)
+            return result("error", current, "Could not reach the Hailstone release feed. Try again.", current);
+        return result("error", current, "Could not verify the Hailstone release manifest.", current);
+    }
+    if (setup) {
+        if (status.state != app::UpdateState::Available || !status.has_package || !status.runtime_sha256 || !status.bastion_setup)
+            return result("error", status.version, "This Hailstone release does not include Setup for Windows x64.");
+        Progress progress;
+        progress.report(0);
+        const std::string error = app::download_bastion_setup(install, feed, *status.bastion_setup, fetch,
+            [&](std::uint64_t received, std::uint64_t total) {
+                progress.report(static_cast<int>(99 * received / total));
+                return true;
+            });
+        if (!error.empty()) return result("error", status.version, error);
+        progress.report(100);
+        line("setup_sha256", to_hex(status.bastion_setup->sha256));
+        line("runtime_sha256", to_hex(*status.runtime_sha256));
+        return result("setup_ready", status.version);
+    }
     if (recognize) {
         if (status.state != app::UpdateState::Available || !status.has_package || !status.runtime_sha256 ||
             !app::runtime_file_matches(executable, *status.runtime_sha256))
@@ -159,7 +190,7 @@ int run(std::string_view operation, const fs::path& install, const fs::path& dat
     if (status.state == app::UpdateState::UpToDate || status.skipped)
         return result("current", current, {}, current);
     if (status.state != app::UpdateState::Available || !status.has_package)
-        return result("error", current, "Could not verify a Hailstone update for Windows x64.", current);
+        return result("error", current, "This Hailstone release does not include an update for Windows x64.", current);
     if (operation == "check") return result("available", status.version, {}, current);
 
     Progress progress;
@@ -192,7 +223,7 @@ int main(int argc, char** argv) {
     if (argc != 7)
         return result("error", {}, "Expected an operation, install folder, data folder, feed, key and release.");
     const std::string_view operation = argv[1];
-    if (operation != "check" && operation != "apply" && operation != "prepare")
+    if (operation != "check" && operation != "apply" && operation != "prepare" && operation != "setup")
         return result("error", {}, "Unknown Hailstone update operation.");
     const std::string feed = argv[4];
     const std::string_view channel = feed.ends_with("/preview/hailstone-update.txt") ? "preview"

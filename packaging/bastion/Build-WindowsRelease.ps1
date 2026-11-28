@@ -294,13 +294,14 @@ Invoke-ReleaseTool $Python @((Join-Path $source 'tools/make_update.py'), '--vers
 $artwork = Join-Path $output 'artwork'
 & (Join-Path $PSScriptRoot 'installer/New-WizardArtwork.ps1') -SourceRoot $stage -OutputDirectory $artwork
 $setupIcon = Join-Path $source 'cmake/windows/hailstone.ico'
-$setupName = "Hailstone-$version-$revision-Windows-x64-Setup"
+$setupFile = Get-BastionSetupFileName $version $ExpectedCommit
+$setupName = [IO.Path]::GetFileNameWithoutExtension($setupFile)
 $numericVersion = $version.Split('-')[0]
 Invoke-ReleaseTool $Iscc @('/Qp', "/O$release", "/F$setupName", "/DStage=$stage", "/DArtwork=$artwork",
     "/DSetupIcon=$setupIcon", "/DClientVersion=$version", "/DNumericVersion=$numericVersion", "/DBuildRevision=$revision",
     (Join-Path $PSScriptRoot 'installer/Hailstone.iss'))
 if ($TestInstaller) {
-    & (Join-Path $PSScriptRoot 'Test-InstallerUpgrade.ps1') -Installer (Join-Path $release "$setupName.exe") `
+    & (Join-Path $PSScriptRoot 'Test-InstallerUpgrade.ps1') -Installer (Join-Path $release $setupFile) `
         -Stage $stage -ExpectedDisplayVersion $version -LogDirectory $output
 }
 

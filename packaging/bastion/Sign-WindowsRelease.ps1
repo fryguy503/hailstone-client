@@ -46,9 +46,16 @@ if (!$candidate.files.Contains('hailstone-update.txt') -or $inputLines.Count -ne
 if ($manifest.Version -cne $version -or !$candidate.files.Contains($manifest.File)) {
     throw 'The manifest and candidate record describe different builds.'
 }
-Assert-ReleasePackage $manifest $candidateDirectory
+Assert-ReleaseAsset $manifest $candidateDirectory
 $runtimeHash = Get-ReleaseRuntimeHash (Join-Path $candidateDirectory $manifest.File)
 if ($runtimeHash -cne $candidate.runtimeSha256) { throw 'The staged executable hash does not match the candidate record.' }
+$setupFile = Get-BastionSetupFileName $version $ExpectedCommit
+if (!$candidate.files.Contains($setupFile)) { throw 'The candidate is missing the approved Windows Setup.' }
+$setupPath = Get-Item -LiteralPath (Join-Path $candidateDirectory $setupFile)
+if ($setupPath.PSIsContainer -or ($setupPath.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+    $setupPath.Length -lt 1 -or $setupPath.Length -gt 1GB) { throw 'Bastion Setup must be a regular file between 1 byte and 1 GiB.' }
+$setup = [pscustomobject]@{ File = $setupFile; Size = $setupPath.Length; Sha256 = $candidate.files[$setupFile] }
+Assert-ReleaseAsset $setup $candidateDirectory
 $pinnedKey = (Get-Content -LiteralPath $publicKey -Raw).Trim().ToLowerInvariant()
 $binaryKey = (Get-Content -LiteralPath (Join-Path $candidateDirectory 'bastion-update-key.pub') -Raw).Trim().ToLowerInvariant()
 if ($pinnedKey -cnotmatch '^[0-9a-f]{64}$' -or $binaryKey -cne $pinnedKey) {
@@ -60,15 +67,22 @@ if ((Test-Path -LiteralPath $output) -and (Get-ChildItem -LiteralPath $output -F
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 $signed = Join-Path $output 'hailstone-update.txt'
 $signedLines = @($inputLines[0], $inputLines[1], $inputLines[2], "bastion-channel $Channel",
-    "bastion-runtime-sha256 $runtimeHash", $inputLines[3])
+    "bastion-runtime-sha256 $runtimeHash", "bastion-setup $($setup.Size) $($setup.Sha256) $($setup.File)", $inputLines[3])
 [IO.File]::WriteAllText($signed, ($signedLines -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
 & $signTool sign $signingKey $signed
 if ($LASTEXITCODE -ne 0) { throw 'Manifest signing failed.' }
 & $signTool verify $publicKey $signed
 if ($LASTEXITCODE -ne 0) { throw 'The signed manifest did not verify against the pinned public key.' }
-if ((Read-BastionManifest $signed -Signed).RuntimeSha256 -cne $runtimeHash) {
+$signedManifest = Read-BastionManifest $signed -Signed
+if ($signedManifest.RuntimeSha256 -cne $runtimeHash) {
     throw 'The signed runtime SHA-256 differs from the staged executable.'
 }
-Copy-Item -LiteralPath (Join-Path $candidateDirectory $manifest.File) -Destination $output
-Assert-ReleasePackage $manifest $output
+if ($null -eq $signedManifest.Setup -or $signedManifest.Setup.File -cne $setup.File -or
+    $signedManifest.Setup.Size -ne $setup.Size -or $signedManifest.Setup.Sha256 -cne $setup.Sha256) {
+    throw 'The signed Setup record differs from the staged Setup.'
+}
+foreach ($asset in $signedManifest, $signedManifest.Setup) {
+    Copy-Item -LiteralPath (Join-Path $candidateDirectory $asset.File) -Destination $output
+    Assert-ReleaseAsset $asset $output
+}
 Write-Host "Signed $version for $Channel. Publish the signed directory at $output."

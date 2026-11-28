@@ -11,6 +11,10 @@ function Get-BastionReleaseVersion([string]$Tag) {
     return $Matches[1]
 }
 
+function Get-BastionSetupFileName([string]$Version, [string]$Commit) {
+    return "Hailstone-$Version-$($Commit.Substring(0, 8))-Windows-x64-Setup.exe"
+}
+
 function Read-BastionManifest([string]$Path, [switch]$Signed) {
     $lines = @(Get-Content -LiteralPath $Path -Encoding utf8)
     if ($lines.Count -lt 3 -or $lines[0] -cne 'hailstone-update 1' -or
@@ -37,14 +41,26 @@ function Read-BastionManifest([string]$Path, [switch]$Signed) {
     } elseif ($runtimeLines.Count -ne 0) {
         throw 'Only the signer can add the Bastion runtime SHA-256 to the manifest.'
     }
-    return [pscustomobject]@{ Version = $version; Size = $bytes; Sha256 = $sha256; File = $file; RuntimeSha256 = $runtimeHash }
+
+    $setupLines = @($lines | Where-Object { $_ -match '\A\s*bastion-setup(?:\s|\z)' })
+    $setup = $null
+    if ($setupLines.Count -gt 0) {
+        $exactVersion = [regex]::Escape($version)
+        if (!$Signed -or $setupLines.Count -ne 1 -or $setupLines[0] -cnotmatch
+            "\Abastion-setup ([1-9][0-9]{0,9}) ([0-9a-f]{64}) (Hailstone-$exactVersion-[0-9a-f]{8}-Windows-x64-Setup\.exe)\z") {
+            throw 'Expected one valid Bastion Setup record in the signed manifest.'
+        }
+        $setup = [pscustomobject]@{ Size = [long]$Matches[1]; Sha256 = $Matches[2]; File = $Matches[3] }
+        if ($setup.Size -gt 1GB) { throw 'Bastion Setup exceeds 1 GiB.' }
+    }
+    return [pscustomobject]@{ Version = $version; Size = $bytes; Sha256 = $sha256; File = $file; RuntimeSha256 = $runtimeHash; Setup = $setup }
 }
 
-function Assert-ReleasePackage($Manifest, [string]$Directory) {
-    $package = Get-Item -LiteralPath (Join-Path $Directory $Manifest.File)
-    if ($package.PSIsContainer -or ($package.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
-        $package.Length -ne $Manifest.Size -or (Get-ReleaseHash $package.FullName) -cne $Manifest.Sha256) {
-        throw 'The Windows ZIP does not match the manifest.'
+function Assert-ReleaseAsset($Asset, [string]$Directory) {
+    $file = Get-Item -LiteralPath (Join-Path $Directory $Asset.File)
+    if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+        $file.Length -ne $Asset.Size -or (Get-ReleaseHash $file.FullName) -cne $Asset.Sha256) {
+        throw "$($Asset.File) does not match the manifest."
     }
 }
 

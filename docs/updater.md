@@ -68,6 +68,7 @@ The launcher ships `hailstone_update.exe` with its runtime dependencies. Invoke 
 
 ```text
 hailstone_update <check|apply|prepare> <install-dir> <data-dir> <feed-url> <public-key-hex> <installed-release>
+hailstone_update setup <scratch-dir> <scratch-dir> <feed-url> <public-key-hex> 0.0.0
 ```
 
 - `check` verifies a Windows x64 release without writing the install or player data. It reports `available` or
@@ -84,6 +85,12 @@ hailstone_update <check|apply|prepare> <install-dir> <data-dir> <feed-url> <publ
   `busy`. Call it once before requesting a one-use ticket. The real client counts an attempt at process startup and
   confirms it on the login screen. While a Hailstone process already holds the running lock, another window does
   not count a separate attempt.
+- `setup` downloads the Windows Setup from beside the signed feed. The optional signed
+  `bastion-setup <size> <sha256> <file>` record binds the versioned Setup file to the channel release. The caller
+  supplies one empty, ordinary scratch directory for both directory arguments. The helper writes
+  `Hailstone-Setup.exe` after checking its size and digest and reports `status=setup_ready`, `version`,
+  `setup_sha256` and `runtime_sha256`. The launcher runs Setup and verifies the registered runtime against the
+  signed hash before saving its path.
 
 The helper emits `status`, `version`, `current_version`, optional `message` and optional `progress` as `key=value`
 lines. `version` is the offered release on `available`, and `current_version` is the effective installed release.

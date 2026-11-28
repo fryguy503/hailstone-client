@@ -166,6 +166,7 @@ TEST_CASE("update manifest: signature, records and refusals") {
     CHECK(m->version_text == "0.2.0-alpha");
     CHECK(m->notes == "https://example.invalid/r");
     REQUIRE(m->packages.size() == 2);
+    CHECK_FALSE(m->bastion_setup);
     CHECK(m->packages[1].needs == "plugins/nms");
     CHECK(packages_for(*m, "test-x64").size() == 2);
     CHECK(packages_for(*m, "other").empty());
@@ -200,6 +201,76 @@ TEST_CASE("update manifest: signature, records and refusals") {
     CHECK(refused("hailstone-update 1\nversion 1.0.0\n" + package_line("core", "c.zip", "a") +
                   package_line("core", "d.zip", "b")));
     CHECK(refused("hailstone-update 1\nversion 1.0.0\npackage test-x64 core 0 " + to_hex(sha256("")) + " c.zip\n"));
+}
+
+TEST_CASE("update manifest: the signed Bastion Setup is bounded and version-specific") {
+    const Keys keys;
+    const std::string header = "hailstone-update 1\nversion 0.7.4-bastion.8\n";
+    const std::string digest = to_hex(sha256("installer"));
+    const std::string file = "Hailstone-0.7.4-bastion.8-012abcde-Windows-x64-Setup.exe";
+    const std::string record = "bastion-setup 9 " + digest + " " + file + "\n";
+    const auto parsed = parse_update_manifest(sign(keys, header + record), keys.pub);
+    REQUIRE(parsed);
+    REQUIRE(parsed->bastion_setup);
+    CHECK(parsed->bastion_setup->size == 9);
+    CHECK(parsed->bastion_setup->sha256 == sha256("installer"));
+    CHECK(parsed->bastion_setup->file == file);
+    for (const auto& size : {"0", "+9", "9b", "1073741825", "99999999999999999999999999"})
+        CHECK_FALSE(parse_update_manifest(sign(keys, header + "bastion-setup " + size + " " + digest + " " + file + "\n"), keys.pub));
+    for (const auto& bad : {"../Hailstone-0.7.4-bastion.8-012abcde-Windows-x64-Setup.exe",
+                           "Hailstone-0.7.4-bastion.7-012abcde-Windows-x64-Setup.exe",
+                           "Hailstone-0.7.4-bastion.8-012abcDE-Windows-x64-Setup.exe",
+                           "Hailstone-0.7.4-bastion.8-012abc-Windows-x64-Setup.exe",
+                           "Hailstone-0.7.4-bastion.8-012abcde-Windows-x64-Setup.exe extra"})
+        CHECK_FALSE(parse_update_manifest(sign(keys, header + "bastion-setup 9 " + digest + " " + bad + "\n"), keys.pub));
+    CHECK_FALSE(parse_update_manifest(sign(keys, header + "bastion-setup 9 " + std::string(64, 'A') + " " + file + "\n"), keys.pub));
+    CHECK_FALSE(parse_update_manifest(sign(keys, header + record + record), keys.pub));
+    auto tampered = sign(keys, header + record);
+    tampered[header.size() + std::string_view("bastion-setup ").size()] = '8';
+    CHECK_FALSE(parse_update_manifest(tampered, keys.pub));
+}
+
+TEST_CASE("managed update: Setup staging publishes only the verified installer") {
+    const Keys keys;
+    const test::ScratchDir scratch("signed_setup");
+    const auto& folder = scratch.path();
+    Feed feed;
+    const std::string installer = "a fake installer";
+    const std::string file = "Hailstone-0.7.4-bastion.8-012abcde-Windows-x64-Setup.exe";
+    const std::string url = std::string(kBase) + file;
+    const auto runtime = sha256("hailstone executable");
+    feed.files[kFeed] = sign(keys, "hailstone-update 1\nversion 0.7.4-bastion.8\nbastion-channel stable\n"
+                                  "bastion-runtime-sha256 " + to_hex(runtime) + "\nbastion-setup " +
+                                  std::to_string(installer.size()) + " " + to_hex(sha256(installer)) + " " + file + "\n" +
+                                  package_line("core", "core.zip", "fake runtime package"));
+    auto env = env_for(folder, feed, keys, "0.0.0");
+    env.channel = "stable";
+    env.auto_download = false;
+    Updater updater(std::move(env));
+    updater.check();
+    updater.wait();
+    const auto status = updater.status();
+    REQUIRE(status.state == UpdateState::Available);
+    REQUIRE(status.runtime_sha256 == runtime);
+    REQUIRE(status.bastion_setup);
+    REQUIRE(fs::is_empty(folder));
+    const auto target = folder / "Hailstone-Setup.exe";
+
+    for (const auto& body : {"bad", "a fake 1nstaller", "a fake installer plus bytes"}) {
+        feed.files[url] = body;
+        CHECK_FALSE(download_bastion_setup(folder, kFeed, *status.bastion_setup, feed.fetch(), {}).empty());
+        CHECK(fs::is_empty(folder));
+    }
+    feed.files.erase(url);
+    CHECK(download_bastion_setup(folder, kFeed, *status.bastion_setup, feed.fetch(), {}) ==
+          "Hailstone Setup is missing from the release server.");
+    CHECK(fs::is_empty(folder));
+    feed.files[url] = installer;
+    CHECK(download_bastion_setup(folder, kFeed, *status.bastion_setup, feed.fetch(), {}).empty());
+    CHECK(get(target) == installer);
+    CHECK_FALSE(fs::exists(folder / ".setup-download"));
+    CHECK_FALSE(download_bastion_setup(folder, kFeed, *status.bastion_setup, feed.fetch(), {}).empty());
+    CHECK(get(target) == installer);
 }
 
 TEST_CASE("update install: the player's files are never an update's") {

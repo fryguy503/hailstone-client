@@ -65,7 +65,9 @@ if (!$channelDirectory.PSIsContainer -or ($channelDirectory.Attributes -band [IO
 $feedName = 'hailstone-update.txt'
 $manifestSource = Join-Path $signedDirectory $feedName
 $manifest = Read-PromotionManifest $manifestSource
-Assert-ReleasePackage $manifest $signedDirectory
+$assets = @($manifest)
+if ($null -ne $manifest.Setup) { $assets += $manifest.Setup }
+foreach ($asset in $assets) { Assert-ReleaseAsset $asset $signedDirectory }
 if ((Get-ReleaseRuntimeHash (Join-Path $signedDirectory $manifest.File)) -cne $manifest.RuntimeSha256) {
     throw 'The signed Bastion runtime SHA-256 does not match the Windows ZIP.'
 }
@@ -81,7 +83,7 @@ $http = [Net.Http.HttpClient]::new($handler)
 $http.DefaultRequestHeaders.CacheControl = [Net.Http.Headers.CacheControlHeaderValue]::new()
 $http.DefaultRequestHeaders.CacheControl.NoCache = $true
 $nonce = [guid]::NewGuid().ToString('N')
-$packageTemp = Join-Path $channelDirectory.FullName ".package-$nonce.tmp"
+$assetTemp = Join-Path $channelDirectory.FullName ".asset-$nonce.tmp"
 $manifestTemp = Join-Path $channelDirectory.FullName ".manifest-$nonce.tmp"
 try {
     $manifestTarget = Join-Path $channelDirectory.FullName $feedName
@@ -99,14 +101,17 @@ try {
         }
     }
 
-    $packageTarget = Join-Path $channelDirectory.FullName $manifest.File
-    if (!(Test-Path -LiteralPath $packageTarget)) {
-        [IO.File]::Copy((Join-Path $signedDirectory $manifest.File), $packageTemp)
-        if ((Get-ReleaseHash $packageTemp) -cne $manifest.Sha256) { throw 'Staged package SHA-256 mismatch.' }
-        [IO.File]::Move($packageTemp, $packageTarget)
+    foreach ($asset in $assets) {
+        $assetTarget = Join-Path $channelDirectory.FullName $asset.File
+        if (!(Test-Path -LiteralPath $assetTarget)) {
+            [IO.File]::Copy((Join-Path $signedDirectory $asset.File), $assetTemp)
+            if ((Get-Item -LiteralPath $assetTemp).Length -ne $asset.Size -or
+                (Get-ReleaseHash $assetTemp) -cne $asset.Sha256) { throw "Staged $($asset.File) does not match the manifest." }
+            [IO.File]::Move($assetTemp, $assetTarget)
+        }
+        Assert-ReleaseAsset $asset $channelDirectory.FullName
+        Assert-PublicHash $asset.File $asset.Sha256 $asset.Size
     }
-    Assert-ReleasePackage $manifest $channelDirectory.FullName
-    Assert-PublicHash $manifest.File $manifest.Sha256 $manifest.Size
 
     [IO.File]::Copy($manifestSource, $manifestTemp)
     if ((Get-ReleaseHash $manifestTemp) -cne $manifestHash) { throw 'Staged manifest SHA-256 mismatch.' }
@@ -114,7 +119,7 @@ try {
     Assert-PublicHash $feedName $manifestHash (Get-Item -LiteralPath $manifestTarget).Length
     Write-Host "$Channel serves signed Hailstone $($manifest.Version)."
 } finally {
-    foreach ($file in $packageTemp, $manifestTemp) { [IO.File]::Delete($file) }
+    foreach ($file in $assetTemp, $manifestTemp) { [IO.File]::Delete($file) }
     $http.Dispose()
     $guard.Dispose()
 }

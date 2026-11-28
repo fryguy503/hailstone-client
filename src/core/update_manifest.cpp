@@ -8,6 +8,7 @@ namespace {
 
 constexpr std::size_t kMaxManifest = 64 * 1024;
 constexpr std::size_t kMaxPackages = 256;
+constexpr std::uint64_t kMaxSetupBytes = 1024 * 1024 * 1024;
 constexpr std::string_view kSignature = "signature ";
 
 std::vector<std::string_view> fields(std::string_view line) {
@@ -38,6 +39,18 @@ bool file_name(std::string_view s) {
               c == '.'))
             return false;
     return true;
+}
+
+bool setup_file_name(std::string_view file, const std::string& version) {
+    const std::string prefix = "Hailstone-" + version + "-";
+    constexpr std::string_view suffix = "-Windows-x64-Setup.exe";
+    constexpr std::size_t commit_length = 8;
+    if (!file_name(file) || !file.starts_with(prefix) || !file.ends_with(suffix) ||
+        file.size() != prefix.size() + commit_length + suffix.size())
+        return false;
+    const auto commit_text = file.substr(prefix.size(), commit_length);
+    const auto commit = hex_decode<commit_length / 2>(commit_text);
+    return commit && hex_encode(*commit) == commit_text;
 }
 
 // A relative folder of the install ("plugins/nms"): '/'-separated plain names, no "." or "..".
@@ -144,6 +157,17 @@ std::optional<UpdateManifest> parse_update_manifest(std::string_view text, const
             if (!digest || m.bastion_runtime_sha256)
                 return fail(error, where + " has a bad runtime digest");
             m.bastion_runtime_sha256 = digest;
+        } else if (f[0] == "bastion-setup") {
+            if (f.size() != 4 || m.bastion_setup) return fail(error, where + " has a bad Setup record");
+            BastionSetupPackage setup;
+            const auto [end, ec] = std::from_chars(f[1].data(), f[1].data() + f[1].size(), setup.size);
+            const auto digest = parse_sha256(f[2]);
+            if (ec != std::errc{} || end != f[1].data() + f[1].size() || setup.size == 0 || setup.size > kMaxSetupBytes ||
+                !digest || to_hex(*digest) != f[2])
+                return fail(error, where + " has a bad Setup size or digest");
+            setup.sha256 = *digest;
+            setup.file = f[3];
+            m.bastion_setup = std::move(setup);
         } else if (f[0] == "package") {
             if (f.size() != 6 && f.size() != 7) return fail(error, where + " is not a package");
             UpdatePackage p;
@@ -167,6 +191,8 @@ std::optional<UpdateManifest> parse_update_manifest(std::string_view text, const
     }
     if (!header) return fail(error, "this is not an update manifest");
     if (!version) return fail(error, "the update manifest has no version");
+    if (m.bastion_setup && !setup_file_name(m.bastion_setup->file, m.version_text))
+        return fail(error, "the Setup filename does not match the release version");
     return m;
 }
 
