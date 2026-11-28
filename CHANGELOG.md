@@ -171,6 +171,15 @@
 - **Plugin authors:** a table or function a plugin window hands the UI pack's code (an argument to a pack function, or what its callback returns or raises) now reaches the pack as a view, as what it writes into the pack's shared tables does, so a pack that keeps it and uses it later runs the plugin's code as the plugin, never with the player's authority. `next` and `rawget` see nothing through such a view, and the plugin's metamethods for `==`, `<`, `..`, calls and `tostring` no longer run from the pack's code
 - `/who` shows illusion race names such as Skeleton, Tree, and Earth Elemental where it showed a numeric race code
 
+## 0.7.4-bastion.8
+
+- The Bastion Launcher verifies signed Hailstone updates and can recover an interrupted update before the client opens. Updates keep your installation folder, profiles, and add-ons.
+- Windows Setup defaults to `C:\hailstone` for a fresh install. You can choose a different folder. When upgrading, Setup uses your registered Hailstone folder.
+- The login screen and in-game Help show the full Hailstone release version.
+- Characters in a box set keep their own window settings, and background characters respond faster. Plug-ins and Lua scripts stay active across zone changes.
+- Accessibility options include colour vision presets, target con labels, a minimum text size, and reduced screen effects.
+- Set chat timestamps per tab and route plug-in and script messages with their own filter. Modern Trade keeps coin counts readable, and the Tracking window stays available during camp.
+
 ## 0.7.3-beta (2026-11-23)
 
 - Warrior epic glows and other attached particle effects stay aligned as weapons, characters and objects move

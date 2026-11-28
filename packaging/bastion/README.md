@@ -40,6 +40,12 @@ The GitHub build uses MSVC 14.44. A workstation can explicitly select an install
 
 Verify the helper ZIP against the chosen candidate's SHA-256 before embedding it with `tools/build-patcher-release.ps1` in `eqemupatcher`. The `runtimeSha256` field in `release-input.json` is the hash of the `hailstone.exe` inside the ZIP and Setup. Use `version=runtimeSha256` as a launcher bootstrap identity when distributing a Setup with the same launcher release. The helper ZIP is a launcher build input and does not go on the client feed.
 
+## Prepare Production
+
+Give the release its own version heading in `CHANGELOG.md` so the client’s **What's new** panel displays the reviewed player notes. The managed client uses the fork as its project page and leaves core update checks to the launcher.
+
+Configure the Production launcher with the verified helper ZIP and bootstrap identity from the same candidate. Use the dedicated Bastion update public key and the `stable` channel, which selects `https://patcher.bastiongame.com/hailstone/stable/hailstone-update.txt`. Sign the selected candidate offline with `-Channel stable`. Use the verified Windows Setup from that candidate for manual installation and repair.
+
 ## Sign and promote
 
 Use an independently trusted `hailstone_sign` binary built from reviewed source on the offline signing system. Confirm the Actions run and candidate commit before signing. Publish release notes, Setup and corresponding source on the exact GitHub release tag when those assets are ready for their intended audience. The Bastion channel is published independently of GitHub Latest.
