@@ -1,0 +1,8 @@
+hailstone-update 1
+version 0.7.4-bastion.8
+notes https://github.com/fryguy503/hailstone-client/releases/tag/bastion-v0.7.4-bastion.8
+bastion-channel stable
+bastion-runtime-sha256 6f1d8dfb1fc848bb3bcb59abfc5a3488526c06da8318238a8bc8ad0bb378510f
+bastion-setup 179969596 4fa5224e37c7dbb9ddd408ede2a1e465016a8e8483aa9f7341e2ead5094adb79 Hailstone-0.7.4-bastion.8-1fd077c9-Windows-x64-Setup.exe
+package windows-x64 core 198652235 1ad01aaab8bc8067ee57b19d50a76a7746e8c35942de1acc56ebf680a753ff5c hailstone-0.7.4-bastion.8-windows-x64.zip
+signature 4308761f81f7e04d3db511c0b5863fbe451bc8317e6e28f64821fc701fdaa2a0f39e0a1a9ea855776f049fbfb25712f84bf5226398c36a4ab06efd402cbd6001
