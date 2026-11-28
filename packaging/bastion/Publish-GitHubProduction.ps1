@@ -4,7 +4,8 @@ param(
     [Parameter(Mandatory)] [string]$SignedDirectory,
     [Parameter(Mandatory)] [ValidatePattern('\A[0-9a-f]{40}\z')] [string]$ExpectedCommit,
     [Parameter(Mandatory)] [string]$SignTool,
-    [Parameter(Mandatory)] [string]$PublicKey
+    [Parameter(Mandatory)] [string]$PublicKey,
+    [switch]$PublishDraft
 )
 
 $ErrorActionPreference = 'Stop'
@@ -107,12 +108,14 @@ $tag = "bastion-v$($manifest.Version)"
 if ($null -eq $manifest.Setup -or $manifest.Setup.File -cne (Get-BastionSetupFileName $manifest.Version $ExpectedCommit)) {
     throw 'The signed Setup must match the exact approved release commit.'
 }
-foreach ($asset in $manifest, $manifest.Setup) { Assert-ReleaseAsset $asset $signedDirectory }
+$assets = $manifest, $manifest.Setup
+foreach ($asset in $assets) { Assert-ReleaseAsset $asset $signedDirectory }
 if ((Get-ReleaseRuntimeHash (Join-Path $signedDirectory $manifest.File)) -cne $manifest.RuntimeSha256) {
     throw 'The Windows runtime ZIP does not contain the signed Bastion executable.'
 }
 $manifestHash = Get-BytesHash $bytes
-if (!$PSCmdlet.ShouldProcess($feedUri, "Promote already published GitHub release $tag")) { return }
+$action = if ($PublishDraft) { "Publish and promote GitHub release $tag" } else { "Promote GitHub release $tag" }
+if (!$PSCmdlet.ShouldProcess($feedUri, $action)) { return }
 
 $tagRef = "refs/tags/$tag"
 $refs = & git ls-remote "https://github.com/$repository.git" $tagRef "$tagRef^{}"
@@ -126,9 +129,15 @@ $tagCommit = $tagRefs["$tagRef^{}"] ?? $tagRefs[$tagRef]
 if ($tagCommit -cne $ExpectedCommit) {
     throw "GitHub tag $tag does not resolve to the approved release commit."
 }
-$release = Invoke-RepositoryApi 'GET' "releases/tags/$tag"
-if ($release.tag_name -cne $tag -or $release.draft -or $release.prerelease) {
-    throw "Publish the reviewed Production release $tag on GitHub before promoting the feed."
+$releaseJson = & gh release view $tag --repo "github.com/$repository" --json databaseId,tagName,isDraft,isPrerelease
+if ($LASTEXITCODE -ne 0) { throw "Could not find the reviewed GitHub release $tag." }
+$release = $releaseJson | ConvertFrom-Json -AsHashtable
+if ($release.tagName -cne $tag -or $release.databaseId -le 0 -or
+    $release.isDraft -isnot [bool] -or $release.isPrerelease -ne $false) {
+    throw "Expected a regular GitHub release for $tag."
+}
+if ($release.isDraft -and !$PublishDraft) {
+    throw "GitHub release $tag is a draft. Use -PublishDraft to verify and publish it before promoting the feed."
 }
 
 $ref = "refs/heads/$feedBranch"
@@ -157,14 +166,33 @@ if ($parentCommit) {
     $treeBody.base_tree = (Invoke-RepositoryApi 'GET' "git/commits/$parentCommit").tree.sha
 }
 
+if ($release.isDraft) {
+    $releasePath = "releases/$($release.databaseId)"
+    $draftAssets = @(Invoke-RepositoryApi 'GET' "$releasePath/assets?per_page=100")
+    foreach ($asset in $assets) {
+        $matching = @($draftAssets | Where-Object name -CEQ $asset.File)
+        if ($matching.Count -ne 1 -or $matching[0].state -cne 'uploaded' -or
+            $matching[0].size -ne $asset.Size -or $matching[0].digest -cne "sha256:$($asset.Sha256)") {
+            throw "Draft asset $($asset.File) does not match the signed size and SHA-256."
+        }
+    }
+    $published = Invoke-RepositoryApi 'PATCH' $releasePath @{ draft = $false; make_latest = 'false' }
+    if ($published.id -ne $release.databaseId -or $published.tag_name -cne $tag -or
+        $published.draft -ne $false -or $published.prerelease -ne $false) {
+        throw "GitHub did not confirm publication of the reviewed Production release $tag."
+    }
+}
+
+$record = @{ File = $manifestName; Size = $bytes.LongLength; Sha256 = $manifestHash }
 $handler = [Net.Http.HttpClientHandler]::new()
 $handler.AllowAutoRedirect = $false
 $client = [Net.Http.HttpClient]::new($handler)
 try {
-    foreach ($asset in $manifest, $manifest.Setup) {
+    foreach ($asset in $assets) {
         Confirm-PublicAsset $client "https://github.com/$repository/releases/download/$tag/$($asset.File)" $asset -AllowAssetRedirect
     }
     if ($parentCommit -and $sameManifest) {
+        Confirm-PublicAsset $client "$($feedUri)?published=$parentCommit" $record
         Write-Host "Production already serves the signed Hailstone $($manifest.Version) release."
         return
     }
@@ -183,7 +211,6 @@ try {
     } else {
         $null = Invoke-RepositoryApi 'POST' 'git/refs' @{ ref = $ref; sha = $commit.sha }
     }
-    $record = @{ File = $manifestName; Size = $bytes.LongLength; Sha256 = $manifestHash }
     Confirm-PublicAsset $client "$($feedUri)?published=$($commit.sha)" $record
     Write-Host "Production now serves the signed Hailstone $($manifest.Version) release from GitHub."
 } finally { $client.Dispose() }

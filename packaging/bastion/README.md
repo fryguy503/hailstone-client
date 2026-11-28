@@ -2,6 +2,18 @@
 
 The fork builds a Windows x64 release from a `bastion-v*` tag on `bastion-release`. A release has one Hailstone runtime, one Windows Setup for fresh installs and manual repairs, and a signed channel manifest for the Bastion Launcher. The launcher uses a separate bootstrap helper ZIP. Updating Hailstone through the launcher preserves the install path and player data.
 
+## Routine Production updates
+
+Use this request in the update workspace.
+
+> Build and publish the next Bastion Production Hailstone update from `<reviewed ref>`. Stage the tested GitHub draft and give me the exact offline signing command. When I return the signed manifest, publish the draft, advance the Production feed, and verify what the Bastion Launcher sees.
+
+1. Build and test the exact increasing `bastion-v*` tag, then stage its Setup, runtime and source in one GitHub draft. Record the tag, full commit, candidate directory, draft URL and signing command for the operator.
+2. The operator signs the candidate with the offline key and returns the signed `hailstone-update.txt`. The update workspace pairs that manifest with the byte-identical ZIP and Setup from the original candidate.
+3. Run `Publish-GitHubProduction.ps1 -PublishDraft` with the approved commit, signed files and pinned public key. Report the live release, the verified feed version and the Production launcher check.
+
+Launcher 2.9.27 and later using this Production feed check for each new signed version from the same GitHub branch. Routine Hailstone updates require only a client release and feed promotion.
+
 ## Configure the fork
 
 1. Push the `bastion-release` branch to `fryguy503/hailstone-client`. Tags must point to reviewed commits reachable from that branch. GitHub branch and tag rules can restrict who can publish or move release references.
@@ -48,6 +60,22 @@ Configure the Production launcher with the verified GitHub-capable helper ZIP an
 
 ## Sign and publish Production on GitHub
 
+Stage the release from the tested candidate before handing it off for signing. Confirm the exact tag is reachable from the remote `bastion-release` branch. Keep the draft private until the signed manifest is ready.
+
+```powershell
+$repo = 'fryguy503/hailstone-client'
+$version = $tag.Substring('bastion-v'.Length)
+$setup = Join-Path $candidate "Hailstone-$version-$($approvedCommit.Substring(0, 8))-Windows-x64-Setup.exe"
+$runtime = Join-Path $candidate "hailstone-$version-windows-x64.zip"
+$source = Join-Path $candidate "Hailstone-$version-Source.zip"
+
+git push https://github.com/fryguy503/hailstone-client.git "refs/tags/$tag"
+if ($LASTEXITCODE -ne 0) { throw 'Could not push the reviewed tag.' }
+gh release create $tag $setup $runtime $source --repo $repo --verify-tag --draft --latest=false `
+    --title "Hailstone $version" --notes-file $releaseNotes
+if ($LASTEXITCODE -ne 0) { throw 'Could not stage the reviewed GitHub draft.' }
+```
+
 Use an independently trusted `hailstone_sign` binary built from reviewed source on the offline signing system. Confirm the candidate's provenance and its exact tagged commit before signing.
 
 ```powershell
@@ -59,28 +87,15 @@ Use an independently trusted `hailstone_sign` binary built from reviewed source 
 
 The signer verifies the candidate files and checks `runtimeSha256` against `hailstone.exe` inside the ZIP. It adds that hash as `bastion-runtime-sha256` and adds the Setup byte count, SHA-256 and filename as `bastion-setup`. The launcher verifies Setup before running it and uses the signed runtime hash to recognize the installed executable.
 
-Transfer the signed manifest, ZIP and Setup to the publication machine. Push the approved tag from a checkout that has it, and use the tested source ZIP and reviewed release notes for the public release. If the release is already public, proceed to feed promotion after reviewing its assets. Keep the repository's current Latest release flag by passing `--latest=false` during both draft creation and publication.
-
-```powershell
-$repo = 'fryguy503/hailstone-client'
-$version = $tag.Substring('bastion-v'.Length)
-$setup = Join-Path $signedProduction "Hailstone-$version-$($approvedCommit.Substring(0, 8))-Windows-x64-Setup.exe"
-$runtime = Join-Path $signedProduction "hailstone-$version-windows-x64.zip"
-$source = Join-Path $candidate "Hailstone-$version-Source.zip"
-
-git push https://github.com/fryguy503/hailstone-client.git "refs/tags/$tag"
-gh release create $tag $setup $runtime $source --repo $repo --verify-tag --draft --latest=false `
-    --title "Hailstone $version" --notes-file $releaseNotes
-gh release edit $tag --repo $repo --verify-tag --draft=false --latest=false
-```
-
-Run the promotion script in PowerShell 7 with an authenticated GitHub CLI and Git. `-WhatIf` verifies the local signed manifest, Setup, ZIP and executable without changing GitHub. Run the command without `-WhatIf` to verify the public GitHub downloads and advance the dedicated Production feed branch. The script rejects older releases, a different manifest for the same version, and a concurrent change of the feed tip. Keep every published version's asset bytes available for downloads that are already in progress.
+Return the signed manifest to the update workspace. Put it in a directory with the exact Setup and runtime ZIP from the candidate. Use PowerShell 7, authenticated GitHub CLI and Git to publish and verify the release in one command.
 
 ```powershell
 ./packaging/bastion/Publish-GitHubProduction.ps1 `
     -SignedDirectory $signedProduction -ExpectedCommit $approvedCommit `
-    -SignTool $trustedVerifier -PublicKey $pinnedPublicKeyFile -WhatIf
+    -SignTool $trustedVerifier -PublicKey $pinnedPublicKeyFile -PublishDraft
 ```
+
+The script verifies the signed local files and remote tag, checks that the feed can advance, and verifies the draft asset sizes and SHA-256 hashes. It publishes the draft without changing GitHub Latest, checks both public downloads, then advances the dedicated feed. Run the same command to resume if the release is already public. `-WhatIf` verifies only the local signed manifest, Setup, ZIP and executable. Keep each published version's asset bytes available for downloads already in progress.
 
 ## Publish Preview to the updater host
 
