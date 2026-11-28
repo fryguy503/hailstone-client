@@ -51,6 +51,22 @@ function Get-PinnedTool([string]$Name, [uri]$Uri, [string]$Sha256) {
     return $target
 }
 
+function Test-PinnedInnoCompiler([string]$Compiler) {
+    # The distributed ISCC executable can have a zero-valued PE version.
+    # Check the compiler's encoded version without producing an installer.
+    $probe = @'
+#if (PREPROCVER >> 8) != 0x060704
+  #error Bastion Windows builds use Inno Setup 6.7.4.
+#endif
+[Setup]
+AppName=Bastion toolchain check
+AppVersion=1
+DefaultDirName={tmp}\BastionToolchainCheck
+'@
+    $probe | & $Compiler '/Q' '/O-' '-' *> $null
+    return $LASTEXITCODE -eq 0
+}
+
 function Assert-X64Binary([string]$File) {
     $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($File))
     try {
@@ -92,8 +108,7 @@ if ($LASTEXITCODE -ne 0 -or $shaderVersion -notmatch 'Glslang Version: \d+:16\.6
 
 if (!$Iscc) {
     $installedCompiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
-    if ((Test-Path -LiteralPath $installedCompiler -PathType Leaf) -and
-        (Get-Item -LiteralPath $installedCompiler).VersionInfo.FileVersion -match '^6\.7\.4(?:\.0)?\b') {
+    if ((Test-Path -LiteralPath $installedCompiler -PathType Leaf) -and (Test-PinnedInnoCompiler $installedCompiler)) {
         $Iscc = $installedCompiler
     } elseif ($ProvisionInno) {
         $setup = Get-PinnedTool 'innosetup-6.7.4.exe' `
@@ -109,7 +124,7 @@ if (!$Iscc) {
     }
 }
 $Iscc = (Resolve-Path -LiteralPath $Iscc).ProviderPath
-if ((Get-Item -LiteralPath $Iscc).VersionInfo.FileVersion -notmatch '^6\.7\.4(?:\.0)?\b') {
+if (!(Test-PinnedInnoCompiler $Iscc)) {
     throw 'Bastion Windows builds use Inno Setup 6.7.4.'
 }
 
