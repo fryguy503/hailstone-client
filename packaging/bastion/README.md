@@ -34,6 +34,10 @@ For a local build, fetch the tag and the protected branch, check out the tag in 
 
 The local build needs PowerShell 7, Git, Python, the Visual Studio C++ workload, and Inno Setup 6.7.4. Use `-Iscc` or `-Glslang` to supply an existing matching tool. Run `-TestInstaller` on an isolated Windows VM without an existing Hailstone registration. To check real installer upgrades, use `Test-InstallerUpgrade.ps1 -PreviousInstaller <verified-old-setup> -Installer <candidate-setup> -Stage <output-directory>/payload` on the same kind of VM. Run the existing Preview 04 and Preview 05 scenarios before the first promotion. These checks exercise the runtime and user file fixtures. Validate a full linked-account launch through the launcher separately before release.
 
+For repeated workstation builds, pass `-BuildDirectory` pointing to a dedicated Ninja build for the exact source checkout. Use a new `-OutputDirectory` for each candidate. `-DependencyCacheDirectory` accepts a prepared dependency cache with a `cache.json` recipe matching the checked-out dependency definitions. `-Python` can point to a specific interpreter.
+
+The GitHub build uses MSVC 14.44. A workstation can explicitly select an installed toolset with `-MsvcToolset`, which requires a separate build cache if the compiler changes. Both paths use Windows SDK 10.0.26100.0. The candidate records the MSVC toolset, SDK, and release script SHA-256. Approve the exact candidate and its runtime hash before signing or embedding its launcher helper.
+
 Verify the helper ZIP against the chosen candidate's SHA-256 before embedding it with `tools/build-patcher-release.ps1` in `eqemupatcher`. The `runtimeSha256` field in `release-input.json` is the hash of the `hailstone.exe` inside the ZIP and Setup. Use `version=runtimeSha256` as a launcher bootstrap identity when distributing a Setup with the same launcher release. The helper ZIP is a launcher build input and does not go on the client feed.
 
 ## Sign and promote
