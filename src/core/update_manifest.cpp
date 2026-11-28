@@ -49,8 +49,7 @@ bool setup_file_name(std::string_view file, const std::string& version) {
         file.size() != prefix.size() + commit_length + suffix.size())
         return false;
     const auto commit_text = file.substr(prefix.size(), commit_length);
-    const auto commit = hex_decode<commit_length / 2>(commit_text);
-    return commit && hex_encode(*commit) == commit_text;
+    return commit_text.find_first_not_of("0123456789abcdef") == std::string_view::npos;
 }
 
 // A relative folder of the install ("plugins/nms"): '/'-separated plain names, no "." or "..".
