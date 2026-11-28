@@ -6,7 +6,7 @@ The fork builds a Windows x64 release from a `bastion-v*` tag on `bastion-releas
 
 1. Push the `bastion-release` branch to `fryguy503/hailstone-client`. Tags must point to reviewed commits reachable from that branch. GitHub branch and tag rules can restrict who can publish or move release references.
 2. Create a dedicated Bastion Ed25519 core updater key on an offline machine. Configure the repository Actions **variable** `BASTION_HAILSTONE_UPDATE_PUBLIC_KEY` with its 64-digit public key. Configure the same key in the launcher build. Keep the secret key outside the repositories and GitHub Actions. The upstream suggested add-on index keeps its own trust key.
-3. Provision `/hailstone/preview/` and `/hailstone/stable/` on the HTTPS updater host. Serve the manifest with revalidation and versioned ZIP and Setup files with immutable caching. Disable redirects for these locations. Keep the ZIP, Setup and manifest beside one another in each channel. Limit deployment access to release maintainers.
+3. Limit write access to the GitHub `bastion-production-feed` branch and protect it against force pushes and deletion. Publish the Production runtime ZIP and Setup as assets on each exact `bastion-v*` GitHub Release. The promotion script creates the feed branch on first use and advances it only after verifying those assets.
 
 The Windows candidate workflow takes no release or deployment credentials. It builds on Windows Server 2022 with MSVC v143 14.44 and SDK 10.0.26100.0. It verifies pinned glslang and Inno Setup versions and uses the client's pinned dependencies. Tags trigger candidate builds without requiring a workflow on the fork's default branch.
 
@@ -44,20 +44,47 @@ Verify the helper ZIP against the chosen candidate's SHA-256 before embedding it
 
 Give the release its own version heading in `CHANGELOG.md` so the client’s **What's new** panel displays the reviewed player notes. The managed client uses the fork as its project page and leaves core update checks to the launcher.
 
-Configure the Production launcher with the verified helper ZIP and bootstrap identity from the same candidate. Use the dedicated Bastion update public key and the `stable` channel, which selects `https://patcher.bastiongame.com/hailstone/stable/hailstone-update.txt`. Sign the selected candidate offline with `-Channel stable`. The launcher uses this manifest for online installation and updates. The same Windows Setup also supports manual installation and repair.
+Configure the Production launcher with the verified GitHub-capable helper ZIP and the chosen candidate's bootstrap identity. The launcher uses the dedicated Bastion update public key and reads the signed `stable` manifest from `https://raw.githubusercontent.com/fryguy503/hailstone-client/bastion-production-feed/hailstone-update.txt`. It downloads the ZIP and Setup from the exact `bastion-v<version>` GitHub Release named by that signed version. The same Windows Setup also supports manual installation and repair.
 
-## Sign and promote
+## Sign and publish Production on GitHub
 
-Use an independently trusted `hailstone_sign` binary built from reviewed source on the offline signing system. Confirm the Actions run and candidate commit before signing. Publish release notes, Setup and corresponding source on the exact GitHub release tag when those assets are ready for their intended audience. The Bastion channel is published independently of GitHub Latest.
+Use an independently trusted `hailstone_sign` binary built from reviewed source on the offline signing system. Confirm the candidate's provenance and its exact tagged commit before signing.
 
 ```powershell
 ./packaging/bastion/Sign-WindowsRelease.ps1 `
-    -CandidateDirectory $candidate -OutputDirectory $signedPreview `
-    -ExpectedTag $tag -ExpectedCommit $approvedCommit -Channel preview `
+    -CandidateDirectory $candidate -OutputDirectory $signedProduction `
+    -ExpectedTag $tag -ExpectedCommit $approvedCommit -Channel stable `
     -SignTool $trustedSigner -SigningKey $offlineSecretKey -PublicKey $pinnedPublicKeyFile
 ```
 
-The signer verifies the candidate files and checks `runtimeSha256` against `hailstone.exe` inside the ZIP. It adds that hash as `bastion-runtime-sha256` and adds the Setup byte count, SHA-256 and filename as `bastion-setup`. The launcher verifies Setup before running it and uses the signed runtime hash to recognize the installed executable. Transfer the signed manifest, ZIP and Setup to the deployment machine. Run the following command on a machine with access to the updater web root and the public HTTPS endpoint.
+The signer verifies the candidate files and checks `runtimeSha256` against `hailstone.exe` inside the ZIP. It adds that hash as `bastion-runtime-sha256` and adds the Setup byte count, SHA-256 and filename as `bastion-setup`. The launcher verifies Setup before running it and uses the signed runtime hash to recognize the installed executable.
+
+Transfer the signed manifest, ZIP and Setup to the publication machine. Push the approved tag from a checkout that has it, and use the tested source ZIP and reviewed release notes for the public release. If the release is already public, proceed to feed promotion after reviewing its assets. Keep the repository's current Latest release flag by passing `--latest=false` during both draft creation and publication.
+
+```powershell
+$repo = 'fryguy503/hailstone-client'
+$version = $tag.Substring('bastion-v'.Length)
+$setup = Join-Path $signedProduction "Hailstone-$version-$($approvedCommit.Substring(0, 8))-Windows-x64-Setup.exe"
+$runtime = Join-Path $signedProduction "hailstone-$version-windows-x64.zip"
+$source = Join-Path $candidate "Hailstone-$version-Source.zip"
+
+git push https://github.com/fryguy503/hailstone-client.git "refs/tags/$tag"
+gh release create $tag $setup $runtime $source --repo $repo --verify-tag --draft --latest=false `
+    --title "Hailstone $version" --notes-file $releaseNotes
+gh release edit $tag --repo $repo --verify-tag --draft=false --latest=false
+```
+
+Run the promotion script in PowerShell 7 with an authenticated GitHub CLI and Git. `-WhatIf` verifies the local signed manifest, Setup, ZIP and executable without changing GitHub. Run the command without `-WhatIf` to verify the public GitHub downloads and advance the dedicated Production feed branch. The script rejects older releases, a different manifest for the same version, and a concurrent change of the feed tip. Keep every published version's asset bytes available for downloads that are already in progress.
+
+```powershell
+./packaging/bastion/Publish-GitHubProduction.ps1 `
+    -SignedDirectory $signedProduction -ExpectedCommit $approvedCommit `
+    -SignTool $trustedVerifier -PublicKey $pinnedPublicKeyFile -WhatIf
+```
+
+## Publish Preview to the updater host
+
+To use the existing Preview channel, sign the candidate in a fresh output directory with `-Channel preview`. Provision `/hailstone/preview/` on the HTTPS updater host and serve the manifest with revalidation. Keep the ZIP, Setup and manifest beside one another and disable redirects for this location.
 
 ```powershell
 ./packaging/bastion/Publish-WindowsRelease.ps1 `
@@ -66,6 +93,6 @@ The signer verifies the candidate files and checks `runtimeSha256` against `hail
     -SignTool $trustedVerifier -PublicKey $pinnedPublicKeyFile
 ```
 
-Use `-WhatIf` to verify the signed local inputs without deploying. Promotion verifies the ZIP and Setup bytes over HTTPS before replacing the manifest, then checks the public manifest. Existing signed manifests without a `bastion-setup` record still support updates. Use a new release version to add Setup when a manifest for the current version is already live. Keep the approved candidate for Stable. Sign its identical package for `stable` into a fresh output directory, then publish to `stable` using the same command. A Preview signature is rejected at the Stable URI.
+Use `-WhatIf` to verify the signed local inputs before deploying. Preview promotion verifies the ZIP and Setup bytes over HTTPS before replacing the manifest, then checks the public manifest. Existing Preview manifests without a `bastion-setup` record still support updates. Use a new release version to add Setup when a manifest for the current version is already live.
 
 To withdraw a candidate, stop further promotions. Release the last known-good code with a higher Bastion version if players already received the withdrawn version. Keep older immutable package bytes available for clients completing a staged download. The launcher and client updater handle local installation recovery.
